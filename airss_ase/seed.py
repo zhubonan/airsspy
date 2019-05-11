@@ -1,12 +1,14 @@
 """
 Classes for preparing AIRSS seed
 """
+from __future__ import absolute_import
 import numpy as np
 from ase import Atoms, Atom
 import numbers
 import collections
 from castepinput import CellInput
 from ase.constraints import FixConstraint, FixBondLengths
+from six.moves import range
 
 
 class TemplateAtoms(Atoms):

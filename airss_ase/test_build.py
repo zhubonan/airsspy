@@ -2,6 +2,7 @@
 Test the Buildcell class
 """
 
+from __future__ import absolute_import
 import pytest
 from .seed import TemplateAtoms
 
