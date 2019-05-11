@@ -1,16 +1,15 @@
- pytest2:
-   image: python:2
-   script:
-     - pip install --user -e .[testing]
-     - python -m pytest airss_ase/
+pytest2:
+  image: python:2
+  script:
+    - pip install --user -e .[testing]
+    - python -m pytest airss_ase/
 
 
- pytest3:
-   image: python:3
-   script:
-     - pip install --user -e .[testing]
-     - python -m pytest airss_ase/
-
+pytest3:
+  image: python:3
+  script:
+    - pip install --user -e .[testing]
+    - python -m pytest airss_ase/
 
 buildcell_check:
   image: python:3
@@ -26,5 +25,5 @@ buildcell_check:
     - cd ../
     # Install the package
     - pip install --user -e .[testing]
-    - python -m pytest airss_ase/test_build.py
+    - python -m pytest airss_ase/tests/test_build.py
 
