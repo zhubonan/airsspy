@@ -19,7 +19,7 @@ if __name__ == '__main__':
             'castepinput == 0.1.4',
             'six',
         ],
-        extras_requrie={'testing': ['pytest']},
+        extras_require={'testing': ['pytest']},
         maintainer='Bonan Zhu',
         maintainer_email='zhubonan@outlook.com',
         long_description=long_description,
