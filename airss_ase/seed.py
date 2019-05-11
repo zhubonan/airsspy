@@ -7,6 +7,7 @@ import numbers
 import collections
 from ase.constraints import FixConstraint, FixBondLengths
 
+
 class TemplateAtoms(Atoms):
     """Subclass of ase.atoms.Atoms object. Template for generating random cells
     """
@@ -87,9 +88,12 @@ class TemplateAtoms(Atoms):
                 except IndexError:
                     pass
 
-        atoms = self.__class__(cell=self._cell, pbc=self._pbc, info=self.info,
-                               # should be communicated to the slice as well
-                               celldisp=self._celldisp)
+        atoms = self.__class__(
+            cell=self._cell,
+            pbc=self._pbc,
+            info=self.info,
+            # should be communicated to the slice as well
+            celldisp=self._celldisp)
         # TODO: Do we need to shuffle indices in adsorbate_info too?
 
         atoms.arrays = {}
@@ -147,7 +151,6 @@ def genericproperty(name, doc):
 
 
 def rangeproperty(name, doc):
-
     def getter(self):
         return self.get_prop(name)
 
@@ -167,7 +170,6 @@ def rangeproperty(name, doc):
 
 
 def nestedrangeproperty(name, doc):
-
     def getter(self):
         return self.get_prop(name)
 
@@ -208,203 +210,6 @@ class BuildcellParam(object):
 
     def delete_prop(self, name):
         self.data.pop(name)
-    # @property
-    # def fix(self):
-    #     """Fix all of the lattice block.
-    #     Placed in lattice block
-    #     type: flag"""
-    #     return self._fix
-
-    # @fix.setter
-    # def fix(self, value):
-    #     self._fix = set_flag(value)
-
-    # @property
-    # def cfix(self):
-    #     """Fix the c lattice vector. Used in searches for 2D material
-    #     type: flag"""
-    #     return self._cfix
-
-    # @cfix.setter
-    # def cfix(self, value):
-    #     self._cfix = set_flag(value)
-
-    # @property
-    # def nform(self):
-    #     """
-    #     #NFORM = n or n_min-n_max
-    #     Number of formula units to be placed in the unit cell.
-    #     Where one formula unit is defined in the positions block
-    #     type: String
-    #     """
-    #     return self._nform
-
-    # @nform.setter
-    # def nform(self, value):
-    #     self._nform = set_range(value)
-
-    # @property
-    # def slab(self):
-    #     """Treat the z-axis as special. Do not make repeat unit in the
-    #     z-direction
-    #     type: flag"""
-    #     return self._slab
-
-    # @slab.setter
-    # def slab(self, value):
-    #     self._slab = set_flag(value)
-
-    # @property
-    # def cluster(self):
-    #     """Generate a cluster not a solid"""
-    #     return self._cluster
-
-    # @cluster.setter
-    # def cluster(self, value):
-    #     self._cluster = set_flag(value)
-
-    # @property
-    # def symmops(self):
-    #     """
-    #     #SYMMOPS=n for n_min - n_max
-    #     Number of symmetry operations the generated cell must obey"""
-    #     return self._symmops
-
-    # @symmops.setter
-    # def symmops(self, value):
-    #     self._symmops = set_range(value)
-
-    # @property
-    # def posamp(self):
-    #     """ #POSAMP=n
-    #     Maximum position amplitude (in A) to move all
-    #     atoms in the cell in a (different) random direction.
-    #     """
-    #     return self._posamp
-
-    # @posamp.setter
-    # def posamp(self, value):
-    #     self._posamp = value
-
-    # @property
-    # def minamp(self):
-    #     """Overall minimum position amplitude (in A)"""
-    #     return self._minamp
-
-    # @minamp.setter
-    # def minamp(self, value):
-    #     self._minamp = value
-
-    # @property
-    # def zamp(self):
-    #     """Maximum position amplitude (in A) to move all
-    #     atoms in the cell a (different) random amount in the z-direction"""
-    #     return self._zamp
-
-    # @zamp.setter
-    # def zamp(self, value):
-    #     self._zamp = value
-
-    # @property
-    # def angamp(self):
-    #     """Rotation of a set of atoms by theta degrees"""
-    #     return self._angamp
-
-    # @angamp.setter
-    # def angamp(self, value):
-    #     self._angamp = value
-
-    # @property
-    # def minsep(self):
-    #     """Minimum separation between all atoms, n in A.
-    #     Or can be used to define distance between specified atoms,
-    #     X, Y, given by name. e.g
-    #     #MINSEP=2.0 Li-Li=2.6 Ge-Ge=2.51 Li-Ge=2.81
-    #     format: tuple with two element, the first one is a float and
-    #     the second one is a dictionary of float pairs"""
-    #     return self._minsep
-
-    # @minsep.setter
-    # def minsep(self, value):
-    #     if isinstance(value, int) or isinstance(value, float):
-    #         self._minsep = [value, {}]
-    #     elif len(value) == 2:
-    #         self._minsep = value
-
-    # @property
-    # def sgrank(self):
-    #     """Minimum rank of the spacegroup"""
-    #     return self._sgrank
-
-    # @sgrank.setter
-    # def sgrank(self, value):
-    #     self._sgrank = value
-
-    # @property
-    # def species(self):
-    #     """Species to be put into the cell"""
-    #     return self._species
-
-    # @species.setter
-    # def species(self, value):
-    #     self._species = value
-
-    # @property
-    # def varvol(self):
-    #     """Variable target volume of the cell"""
-    #     return self._varvol
-
-    # @varvol.setter
-    # def varvol(self, value):
-    #     self._varvol = value
-
-    # @property
-    # def slack(self):
-    #     """Slack for the minsep"""
-    #     return self._slack
-
-    # @slack.setter
-    # def slack(self, value):
-    #     self._slack = value
-
-    # @property
-    # def overlap(self):
-    #     """Overlap tolerance for the nearly hard sphere potential"""
-    #     return self._overlap
-
-    # @overlap.setter
-    # def overlap(self, value):
-    #     self._overlap = value
-
-    # @property
-    # def focus(self):
-    #     """Focus on a specific composition"""
-    #     return self._focus
-
-    # @focus.setter
-    # def focus(self, value):
-    #     self._focus = value
-
-    # @property
-    # def compact(self):
-    #     """Compact the cell (unknown)"""
-    #     return self._compact
-
-    # @compact.setter
-    # def compact(self, value):
-    #     self._compact = set_flag(value)
-
-    # @property
-    # def cons(self):
-    #     """The constraint on the cell generation
-    #     - 0 is total freedom
-    #     - 1 is totally fixed as cubic
-    #     - other specifies the aspect ration"""
-    #     return self._cons
-
-    # @cons.setter
-    # def cons(self, value):
-    #     self._cons = value
 
     def to_string(self):
         """Return the string that should go into the .cell file"""
@@ -430,8 +235,7 @@ class BuildcellParam(object):
                 else:
                     # The value is a list/tuple
                     # is a simple range?
-                    if all([isinstance(x , numbers.Number)
-                            for x in value]):
+                    if all([isinstance(x, numbers.Number) for x in value]):
                         line = '#{}={}'.format(name, tuple2range(value))
                     # Deal with a nested range
                     else:
@@ -451,6 +255,25 @@ class BuildcellParam(object):
     nforms = genericproperty('NFORMS', 'Number of formula units')
     minsep = nestedrangeproperty('MINSEP', 'Minimum separation constraints')
     posamp = nestedrangeproperty('POSAMP', 'Position amplitudes')
+    symmops = rangeproperty('SYMMOPS',
+                            'Number of symmetry operation requested cell')
+    minamp = rangeproperty('MINAMP', 'Minimum aplitude of randomisation')
+    zamp = rangeproperty('ZAMP', 'Randomisation amplitude in Z')
+    xamp = rangeproperty('XAMP', 'Randomisation amplitude in X')
+    yamp = rangeproperty('YAMP', 'Randomisation amplitude in Y')
+    angamp = rangeproperty('ANGAMP',
+                           'Angular randomisation amplitude from fragments')
+    sgrank = rangeproperty('SGRANK', 'Minimum rank of the spacegroup')
+    species = nestedrangeproperty('SPECIES', 'Species to be put into the cell')
+    varvol = genericproperty(
+        'VARVOL', 'Target volume of cell with the original configuration')
+    slack = rangeproperty(
+        'SLACK', 'Slack the hard sphere potentials enforcing the MINSEP')
+    overlap = rangeproperty(
+        'OVERLAP', 'Threhold of the overlap for the hard sphere potentials')
+    #focus = genericproperty('FOCUS', 'Focus on a specific compositions')
+    compact = tagproperty('COMPACT', 'Compact the cell using Niggli reduction')
+    cons = genericproperty('CONS', 'Parameter for cell shape constraint')
 
 
 def test_bc_param():
@@ -477,7 +300,7 @@ def test_nested_range():
     bcp.minsep = (2, {'Ce-O': 1})
     assert 'MINSEP=2 Ce-O=1' in bcp.to_string()
 
-    bcp.minsep = ((2,3), {'Ce-O': 1})
+    bcp.minsep = ((2, 3), {'Ce-O': 1})
     assert 'MINSEP=2-3 Ce-O=1' in bcp.to_string()
 
     bcp.minsep = (2, {'Ce-O': (1, 2)})
@@ -578,8 +401,11 @@ class TemplateAtom(Atom, SingeAtomParam):
         super(TemplateAtom, self).__init__(*args, **kwargs)
         SingeAtomParam.__init__(self, *args, **kwargs)
         if self.atoms is not None:
-            self.prop_data = self.atoms.arrays['buildtag'][self.index].prop_data
-            self.type_registry = self.atoms.arrays['buildtag'][self.index].type_registry
+            self.prop_data = self.atoms.arrays['buildtag'][
+                self.index].prop_data
+            self.type_registry = self.atoms.arrays['buildtag'][
+                self.index].type_registry
+
 
 def test_template_atom():
 
@@ -666,8 +492,8 @@ def write_buildcell_seed(fd,
         keyword = 'POSITIONS_ABS'
         positions = atoms.get_positions()
 
-    if (hasattr(atoms, 'calc') and hasattr(atoms.calc, 'param') and
-            hasattr(atoms.calc.param, 'task')):
+    if (hasattr(atoms, 'calc') and hasattr(atoms.calc, 'param')
+            and hasattr(atoms.calc.param, 'task')):
         _spin_pol = any([
             getattr(atoms.calc.param, i).value
             for i in ['spin_polarized', 'spin_polarised']
@@ -714,8 +540,8 @@ def write_buildcell_seed(fd,
 
     # if atoms, has a CASTEP calculator attached, then only
     # write constraints if really necessary
-    if (hasattr(atoms, 'calc') and hasattr(atoms.calc, 'param') and
-            hasattr(atoms.calc.param, 'task')):
+    if (hasattr(atoms, 'calc') and hasattr(atoms.calc, 'param')
+            and hasattr(atoms.calc.param, 'task')):
         task = atoms.calc.param.task
         if atoms.calc.param.task.value is None:
             suppress_constraints = True
@@ -738,10 +564,10 @@ def write_buildcell_seed(fd,
         fd.write('%BLOCK IONIC_CONSTRAINTS \n')
         count = 0
         for constr in constraints:
-            if (not isinstance(constr, FixAtoms) and
-                    not isinstance(constr, FixCartesian) and
-                    not isinstance(constr, FixedLine) and
-                    not suppress_constraints):
+            if (not isinstance(constr, FixAtoms)
+                    and not isinstance(constr, FixCartesian)
+                    and not isinstance(constr, FixedLine)
+                    and not suppress_constraints):
                 print('Warning: you have constraints in your atoms, that are')
                 print('         not supported by the CASTEP ase interface')
                 break
@@ -762,12 +588,12 @@ def write_buildcell_seed(fd,
                     else:
                         raise UserWarning('Unrecognized index in' +
                                           ' constraint %s' % constr)
-                    fd.write('%6d %3s %3d   1 0 0 \n' % (count + 1, symbol,
-                                                         nis))
-                    fd.write('%6d %3s %3d   0 1 0 \n' % (count + 2, symbol,
-                                                         nis))
-                    fd.write('%6d %3s %3d   0 0 1 \n' % (count + 3, symbol,
-                                                         nis))
+                    fd.write('%6d %3s %3d   1 0 0 \n' %
+                             (count + 1, symbol, nis))
+                    fd.write('%6d %3s %3d   0 1 0 \n' %
+                             (count + 2, symbol, nis))
+                    fd.write('%6d %3s %3d   0 0 1 \n' %
+                             (count + 3, symbol, nis))
                     count += 3
             elif isinstance(constr, FixCartesian):
                 n = constr.a
@@ -791,10 +617,9 @@ def write_buildcell_seed(fd,
                 nis = atoms.calc._get_number_in_species(n)
                 direction = constr.dir
                 # print(direction)
-                ((i1, v1), (i2, v2)) = sorted(
-                    enumerate(direction),
-                    key=lambda x: abs(x[1]),
-                    reverse=True)[:2]
+                ((i1, v1), (i2, v2)) = sorted(enumerate(direction),
+                                              key=lambda x: abs(x[1]),
+                                              reverse=True)[:2]
                 # print(sorted(enumerate(direction), key = lambda x:x[1])[:2])
                 # print(sorted(enumerate(direction), key = lambda x:x[1]))
 
@@ -805,12 +630,12 @@ def write_buildcell_seed(fd,
 
                 n2 = np.cross(direction, n1)
                 count += 1
-                fd.write('%6d %3s %3d   %f %f %f \n' % (count, symbol, nis,
-                                                        n1[0], n1[1], n1[2]))
+                fd.write('%6d %3s %3d   %f %f %f \n' %
+                         (count, symbol, nis, n1[0], n1[1], n1[2]))
 
                 count += 1
-                fd.write('%6d %3s %3d   %f %f %f \n' % (count, symbol, nis,
-                                                        n2[0], n2[1], n2[2]))
+                fd.write('%6d %3s %3d   %f %f %f \n' %
+                         (count, symbol, nis, n2[0], n2[1], n2[2]))
         fd.write('%ENDBLOCK IONIC_CONSTRAINTS \n')
 
     if castep_cell is None:
@@ -828,8 +653,9 @@ def write_buildcell_seed(fd,
                 fd.write(option.value)
                 fd.write('\n%%ENDBLOCK %s\n\n' % option.keyword.upper())
             else:
-                fd.write('%s : %s\n\n' % (option.keyword.upper(),
-                                          option.value))
+                fd.write('%s : %s\n\n' %
+                         (option.keyword.upper(), option.value))
+
 
 #    fd.close()
     return True
@@ -853,18 +679,17 @@ class Buildcell:
         import subprocess as sbp
         tmp = io.StringIO()
         write_buildcell_seed(tmp, self.atoms)
-        bc = sbp.Popen(
-            'buildcell',
-            universal_newlines=True,
-            stdin=sbp.PIPE,
-            stdout=sbp.PIPE,
-            stderr=sbp.PIPE)
+        bc = sbp.Popen('buildcell',
+                       universal_newlines=True,
+                       stdin=sbp.PIPE,
+                       stdout=sbp.PIPE,
+                       stderr=sbp.PIPE)
         self.proc = bc
         tmp.seek(0)
         self.seed = tmp.read()
         try:
-            self.bc_out, self.bc_err = bc.communicate(
-                input=self.seed, timeout=timeout)
+            self.bc_out, self.bc_err = bc.communicate(input=self.seed,
+                                                      timeout=timeout)
         except sbp.TimeoutExpired:
             bc.kill()
             self.bc_out, self.bc_err = bc.communicate()
@@ -907,4 +732,3 @@ class Buildcell:
             view(res, viewer=viewer)
         else:
             view(res)
-
