@@ -4,20 +4,23 @@ Test the Buildcell class
 
 from __future__ import absolute_import
 import pytest
+from distutils import spawn
 from .seed import TemplateAtoms
 
 
 @pytest.fixture
 def template_c2():
     c2 = TemplateAtoms('C2')
-    c2.build_param.slack = 1
-    c2.build_param.overlap = 1
-    c2.build_param.minsep = 1.5
-    c2.build_param.symmops = (2, 4)
-    c2.build_param.varvol = 20
+    c2.build.slack = 1
+    c2.build.overlap = 1
+    c2.build.minsep = 1.5
+    c2.build.symmops = (2, 4)
+    c2.build.varvol = 20
     return c2
 
 
+@pytest.mark.skipif(spawn.find_executable('buildcell') is None,
+                    reason='No buildcell executable in PATH')
 def test_generate(template_c2):
     from .build import Buildcell
 

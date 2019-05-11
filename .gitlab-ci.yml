@@ -1,11 +1,30 @@
-pytest2:
-  image: python:2
-  script:
-    - pip install --user -e .[testing]
-    - python -m pytest airss_ase/tests
+ pytest2:
+   image: python:2
+   script:
+     - pip install --user -e .[testing]
+     - python -m pytest airss_ase/
 
-pytest3:
+
+ pytest3:
+   image: python:3
+   script:
+     - pip install --user -e .[testing]
+     - python -m pytest airss_ase/
+
+
+buildcell_check:
   image: python:3
   script:
+    # Install gfortran
+    - apt-get update
+    - apt-get install -y gfortran liblapack-dev libopenblas-dev curl
+    # Get and compile AIRSS 0.9.1
+    - curl -L -o AIRSS.tgz http://bit.ly/2KtvEWU
+    - tar zxvf AIRSS.tgz
+    - cd airss-0.9.1 ; export FC=gfortran ; make all; make install
+    - export PATH=$(pwd)/bin:$PATH
+    - cd ../
+    # Install the package
     - pip install --user -e .[testing]
-    - python -m pytest airss_ase/tests
+    - python -m pytest airss_ase/test_build.py
+

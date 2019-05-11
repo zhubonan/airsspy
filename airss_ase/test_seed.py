@@ -69,6 +69,9 @@ def test_template_atom_from_tmp():
     assert c1.get_append_string() == '# C0 % POSAMP=1'
     assert bc.arrays['buildtag'][0].get_append_string() == '# C0 % POSAMP=1'
 
+    cell = bc.get_seed()
+    assert 'positions_abs' in cell
+
 
 def test_tuple2range():
     """
@@ -86,9 +89,9 @@ def test_template_atom_write():
     from .seed import TemplateAtoms
 
     atoms = TemplateAtoms('C4')
-    atoms.build_param.symmops = (2, 3)
-    atoms.build_param.sgrank = 2
-    atoms.build_param.minsep = [2, {'C-C': (2, 3)}]
+    atoms.build.symmops = (2, 3)
+    atoms.build.sgrank = 2
+    atoms.build.minsep = [2, {'C-C': (2, 3)}]
     atoms[0].posamp = 3
     atoms[0].xamp = (2, 3)
     atoms[1].tagname = 'CX0'

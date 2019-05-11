@@ -20,7 +20,7 @@ class TemplateAtoms(Atoms):
         Same arguments signature as ase.Atoms object
 
         Special attribute:
-          build_param : BuildcellParam instance for storing parameter of buildcell
+          build : BuildcellParam instance for storing parameter of buildcell
 
         An array of SingeAtomParam objects are added automatically.
         Each one can be retrieved/replaced with
@@ -28,7 +28,7 @@ class TemplateAtoms(Atoms):
           get_buildcell_tag
         """
         super(TemplateAtoms, self).__init__(*args, **kwargs)
-        self.build_param = BuildcellParam()
+        self.build = BuildcellParam()
         # Construct tags for each Atom
         tags = []
         symbols = self.get_chemical_symbols()
@@ -68,6 +68,10 @@ class TemplateAtoms(Atoms):
         """Write the seed to file"""
         with open(fpath, 'w') as fhandle:
             fhandle.write('\n'.join(self.get_seed_lines()))
+
+    def get_seed(self):
+        """Return the python object represent the cell"""
+        return get_seed(self)
 
     def __getitem__(self, i):
         """Return a subset of the atoms.
@@ -120,17 +124,6 @@ class TemplateAtoms(Atoms):
 
         atoms.constraints = conadd
         return atoms
-
-
-# Singular, plural, default value:
-bc_param_names = {
-    "FIX": 'tag',
-    "CFIX": 'tag',
-    "NFORM": 'range',
-    "SUPERCELL": 'range',
-    "SLAB": 'tag',
-    "CLUSTER": 'tag'
-}
 
 
 def tagproperty(name, doc):
@@ -292,6 +285,8 @@ class BuildcellParam(object):
     #focus = genericproperty('FOCUS', 'Focus on a specific compositions')
     compact = tagproperty('COMPACT', 'Compact the cell using Niggli reduction')
     cons = genericproperty('CONS', 'Parameter for cell shape constraint')
+    natom = rangeproperty(
+        'NATOM', 'Number of atoms in cell, if not explicitly defined')
 
 
 class SingeAtomParam(object):
@@ -391,10 +386,7 @@ def tuple2range(value):
         return str(value)
 
 
-def get_seed_lines(atoms):
-    """
-    Write the seed to a file handle
-    """
+def get_seed(atoms):
     cell = CellInput()
 
     # Prepare the cell out
@@ -407,7 +399,15 @@ def get_seed_lines(atoms):
         tags_lines = [tag.get_append_string() for tag in pos_line_tags]
         cell.set_positions(species, atoms.get_positions(), tags_lines)
 
+    return cell
+
+
+def get_seed_lines(atoms):
+    """
+    Write the seed to a file handle
+    """
+    cell = get_seed(atoms)
     lines = []
     lines.extend(cell.get_file_lines())
-    lines.extend(atoms.build_param.to_string().split('\n'))
+    lines.extend(atoms.build.to_string().split('\n'))
     return lines
