@@ -5,6 +5,7 @@ import numpy as np
 from ase import Atoms, Atom
 import numbers
 import collections
+from castepinput import CellInput
 from ase.constraints import FixConstraint, FixBondLengths
 
 
@@ -37,19 +38,34 @@ class TemplateAtoms(Atoms):
 
         self.new_array('buildtag', tags, dtype=object, shape=None)
 
-    def set_buildcell_tag(self, tag, index):
+    def set_atom_tag(self, tag, index):
         """Set buildcell tags for individual atom
         if the SingeAtomParam object has no tagname, set automatically"""
         if tag.tagname is None:
             tag.tagname = self.get_chemical_symbols()[index]
         self.arrays['buildtag'][index] = tag
 
-    def get_buidcell_tag(self, index):
+    def get_atom_tag(self, index):
         """
         Return the buildcell tag for the atom of the index.
         Can be used for in-place change
         """
         return self.arrays['buildtag'][index]
+
+    @property
+    def atom_tags(self):
+        return self.arrays['buildtag']
+
+    def get_seed_lines(self):
+        """
+        Return a list of strings of the seed file
+        """
+        return get_seed_lines(self)
+
+    def write_seed(self, fpath):
+        """Write the seed to file"""
+        with open(fpath, 'w') as fhandle:
+            fhandle.write('\n'.join(self.get_seed_lines()))
 
     def __getitem__(self, i):
         """Return a subset of the atoms.
@@ -276,37 +292,6 @@ class BuildcellParam(object):
     cons = genericproperty('CONS', 'Parameter for cell shape constraint')
 
 
-def test_bc_param():
-
-    bcp = BuildcellParam()
-    bcp.fix = True
-    bcp.nforms = 3
-    assert 'NFORMS' in bcp.to_string()
-    bcp.minsep = [2, {'Ce-O': (2, 3)}]
-    assert 'Ce-O=2-3' in bcp.to_string()
-
-
-def test_nested_range():
-
-    bcp = BuildcellParam()
-
-    # Test different possible configurations
-    bcp.minsep = 2
-    assert 'MINSEP=2' in bcp.to_string()
-
-    bcp.minsep = (2, 3)
-    assert 'MINSEP=2-3' in bcp.to_string()
-
-    bcp.minsep = (2, {'Ce-O': 1})
-    assert 'MINSEP=2 Ce-O=1' in bcp.to_string()
-
-    bcp.minsep = ((2, 3), {'Ce-O': 1})
-    assert 'MINSEP=2-3 Ce-O=1' in bcp.to_string()
-
-    bcp.minsep = (2, {'Ce-O': (1, 2)})
-    assert 'MINSEP=2 Ce-O=1-2' in bcp.to_string()
-
-
 class SingeAtomParam(object):
     """Paramter for a single auto"""
 
@@ -378,20 +363,6 @@ class SingeAtomParam(object):
         return string
 
 
-def test_atom_param():
-    """
-    Test the single atom specification
-    """
-    param = SingeAtomParam()
-    param.num = 3
-    param.posamp = (1, 2)
-    param.tagname = 'O1'
-    string = param.get_append_string()
-    assert string.startswith('# O1 %')
-    assert 'POSAMP=1-2' in string
-    assert 'NUM=3' in string
-
-
 class TemplateAtom(Atom, SingeAtomParam):
     """
     Element atoms in a AIRSS seed
@@ -407,22 +378,6 @@ class TemplateAtom(Atom, SingeAtomParam):
                 self.index].type_registry
 
 
-def test_template_atom():
-
-    ta = TemplateAtom(symbol='C')
-    ta.xamp = 0
-    ta.tagname = 'C1'
-    assert ta.get_append_string() == '# C1 % XAMP=0'
-
-
-def test_template_atom_from_tmp():
-    bc = TemplateAtoms(symbols='C2')
-    c1 = bc[0]
-    c1.posamp = 1
-    assert c1.get_append_string() == '# C0 % POSAMP=1'
-    assert bc.arrays['buildtag'][0].get_append_string() == '# C0 % POSAMP=1'
-
-
 def tuple2range(value):
     """
     Return the string for a given value. If the value is a tuple
@@ -434,301 +389,23 @@ def tuple2range(value):
         return str(value)
 
 
-# The following function is modified base on ase.io.castep.write_castep_cell
-def write_buildcell_seed(fd,
-                         atoms,
-                         positions_frac=False,
-                         castep_cell=None,
-                         force_write=False):
+def get_seed_lines(atoms):
     """
-    This CASTEP export function write minimal information to
-    a .cell file. If the atoms object is a trajectory, it will
-    take the last image.
-
-    Note that function has been altered in order to require a filedescriptor
-    rather than a filename. This allows to use the more generic write()
-    function from formats.py
-
-    Note that the "force_write" keywords has no effect currently.
+    Write the seed to a file handle
     """
-    import numpy as np
-    from ase.constraints import FixedLine, FixAtoms, FixCartesian
-    if atoms is None:
-        print('Atoms object not initialized')
-        return False
-    if isinstance(atoms, list):
-        if len(atoms) > 1:
-            atoms = atoms[-1]
+    cell = CellInput()
 
-# deprecated; should be handled on the more generic write() level
-#    if os.path.isfile(filename) and not force_write:
-#        print('ase.io.castep.write_param: Set optional argument')
-#        print('force_write=True to overwrite %s.' % filename)
-#        return False
+    # Prepare the cell out
+    cell.set_cell(atoms.get_cell())
 
-#    fd = open(filename, 'w')
+    # Prepare the positions
+    if atoms.positions.size > 0:
+        species = atoms.get_chemical_symbols()
+        pos_line_tags = list(atoms.atom_tags)
+        tags_lines = [tag.get_append_string() for tag in pos_line_tags]
+        cell.set_positions(species, atoms.get_positions(), tags_lines)
 
-# I have to disable extra # comments
-# fd.write('#######################################################\n')
-# fd.write('#CASTEP cell file: %s\n' % fd.name)
-# fd.write('#Created using the Atomic Simulation Environment (ASE)#\n')
-# fd.write('#######################################################\n\n')
-    fd.write('%BLOCK LATTICE_CART\n')
-    cell = np.matrix(atoms.get_cell())
-    for line in atoms.get_cell():
-        fd.write('    %.10f %.10f %.10f\n' % tuple(line))
-    # NOTE Addition for buildcell tag
-    if atoms.build_param.fix is True:
-        fd.write('#FIX\n')
-    if atoms.build_param.cfix is True:
-        fd.write('#CFIX\n')
-    fd.write('%ENDBLOCK LATTICE_CART\n\n\n')
-
-    if positions_frac:
-        keyword = 'POSITIONS_FRAC'
-        positions = np.array(atoms.get_positions() * cell.I)
-
-    else:
-        keyword = 'POSITIONS_ABS'
-        positions = atoms.get_positions()
-
-    if (hasattr(atoms, 'calc') and hasattr(atoms.calc, 'param')
-            and hasattr(atoms.calc.param, 'task')):
-        _spin_pol = any([
-            getattr(atoms.calc.param, i).value
-            for i in ['spin_polarized', 'spin_polarised']
-        ])
-    else:
-        _spin_pol = True
-
-    # Gather the data that will be used to generate the block
-    pos_block_data = []
-    pos_block_format = '%s %8.6f %8.6f %8.6f'
-    if atoms.has('castep_custom_species'):
-        pos_block_data.append(atoms.get_array('castep_custom_species'))
-    else:
-        pos_block_data.append(atoms.get_chemical_symbols())
-    pos_block_data += [xlist for xlist in zip(*positions)]
-
-    if atoms.get_initial_magnetic_moments().any() and _spin_pol:
-        pos_block_data.append(atoms.get_initial_magnetic_moments())
-        pos_block_format += ' SPIN=%4.2f'
-
-    pos_block = [(pos_block_format % line_data)
-                 for line_data in zip(*pos_block_data)]
-
-    # Adding the CASTEP labels output
-    if atoms.has('castep_labels'):
-        labels = atoms.get_array('castep_labels')
-        for l_i, label in enumerate(labels):
-            # avoid empty labels that crash CASTEP runs
-            if label and label != 'NULL':
-                pos_block[l_i] += ' LABEL=%s' % label
-
-    # NOTE Adding buildcell tags
-    build_tags = [tag.to_string() for tag in atoms.get_array('buildtag')]
-    for l_i, tag in enumerate(build_tags):
-        pos_block[l_i] += tag
-
-    fd.write('%%BLOCK %s\n' % keyword)
-    for line in pos_block:
-        fd.write('    %s\n' % line)
-    fd.write('%%ENDBLOCK %s\n\n' % keyword)
-
-    # NOTE Adding BuildcellParam
-    fd.write(atoms.build_param.to_string())
-
-    # if atoms, has a CASTEP calculator attached, then only
-    # write constraints if really necessary
-    if (hasattr(atoms, 'calc') and hasattr(atoms.calc, 'param')
-            and hasattr(atoms.calc.param, 'task')):
-        task = atoms.calc.param.task
-        if atoms.calc.param.task.value is None:
-            suppress_constraints = True
-        elif task.value.lower() not in [
-                'geometryoptimization',
-                # well, CASTEP understands US and UK english...
-                'geometryoptimisation',
-                'moleculardynamics',
-                'transitionstatesearch',
-                'phonon'
-        ]:
-            suppress_constraints = True
-        else:
-            suppress_constraints = False
-    else:
-        suppress_constraints = True
-
-    constraints = atoms.constraints
-    if len(constraints) and not suppress_constraints:
-        fd.write('%BLOCK IONIC_CONSTRAINTS \n')
-        count = 0
-        for constr in constraints:
-            if (not isinstance(constr, FixAtoms)
-                    and not isinstance(constr, FixCartesian)
-                    and not isinstance(constr, FixedLine)
-                    and not suppress_constraints):
-                print('Warning: you have constraints in your atoms, that are')
-                print('         not supported by the CASTEP ase interface')
-                break
-            if isinstance(constr, FixAtoms):
-                # sorry, for this complicated block
-                # reason is that constraint.index can either
-                # hold booleans or integers and in both cases
-                # it is an numpy array, so no simple comparison works
-                for n, val in enumerate(constr.index):
-                    if val.dtype.name.startswith('bool'):
-                        if not val:
-                            continue
-                        symbol = atoms.get_chemical_symbols()[n]
-                        nis = atoms.calc._get_number_in_species(n)
-                    elif val.dtype.name.startswith('int'):
-                        symbol = atoms.get_chemical_symbols()[val]
-                        nis = atoms.calc._get_number_in_species(val)
-                    else:
-                        raise UserWarning('Unrecognized index in' +
-                                          ' constraint %s' % constr)
-                    fd.write('%6d %3s %3d   1 0 0 \n' %
-                             (count + 1, symbol, nis))
-                    fd.write('%6d %3s %3d   0 1 0 \n' %
-                             (count + 2, symbol, nis))
-                    fd.write('%6d %3s %3d   0 0 1 \n' %
-                             (count + 3, symbol, nis))
-                    count += 3
-            elif isinstance(constr, FixCartesian):
-                n = constr.a
-                symbol = atoms.get_chemical_symbols()[n]
-                nis = atoms.calc._get_number_in_species(n)
-                # fix_cart = - constr.mask + 1
-                # just use the logical opposite
-                fix_cart = np.logical_not(constr.mask)
-                if fix_cart[0]:
-                    count += 1
-                    fd.write('%6d %3s %3d   1 0 0 \n' % (count, symbol, nis))
-                if fix_cart[1]:
-                    count += 1
-                    fd.write('%6d %3s %3d   0 1 0 \n' % (count, symbol, nis))
-                if fix_cart[2]:
-                    count += 1
-                    fd.write('%6d %3s %3d   0 0 1 \n' % (count, symbol, nis))
-            elif isinstance(constr, FixedLine):
-                n = constr.a
-                symbol = atoms.get_chemical_symbols()[n]
-                nis = atoms.calc._get_number_in_species(n)
-                direction = constr.dir
-                # print(direction)
-                ((i1, v1), (i2, v2)) = sorted(enumerate(direction),
-                                              key=lambda x: abs(x[1]),
-                                              reverse=True)[:2]
-                # print(sorted(enumerate(direction), key = lambda x:x[1])[:2])
-                # print(sorted(enumerate(direction), key = lambda x:x[1]))
-
-                # print(v1)
-                # print(v2)
-                n1 = np.array([v2, v1, 0])
-                n1 = n1 / np.linalg.norm(n1)
-
-                n2 = np.cross(direction, n1)
-                count += 1
-                fd.write('%6d %3s %3d   %f %f %f \n' %
-                         (count, symbol, nis, n1[0], n1[1], n1[2]))
-
-                count += 1
-                fd.write('%6d %3s %3d   %f %f %f \n' %
-                         (count, symbol, nis, n2[0], n2[1], n2[2]))
-        fd.write('%ENDBLOCK IONIC_CONSTRAINTS \n')
-
-    if castep_cell is None:
-        if hasattr(atoms, 'calc') and hasattr(atoms.calc, 'cell'):
-            castep_cell = atoms.calc.cell
-        else:
-            # fd.close()
-            return True
-
-    for option in castep_cell._options.values():
-        if option.value is not None:
-            #            print(option.value)
-            if option.type == 'Block':
-                fd.write('%%BLOCK %s\n' % option.keyword.upper())
-                fd.write(option.value)
-                fd.write('\n%%ENDBLOCK %s\n\n' % option.keyword.upper())
-            else:
-                fd.write('%s : %s\n\n' %
-                         (option.keyword.upper(), option.value))
-
-
-#    fd.close()
-    return True
-
-
-class Buildcell:
-    def __init__(self, atoms):
-        """Initialise an Buildcell object"""
-        self.atoms = atoms
-        self.proc = None
-        self.res = None
-        self.bc_out = None
-        self.bc_err = None
-
-    def generate(self, timeout=10, write_cell=None):
-        """Generate a random atom based on a template
-        timeout: time to wait for buildcell binary
-        write_seed : Name of the output cell to be written"""
-        import io
-        import ase.io.castep
-        import subprocess as sbp
-        tmp = io.StringIO()
-        write_buildcell_seed(tmp, self.atoms)
-        bc = sbp.Popen('buildcell',
-                       universal_newlines=True,
-                       stdin=sbp.PIPE,
-                       stdout=sbp.PIPE,
-                       stderr=sbp.PIPE)
-        self.proc = bc
-        tmp.seek(0)
-        self.seed = tmp.read()
-        try:
-            self.bc_out, self.bc_err = bc.communicate(input=self.seed,
-                                                      timeout=timeout)
-        except sbp.TimeoutExpired:
-            bc.kill()
-            self.bc_out, self.bc_err = bc.communicate()
-            print('Generation Failed to finished. Output captured')
-            return
-
-        tmp.close()
-        tmp = io.StringIO()
-        tmp.write(self.bc_out)
-        tmp.seek(0)
-        res = ase.io.castep.read_castep_cell(tmp)
-
-        # Write the output from buildcell
-        if write_cell:
-            with open(write_cell + '.cell', 'w') as output:
-                tmp.seek(0)
-                for line in tmp:
-                    output.write(line)
-        tmp.close()
-
-        # Detach unnecessary calculator
-        res.calc = None
-        # Store as attribute
-        self.res = res
-        return res
-
-    def write_seed(self, seedname):
-        """Write the seed for buildcell to the disk"""
-        with open(seedname + '.cell', 'w') as tmp:
-            write_buildcell_seed(tmp, self.atoms)
-
-    def gen_and_view(self, viewer=None, wrap=False, timeout=20):
-        from ase.visualize import view
-        res = self.generate(timeout=timeout)
-        if not res:
-            return
-        if wrap:
-            res.wrap()
-        if viewer:
-            view(res, viewer=viewer)
-        else:
-            view(res)
+    lines = []
+    lines.extend(cell.get_file_lines())
+    lines.extend(atoms.build_param.to_string().split('\n'))
+    return lines
