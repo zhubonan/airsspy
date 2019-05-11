@@ -73,6 +73,14 @@ class TemplateAtoms(Atoms):
         """Return the python object represent the cell"""
         return get_seed(self)
 
+    def get_random_atoms(self):
+        """
+        Returns the randomize Atoms built using ``buildcell`` program
+        """
+        from .build import Buildcell
+        bc = Buildcell(self)
+        return bc.generate()
+
     def __getitem__(self, i):
         """Return a subset of the atoms.
 

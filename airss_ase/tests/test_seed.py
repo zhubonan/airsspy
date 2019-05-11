@@ -1,9 +1,10 @@
 from __future__ import absolute_import
 import pytest
+from ..seed import (TemplateAtom, TemplateAtoms, SingeAtomParam,
+                    BuildcellParam, tuple2range)
 
 
 def test_bc_param():
-    from .seed import BuildcellParam
 
     bcp = BuildcellParam()
     bcp.fix = True
@@ -15,7 +16,6 @@ def test_bc_param():
 
 def test_nested_range():
 
-    from .seed import BuildcellParam
     bcp = BuildcellParam()
 
     # Test different possible configurations
@@ -39,7 +39,6 @@ def test_atom_param():
     """
     Test the single atom specification
     """
-    from .seed import SingeAtomParam
 
     param = SingeAtomParam()
     param.num = 3
@@ -52,8 +51,6 @@ def test_atom_param():
 
 
 def test_template_atom():
-
-    from .seed import TemplateAtom
     ta = TemplateAtom(symbol='C')
     ta.xamp = 0
     ta.tagname = 'C1'
@@ -62,7 +59,6 @@ def test_template_atom():
 
 def test_template_atom_from_tmp():
 
-    from .seed import TemplateAtoms
     bc = TemplateAtoms(symbols='C2')
     c1 = bc[0]
     c1.posamp = 1
@@ -77,7 +73,6 @@ def test_tuple2range():
     """
     Test tuple/number to string conversion
     """
-    from .seed import tuple2range
     assert tuple2range(2) == '2'
     assert tuple2range((2, 3)) == '2-3'
 
@@ -86,7 +81,8 @@ def test_template_atom_write():
     """
     Test writing output from a template atom
     """
-    from .seed import TemplateAtoms
+    from tempfile import mkdtemp
+    import os
 
     atoms = TemplateAtoms('C4')
     atoms.build.symmops = (2, 3)
@@ -103,3 +99,8 @@ def test_template_atom_write():
     assert 'XAMP=2-3' in buff
     assert '# C0' in buff
     assert '# CX0 ' in buff
+
+    # Test actually writing the files
+    tmp = mkdtemp()
+    fpath = os.path.join(tmp, 'test.cell')
+    atoms.write_seed(fpath)

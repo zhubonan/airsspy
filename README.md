@@ -20,5 +20,4 @@ from airss_ase import TemplateAtom
 seed = TemplateAtom('C6')
 seed.buiid.varvol = 20
 seed.build.symmops = (2, 4)
-seed.build.nato = (2, 4)
 ```
