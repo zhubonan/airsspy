@@ -21,84 +21,89 @@
 Classes for preparing AIRSS seed
 """
 from __future__ import absolute_import
-import numpy as np
-from ase import Atoms, Atom
 import numbers
-import collections
+
+import numpy as np
 from castepinput import CellInput
-from ase.constraints import FixConstraint, FixBondLengths
 from six.moves import range
+from ase.constraints import FixConstraint, FixBondLengths
+from ase import Atoms, Atom
 
 
-class TemplateAtoms(Atoms):
+class SeedAtoms(Atoms):
     """Subclass of ase.atoms.Atoms object. Template for generating random cells
     """
 
     def __init__(self, *args, **kwargs):
-        """Initialise an TemplateAtoms for buildcell.
+        """Initialise an SeedAtoms for buildcell.
         Same arguments signature as ase.Atoms object
 
         Special attribute:
           build : BuildcellParam instance for storing parameter of buildcell
 
-        An array of SingeAtomParam objects are added automatically.
+        An array of SeedAtomTag objects are added automatically.
         Each one can be retrieved/replaced with
           set_buildcell_tag
           get_buildcell_tag
         """
-        super(TemplateAtoms, self).__init__(*args, **kwargs)
-        self.build = BuildcellParam()
+        super(SeedAtoms, self).__init__(*args, **kwargs)
+        self._gentags = BuildcellParam()
         # Construct tags for each Atom
         tags = []
         symbols = self.get_chemical_symbols()
         for i in range(len(self)):
-            tag = SingeAtomParam()
+            tag = SeedAtomTag()
             # Make independent tags initially
             tag.tagname = symbols[i] + str(i)
             tags.append(tag)
 
-        self.new_array('buildtag', tags, dtype=object, shape=None)
+        self.new_array('atom_gentags', tags, dtype=object, shape=None)
+
+    @property
+    def gentags(self):
+        return self._gentags
 
     def set_atom_tag(self, tag, index):
         """Set buildcell tags for individual atom
-        if the SingeAtomParam object has no tagname, set automatically"""
+        if the SeedAtomTag object has no tagname, set automatically"""
         if tag.tagname is None:
             tag.tagname = self.get_chemical_symbols()[index]
-        self.arrays['buildtag'][index] = tag
+        self.arrays['atom_gentags'][index] = tag
 
     def get_atom_tag(self, index):
         """
         Return the buildcell tag for the atom of the index.
         Can be used for in-place change
         """
-        return self.arrays['buildtag'][index]
+        return self.arrays['atom_gentags'][index]
 
     @property
     def atom_tags(self):
-        return self.arrays['buildtag']
+        """Array of tags, each for one Atom"""
+        return self.arrays['atom_gentags']
 
-    def get_seed_lines(self):
+    def get_cell_inp_lines(self):
         """
         Return a list of strings of the seed file
         """
-        return get_seed_lines(self)
+        return get_cell_inp_lines(self)
 
     def write_seed(self, fpath):
         """Write the seed to file"""
         with open(fpath, 'w') as fhandle:
-            fhandle.write('\n'.join(self.get_seed_lines()))
+            fhandle.write('\n'.join(self.get_cell_inp_lines()))
 
-    def get_seed(self):
+    def get_cell_inp(self):
         """Return the python object represent the cell"""
-        return get_seed(self)
+        return get_cell_inp(self)
 
     def get_random_atoms(self):
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
         from .build import Buildcell
-        bc = Buildcell(self)
-        return bc.generate()
+        buildcell = Buildcell(self)
+        return buildcell.generate()
 
     def __getitem__(self, i):
         """Return a subset of the atoms.
@@ -119,8 +124,8 @@ class TemplateAtoms(Atoms):
             if i < -natoms or i >= natoms:
                 raise IndexError('Index out of range.')
 
-            return TemplateAtom(atoms=self, index=i)
-        elif isinstance(i, list) and len(i) > 0:
+            return SeedAtom(atoms=self, index=i)
+        elif isinstance(i, list) and i:
             # Make sure a list of booleans will work correctly and not be
             # interpreted at 0 and 1 indices.
             i = np.array(i)
@@ -146,8 +151,8 @@ class TemplateAtoms(Atoms):
         # TODO: Do we need to shuffle indices in adsorbate_info too?
 
         atoms.arrays = {}
-        for name, a in self.arrays.items():
-            atoms.arrays[name] = a[i].copy()
+        for name, array in self.arrays.items():
+            atoms.arrays[name] = array[i].copy()
 
         atoms.constraints = conadd
         return atoms
@@ -238,15 +243,19 @@ class BuildcellParam(object):
         self.data.clear()
 
     def get_prop(self, value):
+        """Get the property"""
         return self.data.__getitem__(value)
 
     def set_prop(self, name, value):
+        """Set the property"""
         return self.data.__setitem__(name, value)
 
     def set_tag(self, tag):
+        """Set a tag-like property"""
         self.data.__setitem__(tag, '')
 
     def delete_prop(self, name):
+        """Delete a property of the build"""
         self.data.pop(name)
 
     def to_string(self):
@@ -280,8 +289,8 @@ class BuildcellParam(object):
                         line = '#{}={}'.format(name, tuple2range(value[0]))
                         tokens = [line]
                         if value[1]:
-                            for k_, v_ in value[1].items():
-                                tokens.append(k_ + '=' + tuple2range(v_))
+                            for k_tmp, v_tmp in value[1].items():
+                                tokens.append(k_tmp + '=' + tuple2range(v_tmp))
                         line = ' '.join(tokens)
                 lines.append(line)
 
@@ -316,10 +325,11 @@ class BuildcellParam(object):
         'NATOM', 'Number of atoms in cell, if not explicitly defined')
 
 
-class SingeAtomParam(object):
+class SeedAtomTag(object):
     """Paramter for a single auto"""
 
     def __init__(self, *args, **kwargs):
+        """A container for tags of a single SeedAtom"""
         self.prop_data = dict()
         self.type_registry = dict()
         self.disabled = False
@@ -329,15 +339,26 @@ class SingeAtomParam(object):
         self.prop_data.clear()
 
     def get_prop(self, value):
-        return self.prop_data.__getitem__(value)
+        """Get property"""
+        return self.prop_data.get(value)
 
     def set_prop(self, name, value):
+        """Set property"""
         return self.prop_data.__setitem__(name, value)
 
     def set_tag(self, tag):
+        """Set a tag-like property"""
         self.prop_data.__setitem__(tag, '')
 
+    def get_tag(self, tag):
+        """Set a tag-like property"""
+        value = self.prop_data.get(tag)
+        if value == '':
+            return True
+        return None
+
     def delete_prop(self, name):
+        """Deleta a property"""
         self.prop_data.pop(name)
 
     tagname = genericproperty('tagname', 'Name of the tag')
@@ -387,18 +408,18 @@ class SingeAtomParam(object):
         return string
 
 
-class TemplateAtom(Atom, SingeAtomParam):
+class SeedAtom(Atom, SeedAtomTag):
     """
     Element atoms in a AIRSS seed
     """
 
     def __init__(self, *args, **kwargs):
-        super(TemplateAtom, self).__init__(*args, **kwargs)
-        SingeAtomParam.__init__(self, *args, **kwargs)
+        super(SeedAtom, self).__init__(*args, **kwargs)
+        SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
-            self.prop_data = self.atoms.arrays['buildtag'][self.
-                                                           index].prop_data
-            self.type_registry = self.atoms.arrays['buildtag'][
+            self.prop_data = self.atoms.arrays['atom_gentags'][self.
+                                                               index].prop_data
+            self.type_registry = self.atoms.arrays['atom_gentags'][
                 self.index].type_registry
 
 
@@ -409,11 +430,11 @@ def tuple2range(value):
     """
     if isinstance(value, (list, tuple)):
         return "{}-{}".format(value[0], value[1])
-    else:
-        return str(value)
+    return str(value)
 
 
-def get_seed(atoms):
+def get_cell_inp(atoms):
+    """Get the CellInput holder for a given seed"""
     cell = CellInput()
 
     # Prepare the cell out
@@ -429,12 +450,12 @@ def get_seed(atoms):
     return cell
 
 
-def get_seed_lines(atoms):
+def get_cell_inp_lines(atoms):
     """
     Write the seed to a file handle
     """
-    cell = get_seed(atoms)
+    cell = get_cell_inp(atoms)
     lines = []
     lines.extend(cell.get_file_lines())
-    lines.extend(atoms.build.to_string().split('\n'))
+    lines.extend(atoms.gentags.to_string().split('\n'))
     return lines

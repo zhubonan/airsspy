@@ -24,18 +24,18 @@ Test the Buildcell class
 from __future__ import absolute_import
 import pytest
 from distutils import spawn
-from ..seed import TemplateAtoms
+from ..seed import SeedAtoms
 from ..build import Buildcell
 
 
 @pytest.fixture
 def template_c2():
-    c2 = TemplateAtoms('C2')
-    c2.build.slack = 1
-    c2.build.overlap = 1
-    c2.build.minsep = 1.5
-    c2.build.symmops = (2, 4)
-    c2.build.varvol = 20
+    c2 = SeedAtoms('C2')
+    c2.gentags.slack = 1
+    c2.gentags.overlap = 1
+    c2.gentags.minsep = 1.5
+    c2.gentags.symmops = (2, 4)
+    c2.gentags.varvol = 20
     return c2
 
 

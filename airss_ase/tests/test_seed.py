@@ -19,8 +19,8 @@
 ###########################################################################
 from __future__ import absolute_import
 import pytest
-from ..seed import (TemplateAtom, TemplateAtoms, SingeAtomParam,
-                    BuildcellParam, tuple2range)
+from ..seed import (SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam,
+                    tuple2range)
 
 
 def test_bc_param():
@@ -59,7 +59,7 @@ def test_atom_param():
     Test the single atom specification
     """
 
-    param = SingeAtomParam()
+    param = SeedAtomTag()
     param.num = 3
     param.posamp = (1, 2)
     param.tagname = 'O1'
@@ -70,7 +70,7 @@ def test_atom_param():
 
 
 def test_template_atom():
-    ta = TemplateAtom(symbol='C')
+    ta = SeedAtom(symbol='C')
     ta.xamp = 0
     ta.tagname = 'C1'
     assert ta.get_append_string() == '# C1 % XAMP=0'
@@ -78,13 +78,14 @@ def test_template_atom():
 
 def test_template_atom_from_tmp():
 
-    bc = TemplateAtoms(symbols='C2')
+    bc = SeedAtoms(symbols='C2')
     c1 = bc[0]
     c1.posamp = 1
     assert c1.get_append_string() == '# C0 % POSAMP=1'
-    assert bc.arrays['buildtag'][0].get_append_string() == '# C0 % POSAMP=1'
+    assert bc.arrays['atom_gentags'][0].get_append_string(
+    ) == '# C0 % POSAMP=1'
 
-    cell = bc.get_seed()
+    cell = bc.get_cell_inp()
     assert 'positions_abs' in cell
 
 
@@ -103,14 +104,14 @@ def test_template_atom_write():
     from tempfile import mkdtemp
     import os
 
-    atoms = TemplateAtoms('C4')
-    atoms.build.symmops = (2, 3)
-    atoms.build.sgrank = 2
-    atoms.build.minsep = [2, {'C-C': (2, 3)}]
+    atoms = SeedAtoms('C4')
+    atoms.gentags.symmops = (2, 3)
+    atoms.gentags.sgrank = 2
+    atoms.gentags.minsep = [2, {'C-C': (2, 3)}]
     atoms[0].posamp = 3
     atoms[0].xamp = (2, 3)
     atoms[1].tagname = 'CX0'
-    buff = '\n'.join(atoms.get_seed_lines())
+    buff = '\n'.join(atoms.get_cell_inp_lines())
 
     assert '#SGRANK=2' in buff
     assert '#SYMMOPS=2-3' in buff

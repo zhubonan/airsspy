@@ -24,9 +24,10 @@ Module for building the random cell
 from __future__ import absolute_import
 from __future__ import print_function
 import subprocess as sbp
-from ase import Atoms
+
 from castepinput import CellInput
 from castepinput.parser import PlainParser
+from ase import Atoms
 
 
 class Buildcell:
@@ -56,7 +57,7 @@ class Buildcell:
             stdout=sbp.PIPE,
             stderr=sbp.PIPE)
         self.proc = bc_proc
-        cell = '\n'.join(self.atoms.get_seed_lines())
+        cell = '\n'.join(self.atoms.get_cell_inp_lines())
         self.bc_in = cell
         try:
             self.bc_out, self.bc_err = bc_proc.communicate(
@@ -65,7 +66,7 @@ class Buildcell:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
             print('Generation Failed to finished. Output captured')
-            return
+            return None
 
         # Write the output from buildcell
         if write_cell:
@@ -91,6 +92,7 @@ class Buildcell:
         self.atoms.write_seed(seedname)
 
     def gen_and_view(self, viewer=None, wrap=False, timeout=20):
+        """Geneate one and view with viewer immediately. Wrap if needed."""
         from ase.visualize import view
         atoms = self.generate(timeout=timeout)
         if not atoms:

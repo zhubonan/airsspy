@@ -21,5 +21,5 @@
 Import common used stuff to the model namespace
 """
 
-from .seed import TemplateAtoms
+from .seed import SeedAtoms
 from .build import Buildcell

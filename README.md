@@ -20,8 +20,8 @@ Usage
 -----
 Prepare a seed for generation:
 ```
-from airss_ase import TemplateAtoms
-seed = TemplateAtoms('C6')
+from airss_ase import SeedAtoms
+seed = SeedAtoms('C6')
 seed.buiid.varvol = 20
 seed.build.symmops = (2, 4)
 
@@ -49,7 +49,7 @@ buidcell = Buildcell(atoms=seed)
 random_atoms = builcell.generate()
 ```
 
-A shortcut is also avaliable as an method of the `TemplateAtoms`:
+A shortcut is also avaliable as an method of the `SeedAtoms`:
 ```
 random_atoms = seed.get_random_atoms()
 ```
