@@ -78,12 +78,6 @@ class SeedAtoms(Atoms):
         """Array of tags, each for one Atom"""
         return self.arrays['atom_gentags']
 
-    def get_cell_inp_lines(self):
-        """
-        Return a list of strings of the seed file
-        """
-        return get_cell_inp_lines(self)
-
     def write_seed(self, fpath):
         """Write the seed to file"""
         with open(fpath, 'w') as fhandle:
@@ -93,7 +87,13 @@ class SeedAtoms(Atoms):
         """Return the python object represent the cell"""
         return get_cell_inp(self)
 
-    def get_random_atoms(self, also_buildcell=False):
+    def get_cell_inp_lines(self):
+        """
+        Return a list of strings of the seed file
+        """
+        return get_cell_inp_lines(self)
+
+    def build_random_atoms(self, also_buildcell=False):
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
@@ -235,6 +235,9 @@ class TagHolder(object):
         self.prop_data = dict()
         self.type_registry = dict()
         self.disabled = False
+
+    def get_prop_dict(self):
+        return self.prop_data
 
     def clear_all(self):
         """Set all property to be None"""
