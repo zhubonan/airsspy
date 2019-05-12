@@ -27,8 +27,8 @@ def test_bc_param():
 
     bcp = BuildcellParam()
     bcp.fix = True
-    bcp.nforms = 3
-    assert 'NFORMS' in bcp.to_string()
+    bcp.nform = 3
+    assert 'NFORM' in bcp.to_string()
     bcp.minsep = [2, {'Ce-O': (2, 3)}]
     assert 'Ce-O=2-3' in bcp.to_string()
 

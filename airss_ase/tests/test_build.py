@@ -53,5 +53,5 @@ def test_generate(template_c2):
     assert bc.bc_out
 
     # The method of the template atoms should also work
-    atoms = template_c2.get_random_atoms()
+    atoms = template_c2.build_random_atoms()
     assert atoms
