@@ -47,7 +47,7 @@ class SeedAtoms(Atoms):
           get_buildcell_tag
         """
         super(SeedAtoms, self).__init__(*args, **kwargs)
-        self._gentags = BuildcellParam()
+        self.gentags = BuildcellParam()
         # Construct tags for each Atom
         tags = []
         symbols = self.get_chemical_symbols()
@@ -58,10 +58,6 @@ class SeedAtoms(Atoms):
             tags.append(tag)
 
         self.new_array('atom_gentags', tags, dtype=object, shape=None)
-
-    @property
-    def gentags(self):
-        return self._gentags
 
     def set_atom_tag(self, tag, index):
         """Set buildcell tags for individual atom
@@ -97,12 +93,14 @@ class SeedAtoms(Atoms):
         """Return the python object represent the cell"""
         return get_cell_inp(self)
 
-    def get_random_atoms(self):
+    def get_random_atoms(self, also_buildcell=False):
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
         from .build import Buildcell
         buildcell = Buildcell(self)
+        if also_buildcell:
+            return buildcell.generate(), buildcell
         return buildcell.generate()
 
     def __getitem__(self, i):
@@ -162,7 +160,7 @@ def tagproperty(name, doc):
     """Set a tag-like property"""
 
     def getter(self):
-        return self.get(name)
+        return self.get_tag(name)
 
     def setter(self, value):
         self.type_registry.update({name: 'tag'})
@@ -229,39 +227,52 @@ def nestedrangeproperty(name, doc):
     return property(getter, setter, deleter, doc)
 
 
-class BuildcellParam(object):
+class TagHolder(object):
+    """Container for the tags"""
+
+    def __init__(self, *args, **kwargs):
+        """A container for tags of a single SeedAtom"""
+        self.prop_data = dict()
+        self.type_registry = dict()
+        self.disabled = False
+
+    def clear_all(self):
+        """Set all property to be None"""
+        self.prop_data.clear()
+
+    def get_prop(self, value):
+        """Get property"""
+        return self.prop_data.get(value)
+
+    def set_prop(self, name, value):
+        """Set property"""
+        return self.prop_data.__setitem__(name, value)
+
+    def set_tag(self, tag):
+        """Set a tag-like property"""
+        self.prop_data.__setitem__(tag, '')
+
+    def get_tag(self, tag):
+        """Set a tag-like property"""
+        value = self.prop_data.get(tag)
+        if value == '':
+            return True
+        return None
+
+    def delete_prop(self, name):
+        """Deleta a property"""
+        self.prop_data.pop(name)
+
+
+class BuildcellParam(TagHolder):
     """
     A class for storing parameters for the Buldcell program
     """
 
-    def __init__(self):
-        self.data = dict()
-        self.type_registry = dict()
-
-    def clear_all(self):
-        """Set all property to be None"""
-        self.data.clear()
-
-    def get_prop(self, value):
-        """Get the property"""
-        return self.data.__getitem__(value)
-
-    def set_prop(self, name, value):
-        """Set the property"""
-        return self.data.__setitem__(name, value)
-
-    def set_tag(self, tag):
-        """Set a tag-like property"""
-        self.data.__setitem__(tag, '')
-
-    def delete_prop(self, name):
-        """Delete a property of the build"""
-        self.data.pop(name)
-
     def to_string(self):
         """Return the string that should go into the .cell file"""
         lines = []
-        for key, value in self.data.items():
+        for key, value in self.prop_data.items():
             name = key.upper()
             type_string = self.type_registry[key]
             if value is False or value is None:
@@ -297,9 +308,56 @@ class BuildcellParam(object):
         return '\n'.join(lines) + '\n'
 
     fix = tagproperty('FIX', 'Fix the cell')
+    abfix = tagproperty('ABFIX', 'Fix ab axes')
+    adjgen = genericproperty('ADJGEN', 'Adjust the general positions')
+    autoslack = tagproperty('AUTOSLACK', '')
+    breakamp = genericproperty('BREAKAMP', 'Amplitude for breaking symmetry')
+    celladapt = genericproperty('CELLADAPT', '')
+    cellamp = genericproperty('CELLAMP', 'Amplitude for cell')
+    cellcon = genericproperty('CELLCON', '')
+    coord = rangeproperty('COORD', '')
+    cylinder = genericproperty(
+        'CYLINDER',
+        'Confining cylinder(positive) or attractive line potential (neagtive)')
+    flip = tagproperty('flip', 'Enable mirror reflection of fragments')
+    maxbangle = genericproperty('MAXBANGLE', '')
+    maxtime = genericproperty('MAXTIME', '')
+    minbangle = genericproperty('MINBANGLE', '')
+    focus = genericproperty('FOCUS', 'Focus on composition?')
+    molecules = genericproperty('MOLECULES', '')
+    nocompact = genericproperty('NOCOMPACT', 'No compact cell')
+    nopush = genericproperty('NOPUSH', 'No pushing')
+    octet = genericproperty('OCTET', '')
+    permfrac = genericproperty('PERMFRAC', '')
+    permute = genericproperty('PERMUTE', '')
+    rad = genericproperty('RAD', '')
+    rash = genericproperty('RASH', '')
+    rash_angamp = genericproperty('RASH_ANGAMP', '')
+    rash_posamp = genericproperty('RASH_POSAMP', '')
+    remove = genericproperty('REMOVE', '')
+    slab = genericproperty('SLAB', '')
+    species = genericproperty('SPECIES', '')
+    sphere = genericproperty('SPHERE', '')
+    spin = genericproperty('SPIN', '')
+    supercell = genericproperty('SUPERCELL', '')
+    surface = tagproperty('SURFACE', '')
+    symm = genericproperty('SYMM', '')
+    symmno = genericproperty('SYMMNO', '')
+    symmorphic = tagproperty('SYMMORPHIC', '')
+    system = genericproperty('SYSTEM', 'Crystal system')
+    targvol = rangeproperty('TARGVOL', 'Target volume')
+    three = genericproperty('THREE', 'User three body hard sphere potential')
+    tight = tagproperty('TIGHT', 'Tigh packing?')
+    vacancies = genericproperty('VACANCIES', 'Introduct vacancies')
+    vacuum = genericproperty('VACUUM', 'Add vacuum')
+    width = genericproperty('WIDTH', 'Width of a confining slab spacer')
+
     cfix = tagproperty('CFIX', 'Fix the caxis')
     cluster = tagproperty('CLUSTER', 'We are predicting CLUSTER')
-    nforms = genericproperty('NFORMS', 'Number of formula units')
+    nform = rangeproperty(
+        'NFORM', ('Number of formula units. '
+                  'This must be set otherwise the number of atoms is n times '
+                  'the number of symmetries'))
     minsep = nestedrangeproperty('MINSEP', 'Minimum separation constraints')
     posamp = nestedrangeproperty('POSAMP', 'Position amplitudes')
     symmops = rangeproperty('SYMMOPS',
@@ -318,48 +376,14 @@ class BuildcellParam(object):
         'SLACK', 'Slack the hard sphere potentials enforcing the MINSEP')
     overlap = rangeproperty(
         'OVERLAP', 'Threhold of the overlap for the hard sphere potentials')
-    #focus = genericproperty('FOCUS', 'Focus on a specific compositions')
     compact = tagproperty('COMPACT', 'Compact the cell using Niggli reduction')
     cons = genericproperty('CONS', 'Parameter for cell shape constraint')
     natom = rangeproperty(
         'NATOM', 'Number of atoms in cell, if not explicitly defined')
 
 
-class SeedAtomTag(object):
-    """Paramter for a single auto"""
-
-    def __init__(self, *args, **kwargs):
-        """A container for tags of a single SeedAtom"""
-        self.prop_data = dict()
-        self.type_registry = dict()
-        self.disabled = False
-
-    def clear_all(self):
-        """Set all property to be None"""
-        self.prop_data.clear()
-
-    def get_prop(self, value):
-        """Get property"""
-        return self.prop_data.get(value)
-
-    def set_prop(self, name, value):
-        """Set property"""
-        return self.prop_data.__setitem__(name, value)
-
-    def set_tag(self, tag):
-        """Set a tag-like property"""
-        self.prop_data.__setitem__(tag, '')
-
-    def get_tag(self, tag):
-        """Set a tag-like property"""
-        value = self.prop_data.get(tag)
-        if value == '':
-            return True
-        return None
-
-    def delete_prop(self, name):
-        """Deleta a property"""
-        self.prop_data.pop(name)
+class SeedAtomTag(TagHolder):
+    """Tags for a single auto"""
 
     tagname = genericproperty('tagname', 'Name of the tag')
     posamp = rangeproperty('POSAMP', 'Position amplitude')
