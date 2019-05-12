@@ -482,6 +482,12 @@ def get_cell_inp_lines(atoms):
     Write the seed to a file handle
     """
     cell = get_cell_inp(atoms)
+    # Insert tags in the cell block
+    tags = atoms.gentags.get_prop_dict()
+    for tag in tags:
+        if tag in ['FIX', 'CFIX', 'ABFIX']:
+            cell['lattice_cart'].append('#' + tag)
+
     lines = []
     lines.extend(cell.get_file_lines())
     lines.extend(atoms.gentags.to_string().split('\n'))
