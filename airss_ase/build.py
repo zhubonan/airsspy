@@ -67,6 +67,8 @@ class Buildcell:
             self.bc_out, self.bc_err = bc_proc.communicate()
             print('Generation Failed to finished. Output captured')
             return None
+        else:
+            bc_proc.kill()
 
         # Write the output from buildcell
         if write_cell:

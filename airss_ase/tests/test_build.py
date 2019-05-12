@@ -22,6 +22,8 @@ Test the Buildcell class
 """
 
 from __future__ import absolute_import
+import sys
+
 import pytest
 from distutils import spawn
 from ..seed import SeedAtoms
@@ -40,8 +42,8 @@ def template_c2():
 
 
 @pytest.mark.skipif(
-    spawn.find_executable('buildcell') is None,
-    reason='No buildcell executable in PATH')
+    spawn.find_executable('buildcell') is None or sys.version_info < (3, ),
+    reason='No buildcell executable in PATH or not running on Python 3')
 def test_generate(template_c2):
 
     bc = Buildcell(template_c2)

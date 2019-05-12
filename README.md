@@ -53,3 +53,10 @@ A shortcut is also avaliable as an method of the `SeedAtoms`:
 ```
 random_atoms = seed.get_random_atoms()
 ```
+
+Limitations
+-----------
+Due to the lack of `timeout` argument of `Popen.communicate` in python 2.7,
+interation with the `buildcell` is not avaliable. Hence, direct generation and 
+retrivial of the random structure are not supported in python. However, it is 
+still possible to write the seed out and call the program externally.
