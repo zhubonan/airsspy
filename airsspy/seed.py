@@ -16,7 +16,7 @@
 # You should have received a copy of the GNU General Public License along #
 # with this program; if not, write to the Free Software Foundation, Inc., #
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
-########################################################################## 2 3 1
+###########################################################################
 """
 Classes for preparing AIRSS seed
 """
@@ -28,6 +28,7 @@ from castepinput import CellInput
 from six.moves import range
 from ase.constraints import FixConstraint, FixBondLengths
 from ase import Atoms, Atom
+from .build import BuildcellError
 
 
 class SeedAtoms(Atoms):
@@ -93,15 +94,21 @@ class SeedAtoms(Atoms):
         """
         return get_cell_inp_lines(self)
 
-    def build_random_atoms(self, also_buildcell=False):
+    def build_random_atoms(self, also_buildcell=False, fail_ok=True):
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
         from .build import Buildcell
         buildcell = Buildcell(self)
+        try:
+            rand_atoms = buildcell.generate()
+        except BuildcellError as e:
+            if fail_ok:
+                return
+            raise e
         if also_buildcell:
-            return buildcell.generate(), buildcell
-        return buildcell.generate()
+            return rand_atoms, buildcell
+        return rand_atoms
 
     def __getitem__(self, i):
         """Return a subset of the atoms.

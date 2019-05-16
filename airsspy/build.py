@@ -29,6 +29,8 @@ from castepinput import CellInput
 from castepinput.parser import PlainParser
 from ase import Atoms
 
+from .common import BuildcellError
+
 
 class Buildcell:
     """
@@ -65,7 +67,7 @@ class Buildcell:
         except sbp.TimeoutExpired:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
-            print('Generation Failed to finished. Output captured')
+            raise BuildcellError
             return None
         else:
             bc_proc.kill()
