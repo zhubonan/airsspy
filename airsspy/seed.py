@@ -94,14 +94,17 @@ class SeedAtoms(Atoms):
         """
         return get_cell_inp_lines(self)
 
-    def build_random_atoms(self, also_buildcell=False, fail_ok=True):
+    def build_random_atoms(self,
+                           timeout=10,
+                           also_buildcell=False,
+                           fail_ok=True):
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
         from .build import Buildcell
         buildcell = Buildcell(self)
         try:
-            rand_atoms = buildcell.generate()
+            rand_atoms = buildcell.generate(timeout)
         except BuildcellError as e:
             if fail_ok:
                 return
