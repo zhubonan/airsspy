@@ -1,4 +1,4 @@
-airss-ase
+airsspy
 ---------
 
 Package to help working with Ab initio Random Structure Searching ([AIRSS](https://www.mtg.msm.cam.ac.uk/Codes/AIRSS))
@@ -20,7 +20,7 @@ Usage
 -----
 Prepare a seed for generation:
 ```
-from airss_ase import SeedAtoms
+from airsspy import SeedAtoms
 seed = SeedAtoms('C6')
 seed.buiid.varvol = 20
 seed.build.symmops = (2, 4)
@@ -44,7 +44,7 @@ To generate a cell we can create a `Buildcell` instance,
 which is an wrapp to the `buildcell` program of AIRSS:
 
 ```
-from airss_ase import Buildcell
+from airsspy import Buildcell
 buidcell = Buildcell(atoms=seed)
 random_atoms = builcell.generate()
 ```

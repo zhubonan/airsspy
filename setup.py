@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 ###########################################################################
-# airss-ase                                                               #
+# airsspy                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
 #                                                                         #
 # This program is free software; you can redistribute it and/or modify    #
@@ -30,9 +30,9 @@ if __name__ == '__main__':
         long_description = fh.read()
 
     setup(
-        name='airss-ase',
+        name='airsspy',
         version=version,
-        url='https://www.gitlab.com/bz1/airss-ase',
+        url='https://www.gitlab.com/bz1/airsspy',
         packages=find_packages(),
         install_requires=[
             'ase',
