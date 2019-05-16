@@ -404,6 +404,12 @@ class SeedAtomTag(TagHolder):
     num = rangeproperty('NUM', 'Number of atoms/fragments')
     adatom = tagproperty('ADATOM', 'Add atoms after making supercell')
     fix = tagproperty('FIX', 'FIX this atom')
+    nomove = tagproperty('NOMOVE', 'Do not move this atom (even in push)')
+    rad = genericproperty('RAD', 'Radius of ion')
+    occ = genericproperty('OCC', 'Occupation, can be fractional (e.g 1/3)')
+    perm = tagproperty('PERM', '')
+    athome = tagproperty('ATHOLE', '')
+    coord = rangeproperty('COORD', 'Coordination of the ion')
 
     def get_append_string(self):
         """
