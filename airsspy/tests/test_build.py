@@ -21,7 +21,6 @@
 Test the Buildcell class
 """
 
-from __future__ import absolute_import
 import sys
 
 import pytest

@@ -21,8 +21,6 @@
 Module for building the random cell
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 import subprocess as sbp
 
 from castepinput import CellInput

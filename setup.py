@@ -19,7 +19,6 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
 
-from __future__ import absolute_import
 from setuptools import setup, find_packages
 
 version = '0.1.0'
@@ -37,7 +36,6 @@ if __name__ == '__main__':
         install_requires=[
             'ase',
             'castepinput == 0.1.4',
-            'six',
         ],
         extras_require={
             'testing': ['pytest'],

@@ -20,12 +20,10 @@
 """
 Classes for preparing AIRSS seed
 """
-from __future__ import absolute_import
 import numbers
 
 import numpy as np
 from castepinput import CellInput
-from six.moves import range
 from ase.constraints import FixConstraint, FixBondLengths
 from ase import Atoms, Atom
 from .build import BuildcellError
