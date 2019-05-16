@@ -395,7 +395,7 @@ class SeedAtomTag(TagHolder):
     xamp = rangeproperty('XAMP', 'Amplitude in X')
     yamp = rangeproperty('YAMP', 'Amplitude in Y')
     num = rangeproperty('NUM', 'Number of atoms/fragments')
-    atatom = rangeproperty('ADATOM', 'Add atoms after making supercell')
+    adatom = tagproperty('ADATOM', 'Add atoms after making supercell')
     fix = tagproperty('FIX', 'FIX this atom')
 
     def get_append_string(self):
