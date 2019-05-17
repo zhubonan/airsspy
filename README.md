@@ -46,13 +46,13 @@ which is an wrapp to the `buildcell` program of AIRSS:
 
 ```
 from airsspy import Buildcell
-buidcell = Buildcell(atoms=seed)
+buidcell = Buildcell(seed)
 random_atoms = builcell.generate()
 ```
 
 A shortcut is also avaliable as an method of the `SeedAtoms`:
 ```
-random_atoms = seed.get_random_atoms()
+random_atoms = seed.build_random_atoms()
 ```
 
 Limitations
