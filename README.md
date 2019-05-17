@@ -1,5 +1,6 @@
 airsspy
 ---------
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gl/bz1%2Fairsspy/master)
 
 Package to help working with Ab initio Random Structure Searching ([AIRSS](https://www.mtg.msm.cam.ac.uk/Codes/AIRSS))
 using Atomic simulation environment ([ase](https://wiki.fysik.dtu.dk/ase/))
