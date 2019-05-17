@@ -16,7 +16,7 @@ What this does
 Try interactively
 -----------------
 Interactive jupyter notebook examples can be found in the `examples` folder.
-Click the *binder* badge above to launch these examples in a pre-built environment and try in your browser!
+Click the *binder* badge above to launch these examples in a pre-built environment and try it in your browser!
 
 Requirements
 -----------
