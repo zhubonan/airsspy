@@ -12,4 +12,5 @@ make install
 mkdir -p ~/.local/bin
 cp bin/* ~/.local/bin/
 
-
+# Install additional dependencies
+${KERNEL_PYTHON_PREFIX}/bin/pip install --no-cache-dir spglib ipypb
