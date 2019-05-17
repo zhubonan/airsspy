@@ -1,7 +1,6 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 ###########################################################################
-# airsspy                                                               #
+# airss-ase                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
 #                                                                         #
 # This program is free software; you can redistribute it and/or modify    #
@@ -18,33 +17,40 @@
 # with this program; if not, write to the Free Software Foundation, Inc., #
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
+"""
+Test the Buildcell class
+"""
 
-from setuptools import setup, find_packages
+import sys
 
-version = '0.1.0'
-if __name__ == '__main__':
-    import os
-    install_folder = os.path.split(__file__)[0]
-    with open(os.path.join(install_folder, 'README.md')) as fh:
-        long_description = fh.read()
+import pytest
+from distutils import spawn
+from ..seed import SeedAtoms
+from ..build import Buildcell
 
-    setup(
-        name='airsspy',
-        version=version,
-        url='https://www.gitlab.com/bz1/airsspy',
-        packages=find_packages(),
-        install_requires=[
-            'ase',
-            'castepinput == 0.1.4',
-        ],
-        extras_require={
-            'testing': ['pytest'],
-            "pre-commit": [
-                "pre-commit==1.11.0",
-                "yapf==0.24.0",
-            ]
-        },
-        maintainer='Bonan Zhu',
-        maintainer_email='zhubonan@outlook.com',
-        long_description=long_description,
-    )
+
+@pytest.fixture
+def template_c2():
+    c2 = SeedAtoms('C2')
+    c2.gentags.slack = 1
+    c2.gentags.overlap = 1
+    c2.gentags.minsep = 1.5
+    c2.gentags.symmops = (2, 4)
+    c2.gentags.varvol = 20
+    return c2
+
+
+@pytest.mark.skipif(
+    spawn.find_executable('buildcell') is None or sys.version_info < (3, ),
+    reason='No buildcell executable in PATH or not running on Python 3')
+def test_generate(template_c2):
+
+    bc = Buildcell(template_c2)
+    atoms = bc.generate()
+    assert atoms
+    assert bc.bc_err
+    assert bc.bc_out
+
+    # The method of the template atoms should also work
+    atoms = template_c2.build_random_atoms()
+    assert atoms

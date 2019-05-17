@@ -1,13 +1,33 @@
+# -*- coding: utf-8 -*-
+###########################################################################
+# airss-ase                                                               #
+# Copyright (C) 2019  Bonan Zhu                                           #
+#                                                                         #
+# This program is free software; you can redistribute it and/or modify    #
+# it under the terms of the GNU General Public License as published by    #
+# the Free Software Foundation; either version 2 of the License, or       #
+# (at your option) any later version.                                     #
+#                                                                         #
+# This program is distributed in the hope that it will be useful,         #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+# GNU General Public License for more details.                            #
+#                                                                         #
+# You should have received a copy of the GNU General Public License along #
+# with this program; if not, write to the Free Software Foundation, Inc., #
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
+###########################################################################
 """
 Module for building the random cell
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 import subprocess as sbp
-from ase import Atoms
+
 from castepinput import CellInput
 from castepinput.parser import PlainParser
+from ase import Atoms
+
+from .common import BuildcellError
 
 
 class Buildcell:
@@ -30,22 +50,25 @@ class Buildcell:
         """Generate a random atom based on a template
         timeout: time to wait for buildcell binary
         write_seed : Name of the output cell to be written"""
-        bc_proc = sbp.Popen('buildcell',
-                            universal_newlines=True,
-                            stdin=sbp.PIPE,
-                            stdout=sbp.PIPE,
-                            stderr=sbp.PIPE)
+        bc_proc = sbp.Popen(
+            'buildcell',
+            universal_newlines=True,
+            stdin=sbp.PIPE,
+            stdout=sbp.PIPE,
+            stderr=sbp.PIPE)
         self.proc = bc_proc
-        cell = '\n'.join(self.atoms.get_seed_lines())
+        cell = '\n'.join(self.atoms.get_cell_inp_lines())
         self.bc_in = cell
         try:
-            self.bc_out, self.bc_err = bc_proc.communicate(input=cell,
-                                                           timeout=timeout)
+            self.bc_out, self.bc_err = bc_proc.communicate(
+                input=cell, timeout=timeout)
         except sbp.TimeoutExpired:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
-            print('Generation Failed to finished. Output captured')
-            return
+            raise BuildcellError
+            return None
+        else:
+            bc_proc.kill()
 
         # Write the output from buildcell
         if write_cell:
@@ -71,6 +94,7 @@ class Buildcell:
         self.atoms.write_seed(seedname)
 
     def gen_and_view(self, viewer=None, wrap=False, timeout=20):
+        """Geneate one and view with viewer immediately. Wrap if needed."""
         from ase.visualize import view
         atoms = self.generate(timeout=timeout)
         if not atoms:

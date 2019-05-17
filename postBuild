@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+
+curl -L -o AIRSS.tgz http://bit.ly/2KtvEWU
+tar zxf AIRSS.tgz
+cd airss-0.9.1
+export FC=gfortran
+make all
+make install
+
+# Copy the executable to the folder
+mkdir -p ~/.local/bin
+cp bin/* ~/.local/bin/
+
+# Install additional dependencies
+${KERNEL_PYTHON_PREFIX}/bin/pip install --no-cache-dir spglib ipypb

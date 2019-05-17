@@ -1,0 +1,5 @@
+gfortran
+liblapack-dev
+libopenblas-dev
+curl
+bc

@@ -1,77 +1,115 @@
+# -*- coding: utf-8 -*-
+###########################################################################
+# airss-ase                                                               #
+# Copyright (C) 2019  Bonan Zhu                                           #
+#                                                                         #
+# This program is free software; you can redistribute it and/or modify    #
+# it under the terms of the GNU General Public License as published by    #
+# the Free Software Foundation; either version 2 of the License, or       #
+# (at your option) any later version.                                     #
+#                                                                         #
+# This program is distributed in the hope that it will be useful,         #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of          #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the           #
+# GNU General Public License for more details.                            #
+#                                                                         #
+# You should have received a copy of the GNU General Public License along #
+# with this program; if not, write to the Free Software Foundation, Inc., #
+# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
+###########################################################################
 """
 Classes for preparing AIRSS seed
 """
-from __future__ import absolute_import
-import numpy as np
-from ase import Atoms, Atom
 import numbers
-import collections
+
+import numpy as np
 from castepinput import CellInput
 from ase.constraints import FixConstraint, FixBondLengths
-from six.moves import range
+from ase import Atoms, Atom
+from .build import BuildcellError
 
 
-class TemplateAtoms(Atoms):
+class SeedAtoms(Atoms):
     """Subclass of ase.atoms.Atoms object. Template for generating random cells
     """
 
     def __init__(self, *args, **kwargs):
-        """Initialise an TemplateAtoms for buildcell.
+        """Initialise an SeedAtoms for buildcell.
         Same arguments signature as ase.Atoms object
 
         Special attribute:
           build : BuildcellParam instance for storing parameter of buildcell
 
-        An array of SingeAtomParam objects are added automatically.
+        An array of SeedAtomTag objects are added automatically.
         Each one can be retrieved/replaced with
           set_buildcell_tag
           get_buildcell_tag
         """
-        super(TemplateAtoms, self).__init__(*args, **kwargs)
-        self.build = BuildcellParam()
+        super(SeedAtoms, self).__init__(*args, **kwargs)
+        self.gentags = BuildcellParam()
         # Construct tags for each Atom
         tags = []
         symbols = self.get_chemical_symbols()
         for i in range(len(self)):
-            tag = SingeAtomParam()
+            tag = SeedAtomTag()
             # Make independent tags initially
             tag.tagname = symbols[i] + str(i)
             tags.append(tag)
 
-        self.new_array('buildtag', tags, dtype=object, shape=None)
+        self.new_array('atom_gentags', tags, dtype=object, shape=None)
 
     def set_atom_tag(self, tag, index):
         """Set buildcell tags for individual atom
-        if the SingeAtomParam object has no tagname, set automatically"""
+        if the SeedAtomTag object has no tagname, set automatically"""
         if tag.tagname is None:
             tag.tagname = self.get_chemical_symbols()[index]
-        self.arrays['buildtag'][index] = tag
+        self.arrays['atom_gentags'][index] = tag
 
     def get_atom_tag(self, index):
         """
         Return the buildcell tag for the atom of the index.
         Can be used for in-place change
         """
-        return self.arrays['buildtag'][index]
+        return self.arrays['atom_gentags'][index]
 
     @property
     def atom_tags(self):
-        return self.arrays['buildtag']
-
-    def get_seed_lines(self):
-        """
-        Return a list of strings of the seed file
-        """
-        return get_seed_lines(self)
+        """Array of tags, each for one Atom"""
+        return self.arrays['atom_gentags']
 
     def write_seed(self, fpath):
         """Write the seed to file"""
         with open(fpath, 'w') as fhandle:
-            fhandle.write('\n'.join(self.get_seed_lines()))
+            fhandle.write('\n'.join(self.get_cell_inp_lines()))
 
-    def get_seed(self):
+    def get_cell_inp(self):
         """Return the python object represent the cell"""
-        return get_seed(self)
+        return get_cell_inp(self)
+
+    def get_cell_inp_lines(self):
+        """
+        Return a list of strings of the seed file
+        """
+        return get_cell_inp_lines(self)
+
+    def build_random_atoms(self,
+                           timeout=10,
+                           also_buildcell=False,
+                           fail_ok=True):
+        """
+        Returns the randomize Atoms built using ``buildcell`` program
+        """
+        from .build import Buildcell
+        buildcell = Buildcell(self)
+        try:
+            rand_atoms = buildcell.generate(timeout)
+        except BuildcellError as e:
+            if fail_ok:
+                return
+            raise e
+        if also_buildcell:
+            return rand_atoms, buildcell
+        return rand_atoms
 
     def __getitem__(self, i):
         """Return a subset of the atoms.
@@ -92,8 +130,8 @@ class TemplateAtoms(Atoms):
             if i < -natoms or i >= natoms:
                 raise IndexError('Index out of range.')
 
-            return TemplateAtom(atoms=self, index=i)
-        elif isinstance(i, list) and len(i) > 0:
+            return SeedAtom(atoms=self, index=i)
+        elif isinstance(i, list) and i:
             # Make sure a list of booleans will work correctly and not be
             # interpreted at 0 and 1 indices.
             i = np.array(i)
@@ -119,8 +157,8 @@ class TemplateAtoms(Atoms):
         # TODO: Do we need to shuffle indices in adsorbate_info too?
 
         atoms.arrays = {}
-        for name, a in self.arrays.items():
-            atoms.arrays[name] = a[i].copy()
+        for name, array in self.arrays.items():
+            atoms.arrays[name] = array[i].copy()
 
         atoms.constraints = conadd
         return atoms
@@ -130,7 +168,7 @@ def tagproperty(name, doc):
     """Set a tag-like property"""
 
     def getter(self):
-        return self.get(name)
+        return self.get_tag(name)
 
     def setter(self, value):
         self.type_registry.update({name: 'tag'})
@@ -197,35 +235,55 @@ def nestedrangeproperty(name, doc):
     return property(getter, setter, deleter, doc)
 
 
-class BuildcellParam(object):
+class TagHolder(object):
+    """Container for the tags"""
+
+    def __init__(self, *args, **kwargs):
+        """A container for tags of a single SeedAtom"""
+        self.prop_data = dict()
+        self.type_registry = dict()
+        self.disabled = False
+
+    def get_prop_dict(self):
+        return self.prop_data
+
+    def clear_all(self):
+        """Set all property to be None"""
+        self.prop_data.clear()
+
+    def get_prop(self, value):
+        """Get property"""
+        return self.prop_data.get(value)
+
+    def set_prop(self, name, value):
+        """Set property"""
+        return self.prop_data.__setitem__(name, value)
+
+    def set_tag(self, tag):
+        """Set a tag-like property"""
+        self.prop_data.__setitem__(tag, '')
+
+    def get_tag(self, tag):
+        """Set a tag-like property"""
+        value = self.prop_data.get(tag)
+        if value == '':
+            return True
+        return None
+
+    def delete_prop(self, name):
+        """Deleta a property"""
+        self.prop_data.pop(name)
+
+
+class BuildcellParam(TagHolder):
     """
     A class for storing parameters for the Buldcell program
     """
 
-    def __init__(self):
-        self.data = dict()
-        self.type_registry = dict()
-
-    def clear_all(self):
-        """Set all property to be None"""
-        self.data.clear()
-
-    def get_prop(self, value):
-        return self.data.__getitem__(value)
-
-    def set_prop(self, name, value):
-        return self.data.__setitem__(name, value)
-
-    def set_tag(self, tag):
-        self.data.__setitem__(tag, '')
-
-    def delete_prop(self, name):
-        self.data.pop(name)
-
     def to_string(self):
         """Return the string that should go into the .cell file"""
         lines = []
-        for key, value in self.data.items():
+        for key, value in self.prop_data.items():
             name = key.upper()
             type_string = self.type_registry[key]
             if value is False or value is None:
@@ -253,17 +311,64 @@ class BuildcellParam(object):
                         line = '#{}={}'.format(name, tuple2range(value[0]))
                         tokens = [line]
                         if value[1]:
-                            for k_, v_ in value[1].items():
-                                tokens.append(k_ + '=' + tuple2range(v_))
+                            for k_tmp, v_tmp in value[1].items():
+                                tokens.append(k_tmp + '=' + tuple2range(v_tmp))
                         line = ' '.join(tokens)
                 lines.append(line)
 
         return '\n'.join(lines) + '\n'
 
     fix = tagproperty('FIX', 'Fix the cell')
+    abfix = tagproperty('ABFIX', 'Fix ab axes')
+    adjgen = genericproperty('ADJGEN', 'Adjust the general positions')
+    autoslack = tagproperty('AUTOSLACK', '')
+    breakamp = genericproperty('BREAKAMP', 'Amplitude for breaking symmetry')
+    celladapt = genericproperty('CELLADAPT', '')
+    cellamp = genericproperty('CELLAMP', 'Amplitude for cell')
+    cellcon = genericproperty('CELLCON', '')
+    coord = rangeproperty('COORD', '')
+    cylinder = genericproperty(
+        'CYLINDER',
+        'Confining cylinder(positive) or attractive line potential (neagtive)')
+    flip = tagproperty('flip', 'Enable mirror reflection of fragments')
+    maxbangle = genericproperty('MAXBANGLE', '')
+    maxtime = genericproperty('MAXTIME', '')
+    minbangle = genericproperty('MINBANGLE', '')
+    focus = genericproperty('FOCUS', 'Focus on composition?')
+    molecules = genericproperty('MOLECULES', '')
+    nocompact = genericproperty('NOCOMPACT', 'No compact cell')
+    nopush = genericproperty('NOPUSH', 'No pushing')
+    octet = genericproperty('OCTET', '')
+    permfrac = genericproperty('PERMFRAC', '')
+    permute = genericproperty('PERMUTE', '')
+    rad = genericproperty('RAD', '')
+    rash = genericproperty('RASH', '')
+    rash_angamp = genericproperty('RASH_ANGAMP', '')
+    rash_posamp = genericproperty('RASH_POSAMP', '')
+    remove = genericproperty('REMOVE', '')
+    slab = genericproperty('SLAB', '')
+    species = genericproperty('SPECIES', '')
+    sphere = genericproperty('SPHERE', '')
+    spin = genericproperty('SPIN', '')
+    supercell = genericproperty('SUPERCELL', '')
+    surface = tagproperty('SURFACE', '')
+    symm = genericproperty('SYMM', '')
+    symmno = genericproperty('SYMMNO', '')
+    symmorphic = tagproperty('SYMMORPHIC', '')
+    system = genericproperty('SYSTEM', 'Crystal system')
+    targvol = rangeproperty('TARGVOL', 'Target volume')
+    three = genericproperty('THREE', 'User three body hard sphere potential')
+    tight = tagproperty('TIGHT', 'Tigh packing?')
+    vacancies = genericproperty('VACANCIES', 'Introduct vacancies')
+    vacuum = genericproperty('VACUUM', 'Add vacuum')
+    width = genericproperty('WIDTH', 'Width of a confining slab spacer')
+
     cfix = tagproperty('CFIX', 'Fix the caxis')
     cluster = tagproperty('CLUSTER', 'We are predicting CLUSTER')
-    nforms = genericproperty('NFORMS', 'Number of formula units')
+    nform = rangeproperty(
+        'NFORM', ('Number of formula units. '
+                  'This must be set otherwise the number of atoms is n times '
+                  'the number of symmetries'))
     minsep = nestedrangeproperty('MINSEP', 'Minimum separation constraints')
     posamp = nestedrangeproperty('POSAMP', 'Position amplitudes')
     symmops = rangeproperty('SYMMOPS',
@@ -282,36 +387,14 @@ class BuildcellParam(object):
         'SLACK', 'Slack the hard sphere potentials enforcing the MINSEP')
     overlap = rangeproperty(
         'OVERLAP', 'Threhold of the overlap for the hard sphere potentials')
-    #focus = genericproperty('FOCUS', 'Focus on a specific compositions')
     compact = tagproperty('COMPACT', 'Compact the cell using Niggli reduction')
     cons = genericproperty('CONS', 'Parameter for cell shape constraint')
     natom = rangeproperty(
         'NATOM', 'Number of atoms in cell, if not explicitly defined')
 
 
-class SingeAtomParam(object):
-    """Paramter for a single auto"""
-
-    def __init__(self, *args, **kwargs):
-        self.prop_data = dict()
-        self.type_registry = dict()
-        self.disabled = False
-
-    def clear_all(self):
-        """Set all property to be None"""
-        self.prop_data.clear()
-
-    def get_prop(self, value):
-        return self.prop_data.__getitem__(value)
-
-    def set_prop(self, name, value):
-        return self.prop_data.__setitem__(name, value)
-
-    def set_tag(self, tag):
-        self.prop_data.__setitem__(tag, '')
-
-    def delete_prop(self, name):
-        self.prop_data.pop(name)
+class SeedAtomTag(TagHolder):
+    """Tags for a single auto"""
 
     tagname = genericproperty('tagname', 'Name of the tag')
     posamp = rangeproperty('POSAMP', 'Position amplitude')
@@ -320,8 +403,14 @@ class SingeAtomParam(object):
     xamp = rangeproperty('XAMP', 'Amplitude in X')
     yamp = rangeproperty('YAMP', 'Amplitude in Y')
     num = rangeproperty('NUM', 'Number of atoms/fragments')
-    atatom = rangeproperty('ADATOM', 'Add atoms after making supercell')
+    adatom = tagproperty('ADATOM', 'Add atoms after making supercell')
     fix = tagproperty('FIX', 'FIX this atom')
+    nomove = tagproperty('NOMOVE', 'Do not move this atom (even in push)')
+    rad = genericproperty('RAD', 'Radius of ion')
+    occ = genericproperty('OCC', 'Occupation, can be fractional (e.g 1/3)')
+    perm = tagproperty('PERM', '')
+    athome = tagproperty('ATHOLE', '')
+    coord = rangeproperty('COORD', 'Coordination of the ion')
 
     def get_append_string(self):
         """
@@ -360,18 +449,18 @@ class SingeAtomParam(object):
         return string
 
 
-class TemplateAtom(Atom, SingeAtomParam):
+class SeedAtom(Atom, SeedAtomTag):
     """
     Element atoms in a AIRSS seed
     """
 
     def __init__(self, *args, **kwargs):
-        super(TemplateAtom, self).__init__(*args, **kwargs)
-        SingeAtomParam.__init__(self, *args, **kwargs)
+        super(SeedAtom, self).__init__(*args, **kwargs)
+        SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
-            self.prop_data = self.atoms.arrays['buildtag'][
-                self.index].prop_data
-            self.type_registry = self.atoms.arrays['buildtag'][
+            self.prop_data = self.atoms.arrays['atom_gentags'][self.
+                                                               index].prop_data
+            self.type_registry = self.atoms.arrays['atom_gentags'][
                 self.index].type_registry
 
 
@@ -382,11 +471,11 @@ def tuple2range(value):
     """
     if isinstance(value, (list, tuple)):
         return "{}-{}".format(value[0], value[1])
-    else:
-        return str(value)
+    return str(value)
 
 
-def get_seed(atoms):
+def get_cell_inp(atoms):
+    """Get the CellInput holder for a given seed"""
     cell = CellInput()
 
     # Prepare the cell out
@@ -402,12 +491,18 @@ def get_seed(atoms):
     return cell
 
 
-def get_seed_lines(atoms):
+def get_cell_inp_lines(atoms):
     """
     Write the seed to a file handle
     """
-    cell = get_seed(atoms)
+    cell = get_cell_inp(atoms)
+    # Insert tags in the cell block
+    tags = atoms.gentags.get_prop_dict()
+    for tag in tags:
+        if tag in ['FIX', 'CFIX', 'ABFIX']:
+            cell['lattice_cart'].append('#' + tag)
+
     lines = []
     lines.extend(cell.get_file_lines())
-    lines.extend(atoms.build.to_string().split('\n'))
+    lines.extend(atoms.gentags.to_string().split('\n'))
     return lines

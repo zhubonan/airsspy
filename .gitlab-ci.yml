@@ -1,16 +1,15 @@
- pytest2:
-   image: python:2
-   script:
-     - pip install --user -e .[testing]
-     - python -m pytest airss_ase/
+pytest2:
+  image: python:2
+  script:
+    - pip install --user -e .[testing]
+    - python -m pytest airsspy/
 
 
- pytest3:
-   image: python:3
-   script:
-     - pip install --user -e .[testing]
-     - python -m pytest airss_ase/
-
+pytest3:
+  image: python:3
+  script:
+    - pip install --user -e .[testing]
+    - python -m pytest airsspy/
 
 buildcell_check:
   image: python:3
@@ -20,11 +19,26 @@ buildcell_check:
     - apt-get install -y gfortran liblapack-dev libopenblas-dev curl
     # Get and compile AIRSS 0.9.1
     - curl -L -o AIRSS.tgz http://bit.ly/2KtvEWU
-    - tar zxvf AIRSS.tgz
+    - tar zxf AIRSS.tgz
     - cd airss-0.9.1 ; export FC=gfortran ; make all; make install
     - export PATH=$(pwd)/bin:$PATH
     - cd ../
     # Install the package
     - pip install --user -e .[testing]
-    - python -m pytest airss_ase/test_build.py
+    - python -m pytest airsspy/tests/test_build.py
 
+build_docker:
+  image: docker:stable
+  services:
+    - docker:dind
+  before_script:
+    - echo '0. Installing dependencies...' 
+    - apk add --no-cache pigz python3
+    - python3 -m venv venv
+    - . venv/bin/activate
+    - pip install jupyter-repo2docker
+  script:
+    - export VERSION=$(python3 -c "import repo2docker; print(repo2docker.__version__)")
+    - jupyter-repo2docker --debug --image-name "airsspy-repo2docker:test"  --user-id 1000 --user-name bz1 --no-run .
+    - docker ps
+    - docker images

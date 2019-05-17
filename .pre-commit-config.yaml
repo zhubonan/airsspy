@@ -1,0 +1,9 @@
+- repo: local
+  hooks:
+  # yapf = yet another python formatter
+  - id: yapf
+    name: yapf
+    entry: yapf
+    language: system
+    types: [python]
+    args: ["-i"]
