@@ -47,4 +47,5 @@ if __name__ == '__main__':
         maintainer='Bonan Zhu',
         maintainer_email='bon.zhu@protonmail.com',
         long_description=long_description,
+        long_description_content_type='text/markdown',
     )
