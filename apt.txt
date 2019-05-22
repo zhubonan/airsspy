@@ -3,3 +3,5 @@ liblapack-dev
 libopenblas-dev
 curl
 bc
+nano
+vim
