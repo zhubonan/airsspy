@@ -16,4 +16,4 @@ cp bin/* ~/.local/bin/
 ${KERNEL_PYTHON_PREFIX}/bin/pip install --no-cache-dir spglib ipypb
 
 # Make a symbolic link to AIRSS's own examples to the top level
-ln -s ./examples ../airss-examples
+ln -s ~/airss-0.9.1/examples ~/airss-examples
