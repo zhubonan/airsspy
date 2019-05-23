@@ -20,8 +20,9 @@
 ###########################################################################
 
 from setuptools import setup, find_packages
+from airsspy import __version__
+version = __version__
 
-version = '0.1.0'
 if __name__ == '__main__':
     import os
     install_folder = os.path.split(__file__)[0]
@@ -45,6 +46,7 @@ if __name__ == '__main__':
             ]
         },
         maintainer='Bonan Zhu',
-        maintainer_email='zhubonan@outlook.com',
+        maintainer_email='bon.zhu@protonmail.com',
         long_description=long_description,
+        long_description_content_type='text/markdown',
     )
