@@ -20,8 +20,7 @@
 ###########################################################################
 
 from setuptools import setup, find_packages
-from airsspy import __version__
-version = __version__
+version = '0.1.1'
 
 if __name__ == '__main__':
     import os

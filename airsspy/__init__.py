@@ -24,4 +24,4 @@ Import common used stuff to the model namespace
 from .seed import SeedAtoms
 from .build import Buildcell
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
