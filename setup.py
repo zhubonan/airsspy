@@ -20,8 +20,9 @@
 ###########################################################################
 
 from setuptools import setup, find_packages
+from airsspy import __version__
+version = __version__
 
-version = '0.1.0'
 if __name__ == '__main__':
     import os
     install_folder = os.path.split(__file__)[0]
