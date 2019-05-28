@@ -1,12 +1,19 @@
+image: python:3
+
 stages:
   - test
   - deploy
+
+before_script:
+  - export PATH=$HOME/.local/bin:$PATH
+  - pip install --user twine
+  - pip install --user -e .[testing]
+  - python setup.py sdist
 
 pytest2:
   stage: test
   image: python:2
   script:
-    - pip install --user -e .[testing]
     - python -m pytest airsspy/
 
 
@@ -14,12 +21,11 @@ pytest3:
   stage: test
   image: python:3
   script:
-    - pip install --user -e .[testing]
     - python -m pytest airsspy/
 
 buildcell_check:
+  # Test building with buildcell and run tests
   stage: test
-  image: python:3
   script:
     # Install gfortran
     - apt-get update
@@ -37,6 +43,7 @@ buildcell_check:
     - master
 
 build_docker:
+  # Test building docker image using repo2docker
   stage: test
   image: docker:stable
   services:
@@ -54,3 +61,25 @@ build_docker:
     - docker images
   only:
     - master
+
+stage_production:
+  stage: deploy
+  variables:
+    TWINE_USERNAME: $STAGE_USERNAME
+    TWINE_PASSWORD: $STAGE_PASSWORD
+  script:
+    - twine check dist/*
+    - twine upload --repository-url $PACKAGR_REPOSITORY_URL dist/*
+  except:
+    - tags
+
+deploy_production:
+  stage: deploy
+  variables:
+    TWINE_USERNAME: $PRODUCTION_USERNAME
+    TWINE_PASSWORD: $PRODUCTION_PASSWORD
+  script:
+    - twine check dist/*
+    - twine upload dist/*
+  only:
+    - tags
