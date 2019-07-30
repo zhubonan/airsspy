@@ -2,8 +2,18 @@ airsspy
 ---------
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gl/bz1%2Fairsspy/master)
 
-Package to help working with the Ab initio Random Structure Searching ([AIRSS](https://www.mtg.msm.cam.ac.uk/Codes/AIRSS))
+A package to help working with the Ab initio Random Structure Searching ([AIRSS](https://www.mtg.msm.cam.ac.uk/Codes/AIRSS))
 using Atomic simulation environment ([ase](https://wiki.fysik.dtu.dk/ase/)).
+Supports building a search seed for AIRSS in a interactive python environments.
+One of the important steps for performing a successful search with AIRSS is to have sensible seed for generating 
+random structures, which are subsequently relaxed using the method of choice.
+In general, AIRSS only relies on a few simple parameters to generate random structure, such as numbers of atoms,
+numbers of species and cell volume.
+However, for complicated search involving surfaces and/or interfaces, hand-building seed files becomes a
+tedious or impossible job to do.
+ASE has a suite of tools for manipulate atomic structure which can be very helpful for building structures,
+and here, for building search seeds.
+
 AIRSS is a open source code licensed under GPLv2, 
 this package does not contain any source code of AIRSS nor links to it.
 
