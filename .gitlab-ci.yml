@@ -1,4 +1,4 @@
-image: python:3.y
+image: python:3.6
 
 stages:
   - test
@@ -9,13 +9,6 @@ before_script:
   - pip install --user twine
   - pip install --user -e .[testing]
   - python setup.py sdist
-
-pytest2:
-  stage: test
-  image: python:2.7
-  script:
-    - python -m pytest airsspy/
-
 
 pytest3:
   stage: test
