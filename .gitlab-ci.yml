@@ -1,4 +1,4 @@
-image: python:3
+image: python:3.y
 
 stages:
   - test
@@ -12,14 +12,14 @@ before_script:
 
 pytest2:
   stage: test
-  image: python:2
+  image: python:2.7
   script:
     - python -m pytest airsspy/
 
 
 pytest3:
   stage: test
-  image: python:3
+  image: python:3.6
   script:
     - python -m pytest airsspy/
 
