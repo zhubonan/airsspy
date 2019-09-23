@@ -425,6 +425,8 @@ class SeedAtomTag(TagHolder):
     perm = tagproperty('PERM', '')
     athome = tagproperty('ATHOLE', '')
     coord = rangeproperty('COORD', 'Coordination of the ion')
+    angamp = rangeproperty('ANGAMP',
+                           'Angular randomisation magnitude (for fragments)')
 
     def to_string(self):
         """
