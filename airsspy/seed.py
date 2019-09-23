@@ -38,12 +38,14 @@ class SeedAtoms(Atoms):
         Same arguments signature as ase.Atoms object
 
         Special attribute:
-          build : BuildcellParam instance for storing parameter of buildcell
+          gentags : BuildcellParam instance for storing parameter of buildcell
 
-        An array of SeedAtomTag objects are added automatically.
-        Each one can be retrieved/replaced with
-          set_buildcell_tag
-          get_buildcell_tag
+        You can set the global buildcell tags by setting attributes of the gentags
+        instance.
+
+        Per-atom generation tags are saved in an array called 'atom_gentags'.
+        They can be retrieved using ``get_atom_tag`` or set with ``set_atom_tag``.
+        The ``atom_tags`` attribute also provide a convient way of accessing.
         """
         super(SeedAtoms, self).__init__(*args, **kwargs)
         self.gentags = BuildcellParam()
@@ -274,6 +276,18 @@ class TagHolder(object):
         """Deleta a property"""
         self.prop_data.pop(name)
 
+    def to_string(self):
+        raise NotImplementedError
+
+    def __repr__(self):
+        string = self.to_string()
+        string = string.replace('\n', ' ')
+        string = string.replace('#', '')
+        string = string.strip()
+        if len(string) > 60:
+            string = string[:60] + '...'
+        return "{}<{}>".format(type(self).__name__, string)
+
 
 class BuildcellParam(TagHolder):
     """
@@ -412,7 +426,7 @@ class SeedAtomTag(TagHolder):
     athome = tagproperty('ATHOLE', '')
     coord = rangeproperty('COORD', 'Coordination of the ion')
 
-    def get_append_string(self):
+    def to_string(self):
         """
         Return the per entry string for this atom to be appended after its
         line in POSITIONS_FRAC / POSITIONS_ABS block
@@ -458,8 +472,8 @@ class SeedAtom(Atom, SeedAtomTag):
         super(SeedAtom, self).__init__(*args, **kwargs)
         SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
-            self.prop_data = self.atoms.arrays['atom_gentags'][self.
-                                                               index].prop_data
+            self.prop_data = self.atoms.arrays['atom_gentags'][
+                self.index].prop_data
             self.type_registry = self.atoms.arrays['atom_gentags'][
                 self.index].type_registry
 
@@ -485,7 +499,7 @@ def get_cell_inp(atoms):
     if atoms.positions.size > 0:
         species = atoms.get_chemical_symbols()
         pos_line_tags = list(atoms.atom_tags)
-        tags_lines = [tag.get_append_string() for tag in pos_line_tags]
+        tags_lines = [tag.to_string() for tag in pos_line_tags]
         cell.set_positions(species, atoms.get_positions(), tags_lines)
 
     return cell

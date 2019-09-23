@@ -62,7 +62,7 @@ def test_atom_param():
     param.num = 3
     param.posamp = (1, 2)
     param.tagname = 'O1'
-    string = param.get_append_string()
+    string = param.to_string()
     assert string.startswith('# O1 %')
     assert 'POSAMP=1-2' in string
     assert 'NUM=3' in string
@@ -72,7 +72,7 @@ def test_template_atom():
     ta = SeedAtom(symbol='C')
     ta.xamp = 0
     ta.tagname = 'C1'
-    assert ta.get_append_string() == '# C1 % XAMP=0'
+    assert ta.to_string() == '# C1 % XAMP=0'
 
 
 def test_template_atom_from_tmp():
@@ -80,9 +80,8 @@ def test_template_atom_from_tmp():
     bc = SeedAtoms(symbols='C2')
     c1 = bc[0]
     c1.posamp = 1
-    assert c1.get_append_string() == '# C0 % POSAMP=1'
-    assert bc.arrays['atom_gentags'][0].get_append_string(
-    ) == '# C0 % POSAMP=1'
+    assert c1.to_string() == '# C0 % POSAMP=1'
+    assert bc.arrays['atom_gentags'][0].to_string() == '# C0 % POSAMP=1'
 
     cell = bc.get_cell_inp()
     assert 'positions_abs' in cell
