@@ -32,7 +32,6 @@ from .build import BuildcellError
 class SeedAtoms(Atoms):
     """Subclass of ase.atoms.Atoms object. Template for generating random cells
     """
-
     def __init__(self, *args, **kwargs):
         """Initialise an SeedAtoms for buildcell.
         Same arguments signature as ase.Atoms object
@@ -168,7 +167,6 @@ class SeedAtoms(Atoms):
 
 def tagproperty(name, doc):
     """Set a tag-like property"""
-
     def getter(self):
         return self.get_tag(name)
 
@@ -187,7 +185,6 @@ def tagproperty(name, doc):
 
 def genericproperty(name, doc):
     """Set a range-like property"""
-
     def getter(self):
         return self.get_prop(name)
 
@@ -239,7 +236,6 @@ def nestedrangeproperty(name, doc):
 
 class TagHolder(object):
     """Container for the tags"""
-
     def __init__(self, *args, **kwargs):
         """A container for tags of a single SeedAtom"""
         self.prop_data = dict()
@@ -293,7 +289,6 @@ class BuildcellParam(TagHolder):
     """
     A class for storing parameters for the Buldcell program
     """
-
     def to_string(self):
         """Return the string that should go into the .cell file"""
         lines = []
@@ -308,7 +303,7 @@ class BuildcellParam(TagHolder):
                 lines.append("#{}".format(name))
             # Allow direct passing of string
             elif type_string == 'generic':
-                lines.append("#{}={}".format(name, value))
+                lines.append("#{} {}".format(name, value))
                 continue
             elif type_string in ('range', 'nested_range'):
                 # Check if there is a dictionary to unpack
@@ -469,7 +464,6 @@ class SeedAtom(Atom, SeedAtomTag):
     """
     Element atoms in a AIRSS seed
     """
-
     def __init__(self, *args, **kwargs):
         super(SeedAtom, self).__init__(*args, **kwargs)
         SeedAtomTag.__init__(self, *args, **kwargs)

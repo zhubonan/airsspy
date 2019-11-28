@@ -63,7 +63,7 @@ if __name__ == '__main__':
             'testing': ['pytest'],
             "pre-commit": [
                 "pre-commit==1.11.0",
-                "yapf==0.24.0",
+                "yapf==0.28.0",
             ]
         },
         maintainer='Bonan Zhu',
