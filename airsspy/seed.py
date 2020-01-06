@@ -172,7 +172,7 @@ class SeedAtoms(Atoms):
 
 
 def tagproperty(name, doc):
-    """Set a tag-like property"""
+    """Set a tag-like property, such as: #FIX"""
 
     def getter(self):
         return self.get_tag(name)
@@ -191,7 +191,7 @@ def tagproperty(name, doc):
 
 
 def genericproperty(name, doc, equal_sign=True):
-    """Set a range-like property"""
+    """A generic property with or without the equal sign, such as #SLACK=0.2"""
 
     def getter(self):
         return self.get_prop(name)
@@ -212,6 +212,8 @@ def genericproperty(name, doc, equal_sign=True):
 
 
 def rangeproperty(name, doc):
+    """A range-like property. Example: #SYMMOPS=1-2"""
+
     def getter(self):
         return self.get_prop(name)
 
@@ -327,6 +329,7 @@ class BuildcellParam(TagHolder):
                 # Check if there is a dictionary to unpack
                 # The value can be
                 if not isinstance(value, (list, tuple)):
+                    # A single value is passed just like the generic case
                     line = '#{}={}'.format(name, value)
                 else:
                     # The value is a list/tuple
@@ -347,8 +350,8 @@ class BuildcellParam(TagHolder):
 
     fix = tagproperty('FIX', 'Fix the cell')
     abfix = tagproperty('ABFIX', 'Fix ab axes')
-    adjgen = genericproperty('ADJGEN', 'Adjust the general positions')
-    autoslack = tagproperty('AUTOSLACK', '')
+    adjgen = rangeproperty('ADJGEN', 'Adjust the general positions')
+    autoslack = genericproperty('AUTOSLACK', '')
     breakamp = genericproperty('BREAKAMP', 'Amplitude for breaking symmetry')
     celladapt = genericproperty('CELLADAPT',
                                 'Vary cell shape during optimisation', False)
@@ -379,7 +382,7 @@ class BuildcellParam(TagHolder):
     slab = tagproperty('SLAB', '')
     species = genericproperty('SPECIES', '')
     sphere = genericproperty('SPHERE', '')
-    spin = genericproperty('SPIN', '')
+    spin = genericproperty('SPIN', 'Spin specifications')
     supercell = genericproperty('SUPERCELL', '')
     surface = tagproperty('SURFACE', '')
     symm = genericproperty('SYMM', 'Name of the symmetry')
@@ -413,9 +416,9 @@ class BuildcellParam(TagHolder):
     species = nestedrangeproperty('SPECIES', 'Species to be put into the cell')
     varvol = genericproperty(
         'VARVOL', 'Target volume of cell with the original configuration')
-    slack = rangeproperty(
+    slack = genericproperty(
         'SLACK', 'Slack the hard sphere potentials enforcing the MINSEP')
-    overlap = rangeproperty(
+    overlap = genericproperty(
         'OVERLAP', 'Threhold of the overlap for the hard sphere potentials')
     compact = tagproperty('COMPACT', 'Compact the cell using Niggli reduction')
     cons = genericproperty('CONS', 'Parameter for cell shape constraint')
