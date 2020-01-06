@@ -32,6 +32,7 @@ from .build import BuildcellError
 class SeedAtoms(Atoms):
     """Subclass of ase.atoms.Atoms object. Template for generating random cells
     """
+
     def __init__(self, *args, **kwargs):
         """Initialise an SeedAtoms for buildcell.
         Same arguments signature as ase.Atoms object
@@ -47,7 +48,7 @@ class SeedAtoms(Atoms):
         The ``atom_tags`` attribute also provide a convient way of accessing.
         """
         super(SeedAtoms, self).__init__(*args, **kwargs)
-        self.gentags = BuildcellParam()
+        self._gentags = BuildcellParam()
         # Construct tags for each Atom
         tags = []
         symbols = self.get_chemical_symbols()
@@ -58,6 +59,11 @@ class SeedAtoms(Atoms):
             tags.append(tag)
 
         self.new_array('atom_gentags', tags, dtype=object, shape=None)
+
+    @property
+    def gentags(self):
+        """A collection of the tags used globally"""
+        return self._gentags
 
     def set_atom_tag(self, tag, index):
         """Set buildcell tags for individual atom
@@ -167,6 +173,7 @@ class SeedAtoms(Atoms):
 
 def tagproperty(name, doc):
     """Set a tag-like property"""
+
     def getter(self):
         return self.get_tag(name)
 
@@ -183,13 +190,19 @@ def tagproperty(name, doc):
     return property(getter, setter, deleter, doc)
 
 
-def genericproperty(name, doc):
+def genericproperty(name, doc, equal_sign=True):
     """Set a range-like property"""
+
     def getter(self):
         return self.get_prop(name)
 
     def setter(self, value):
-        self.type_registry.update({name: 'generic'})
+        # Two types are separated with wether the equal sign is needed
+        if equal_sign is True:
+            self.type_registry.update({name: 'generic_with_equal'})
+        else:
+            self.type_registry.update({name: 'generic'})
+
         self.set_prop(name, value)
 
     def deleter(self):
@@ -236,6 +249,7 @@ def nestedrangeproperty(name, doc):
 
 class TagHolder(object):
     """Container for the tags"""
+
     def __init__(self, *args, **kwargs):
         """A container for tags of a single SeedAtom"""
         self.prop_data = dict()
@@ -289,6 +303,7 @@ class BuildcellParam(TagHolder):
     """
     A class for storing parameters for the Buldcell program
     """
+
     def to_string(self):
         """Return the string that should go into the .cell file"""
         lines = []
@@ -304,6 +319,9 @@ class BuildcellParam(TagHolder):
             # Allow direct passing of string
             elif type_string == 'generic':
                 lines.append("#{} {}".format(name, value))
+                continue
+            elif type_string == 'generic_with_equal':
+                lines.append("#{}={}".format(name, value))
                 continue
             elif type_string in ('range', 'nested_range'):
                 # Check if there is a dictionary to unpack
@@ -332,9 +350,10 @@ class BuildcellParam(TagHolder):
     adjgen = genericproperty('ADJGEN', 'Adjust the general positions')
     autoslack = tagproperty('AUTOSLACK', '')
     breakamp = genericproperty('BREAKAMP', 'Amplitude for breaking symmetry')
-    celladapt = genericproperty('CELLADAPT', '')
+    celladapt = genericproperty('CELLADAPT',
+                                'Vary cell shape during optimisation', False)
     cellamp = genericproperty('CELLAMP', 'Amplitude for cell')
-    cellcon = genericproperty('CELLCON', '')
+    cellcon = genericproperty('CELLCON', 'Cell constraints, pass a vector')
     coord = rangeproperty('COORD', '')
     cylinder = genericproperty(
         'CYLINDER',
@@ -344,31 +363,33 @@ class BuildcellParam(TagHolder):
     maxtime = genericproperty('MAXTIME', '')
     minbangle = genericproperty('MINBANGLE', '')
     focus = genericproperty('FOCUS', 'Focus on composition?')
-    molecules = genericproperty('MOLECULES', '')
-    nocompact = genericproperty('NOCOMPACT', 'No compact cell')
-    nopush = genericproperty('NOPUSH', 'No pushing')
-    octet = genericproperty('OCTET', '')
+    molecules = tagproperty('MOLECULES', '')
+    nocompact = tagproperty('NOCOMPACT', 'No compact cell')
+    nopush = tagproperty('NOPUSH', 'No pushing')
+    octet = tagproperty('OCTET', '')
     permfrac = genericproperty('PERMFRAC', '')
-    permute = genericproperty('PERMUTE', '')
+    permute = genericproperty(
+        'PERMUTE', 'Permutation, can set to a value with = or leave blank',
+        False)
     rad = genericproperty('RAD', '')
-    rash = genericproperty('RASH', '')
+    rash = tagproperty('RASH', '')
     rash_angamp = genericproperty('RASH_ANGAMP', '')
     rash_posamp = genericproperty('RASH_POSAMP', '')
-    remove = genericproperty('REMOVE', '')
-    slab = genericproperty('SLAB', '')
+    remove = tagproperty('REMOVE', '')
+    slab = tagproperty('SLAB', '')
     species = genericproperty('SPECIES', '')
     sphere = genericproperty('SPHERE', '')
     spin = genericproperty('SPIN', '')
     supercell = genericproperty('SUPERCELL', '')
     surface = tagproperty('SURFACE', '')
-    symm = genericproperty('SYMM', '')
-    symmno = genericproperty('SYMMNO', '')
+    symm = genericproperty('SYMM', 'Name of the symmetry')
+    symmno = genericproperty('SYMMNO', 'Number id of the symmetry')
     symmorphic = tagproperty('SYMMORPHIC', '')
     system = genericproperty('SYSTEM', 'Crystal system')
     targvol = rangeproperty('TARGVOL', 'Target volume')
-    three = genericproperty('THREE', 'User three body hard sphere potential')
+    # three = genericproperty('THREE', 'User three body hard sphere potential')
     tight = tagproperty('TIGHT', 'Tigh packing?')
-    vacancies = genericproperty('VACANCIES', 'Introduct vacancies')
+    vacancies = genericproperty('VACANCIES', 'Introduce vacncies in the cell')
     vacuum = genericproperty('VACUUM', 'Add vacuum')
     width = genericproperty('WIDTH', 'Width of a confining slab spacer')
 
@@ -464,12 +485,13 @@ class SeedAtom(Atom, SeedAtomTag):
     """
     Element atoms in a AIRSS seed
     """
+
     def __init__(self, *args, **kwargs):
         super(SeedAtom, self).__init__(*args, **kwargs)
         SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
-            self.prop_data = self.atoms.arrays['atom_gentags'][
-                self.index].prop_data
+            self.prop_data = self.atoms.arrays['atom_gentags'][self.
+                                                               index].prop_data
             self.type_registry = self.atoms.arrays['atom_gentags'][
                 self.index].type_registry
 
