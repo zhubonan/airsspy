@@ -27,7 +27,7 @@ Usage
 -----
 Assuming you are familiar with `ase`, python and has some basic knowledge of AIRSS.
 To prepare a seed for generating a *sensible* random structure:
-```
+```python
 from airsspy import SeedAtoms
 seed = SeedAtoms('C6')
 seed.buiid.varvol = 20
@@ -41,7 +41,7 @@ for i in range(0, 6, 2):
 ```
 
 To write the seed file onto the disk:
-```
+```python
 atoms.write_seed('C6.cell')
 # With IPython
 # Use the buildcell executable to generate the file
@@ -51,14 +51,14 @@ atoms.write_seed('C6.cell')
 To generate a cell we can create a `Buildcell` instance,
 which is helping wrapper to the `buildcell` program of AIRSS:
 
-```
+```python
 from airsspy import Buildcell
 buidcell = Buildcell(seed)
 random_atoms = builcell.generate()
 ```
 
 A shortcut is also available as an method of the `SeedAtoms`:
-```
+```python
 random_atoms = seed.build_random_atoms()
 ```
 
