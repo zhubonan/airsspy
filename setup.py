@@ -52,11 +52,11 @@ if __name__ == '__main__':
     setup(
         name='airsspy',
         version=version,
-        url='https://www.gitlab.com/bz1/airsspy',
+        url='https://github.com/zhubonan/airsspy',
         packages=find_packages(),
         install_requires=[
             'ase~=3.17',
-            'castepinput == 0.1.4',
+            'castepinput~=0.1',
         ],
         description='A wrapper for using AIRSS with python and ase.',
         extras_require={
