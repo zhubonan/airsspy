@@ -55,7 +55,7 @@ if __name__ == '__main__':
         url='https://www.gitlab.com/bz1/airsspy',
         packages=find_packages(),
         install_requires=[
-            'ase<=3.17',
+            'ase~=3.17',
             'castepinput == 0.1.4',
         ],
         description='A wrapper for using AIRSS with python and ase.',
