@@ -20,30 +20,11 @@
 ###########################################################################
 
 from setuptools import setup, find_packages
-version = '0.1.2'
+version = '0.1.3'
 
 if __name__ == '__main__':
     from os import path
     import os
-
-    # Check if in a CI environment
-    is_tagged = False
-    if os.environ.get('CI_COMMIT_TAG'):
-        ci_version = os.environ['CI_COMMIT_TAG']
-        is_tagged = True
-    elif os.environ.get('CI_JOB_ID'):
-        ci_version = os.environ['CI_JOB_ID']
-    else:
-        # Note in CI
-        ci_version = None
-
-    # If in a CI environment, set the version accordingly
-    if ci_version:
-        # If this a release, check the consistency
-        if is_tagged:
-            assert ci_version == version, 'Inonsistency between versions'
-        else:
-            version = ci_version
 
     README_PATH = path.join(path.dirname(__file__), "README.md")
     with open(README_PATH) as fh:
