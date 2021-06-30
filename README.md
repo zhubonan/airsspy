@@ -1,5 +1,6 @@
 airsspy
 ---------
+
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/zhubonan/airsspy/HEAD)
 
 A package to help working with the Ab initio Random Structure Searching ([AIRSS](https://www.mtg.msm.cam.ac.uk/Codes/AIRSS))
@@ -25,11 +26,13 @@ What this does
 
 Try interactively
 -----------------
+
 Interactive jupyter notebook examples can be found in the `examples` folder.
 Click the *binder* badge above to launch these examples in a pre-built environment and try it in your browser!
 
 Dependences
 -----------
+
 * [ase](https://wiki.fysik.dtu.dk/ase/): The atomic simulation environment
 * [castepinput](https://gitlab.com/bz1/castepinput): A light weight writer/reader for the input files of [CASTEP](www.caste.org).
 
@@ -92,6 +95,7 @@ random_atoms = seed.build_random_atoms()
 
 Limitations
 -----------
+
 Due to the lack of `timeout` argument of `Popen.communicate` in python 2.7,
 communication with the `buildcell` is not available. Hence, direct generation and 
 retrieval of the random structure are not supported in python. However, it is 
