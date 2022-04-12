@@ -1,0 +1,13 @@
+name: Binder
+on:
+  schedule:
+    - cron: "0 11 * * 1"   # Every monday at 11 am UTC
+
+jobs:
+  repo2docker-build-test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: cache binder build on mybinder.org
+      uses: jupyterhub/repo2docker-action@master
+      with:
+        NO_PUSH: true
