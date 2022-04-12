@@ -1,10 +1,20 @@
 #!/bin/bash
 set -e
 
-curl -L -o AIRSS.tgz https://www.mtg.msm.cam.ac.uk/system/files/documents/airss-0.9.1.tgz
+WD=$(pwd)
+AIRSS_URL='https://www.mtg.msm.cam.ac.uk/system/files/documents/airss-0.9.1.tgz'
+curl -L -o AIRSS.tgz $AIRSS_URL
 tar zxf AIRSS.tgz
-cd airss-0.9.1
+rm AIRSS.tgz
+mv airss-* airss
+cd airss
 export FC=gfortran
+# Path cryan so that -xg saves to PNG
+patch src/cryan/src/cryan.f90 ../cryan_patch
+# Apppy spglib makefile patch and symmol
+cp ../spglib_makefile external/spglib/makefile
+cp ../symmol.zip external/symmol/
+
 make all
 make install
 
@@ -12,8 +22,37 @@ make install
 mkdir -p ~/.local/bin
 cp bin/* ~/.local/bin/
 
-# Install additional dependencies
+# Make a symbolic link to AIRSS's examples
+ln -s ~/airss/examples ~/airss-examples
+
+# Append welcome message to bashrc
+
+cat >> $HOME/.bashrc <<"EOM"
+# Let the user start in the examples folder
+cd examples
+# Print AIRSS banner
+head -n 10 $HOME/airss/README
+# Customize the prompt
+PS1="${debian_chroot:+($debian_chroot)}airss@airss-demo:\w\$ "
+echo ""
+
+# Print a list of examples
+echo -e "List of AIRSS examples that can be run now:\n"
+head -n 14 $HOME/examples/README
+echo -e 'See README file at this directoy for a full list of examples\n'
+echo -e 'To read the overall README, use: less ~/airss/README\n'
+echo -e 'To get started, please read about the first example with: less 1.1/README\n'
+echo -e 'Hint: Click the Jupyter Logo at the top left to browse the files\n'
+EOM
+
+# Append additional informations
+hint='Hint: Pass a -xg flag to cryan/ca to save the plot as PDF. You can click the Jupyter button to use the file explorer and view it.'
+
+echo ${hint} >> examples/1.9/README
+echo ${hint} >> examples/1.10/README
+
+
+# Install the package dependencies
 ${KERNEL_PYTHON_PREFIX}/bin/pip install --no-cache-dir spglib ipypb pandas
 
-# Make a symbolic link to AIRSS's own examples to the top level
-ln -s ~/airss-0.9.1/examples ~/airss-examples
+

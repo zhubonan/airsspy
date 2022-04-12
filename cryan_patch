@@ -1,0 +1,72 @@
+--- airss-0.9.1-origin/airss-0.9.1/src/cryan/src/cryan.f90	2018-07-06 19:26:36.000000000 +0100
++++ airss-0.9.1/src/cryan/src/cryan.f90	2019-08-16 15:13:37.089469500 +0100
+@@ -108,6 +108,7 @@
+   logical :: cluster=.false.
+   logical :: have_c=.false.
+   logical :: xmgrace=.false.
++  logical :: gracefile=.false.
+   logical :: have_spin=.false.
+   logical :: have_dos=.false.
+   logical :: long=.false.
+@@ -2606,6 +2607,21 @@
+           end if
+        endif
+ 
++       if (gracefile) then
++          ctemp="gracebat hull.agr -hdevice PostScript -hardcopy -printfile hull.ps && ps2pdf14 -dOptimize hull.ps"
++          stat=0
++          call system(ctemp)
++          ctemp='Problem executing external command :: '//trim(ctemp)
++          if (stat.ne.0) then
++             write (stderr,'(a)') trim(ctemp)
++             stop
++          end if
++          ctemp='Figure saved in hull.pdf'
++          write (stderr,'(a)') trim(ctemp)
++       endif
++
++
++
+     else if(num_points.eq.3) then
+ 
+        call write_ternary()
+@@ -2621,6 +2637,20 @@
+           end if
+        endif
+ 
++       if (gracefile) then
++          ctemp="gracebat ternary.agr -hdevice PostScript -hardcopy -printfile ternary.ps && ps2pdf14 -dOptimize ternary.ps"
++          stat=0
++          call system(ctemp)
++          ctemp='Problem executing external command :: '//trim(ctemp)
++          if (stat.ne.0) then
++             write (stderr,'(a)') trim(ctemp)
++             stop
++          end if
++          ctemp='Figure saved in ternary.pdf'
++          write (stderr,'(a)') trim(ctemp)
++       endif
++
++
+        call write_ternary_R()
+ 
+     else if(num_points.eq.4) then
+@@ -3775,7 +3805,9 @@
+           num_tasks=num_tasks+1
+           task(num_tasks)='phull'
+        case('-xg','--xmgrace')
+-          xmgrace=.true.
++          gracefile=.true.
++       case('-xgf','--xmgrace-fileout')
++          gracefile=.true.
+        case('-1')
+           na=na+1
+           read(argbuff(na),*,err=106) comp_1
+@@ -3928,6 +3960,7 @@
+        print '(a)', ' -ph, --pressure_hull                 Extract the stable structures with pressure' 
+        print '(a)', ' -<n>                                 Component <n>' 
+        print '(a)', ' -xg, --xmgrace                       Plot output with xmgrace' 
++       print '(a)', ' -xgf, --xmgrace-fileout              Save output plot in PNG format' 
+        print '(a)', ' -c,  --compare <thresh > <structure> Compare structure to all others' 
+        print '(a)', '      --delete                        Delete unwanted structures' 
+        print '(a)', ' -g,  --geometry [thresh]             Calculate the atomic geometry for the structures (default 0.1)' 
