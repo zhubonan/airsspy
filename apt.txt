@@ -5,3 +5,6 @@ curl
 bc
 nano
 vim
+qhull-bin
+grace
+ghostscript
