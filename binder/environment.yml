@@ -4,5 +4,7 @@ channels:
 dependencies:
   - airss
   - ase
+  - pandas
   - pip:
       - castepinput
+      - airsspy
