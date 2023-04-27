@@ -66,7 +66,6 @@ class Buildcell:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
             raise BuildcellError
-            return None
         else:
             bc_proc.kill()
 

@@ -1,0 +1,34 @@
+name: Python package
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+        auto-update-conda: true
+        python-version: ${{ matrix.python-version }}
+
+      - name: Install airss
+        shell: bash -el {0}
+        run: conda install -c conda-forge airss
+
+      - name: Install dependencies
+        shell: bash -el {0}
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[testing]"
+
+      - name: Test with pytest
+        shell: bash -el {0}
+        run: |
+          pytest
