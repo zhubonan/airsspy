@@ -25,8 +25,7 @@ from ..restools import extract_res, save_airss_res
 from tempfile import mkstemp
 
 
-res_example = \
-"""
+res_example = """
 TITL Al-574-3531-1 -0.05 60.5091828526 -53.2326560919 0 0 8 (Fm-3m) n - 1
 REM
 REM Run started: at Thu May 16 21:47:56 BST 2019 in /home/bonan/appdir/airss-git/examples/1.1
@@ -51,28 +50,28 @@ END
 def test_extract_res(tmpfile):
     """Test extract infomation from res file"""
     tmpfile = mkstemp()[1]
-    with open(tmpfile, 'w') as fh:
+    with open(tmpfile, "w") as fh:
         fh.write(res_example)
     data = extract_res(tmpfile)
-    assert 'rem' in data
-    assert data['uid'] == 'Al-574-3531-1'
-    assert data['P'] == -0.05
-    assert data['V'] == 60.5091828526
-    assert data['H'] == -53.2326560919
-    assert data['nat'] == 8
-    assert data['sym'] == '(Fm-3m)'
+    assert "rem" in data
+    assert data["uid"] == "Al-574-3531-1"
+    assert data["P"] == -0.05
+    assert data["V"] == 60.5091828526
+    assert data["H"] == -53.2326560919
+    assert data["nat"] == 8
+    assert data["sym"] == "(Fm-3m)"
 
 
 def test_save_airss_res(al_atoms, tmpfile):
     """Test saving AIRSS style SHELX file and extract out"""
 
     infodict = {
-        'uid': 'bla',
-        'P': 1.2,
-        'V': 20.,
-        'H': 1010.,
-        'nat': 10,
-        'sym': '(Pm-3m)'
+        "uid": "bla",
+        "P": 1.2,
+        "V": 20.0,
+        "H": 1010.0,
+        "nat": 10,
+        "sym": "(Pm-3m)",
     }
 
     save_airss_res(al_atoms, infodict, fname=tmpfile, force_write=True)

@@ -51,17 +51,17 @@ class Buildcell:
         timeout: time to wait for buildcell binary
         write_seed : Name of the output cell to be written"""
         bc_proc = sbp.Popen(
-            'buildcell',
+            "buildcell",
             universal_newlines=True,
             stdin=sbp.PIPE,
             stdout=sbp.PIPE,
-            stderr=sbp.PIPE)
+            stderr=sbp.PIPE,
+        )
         self.proc = bc_proc
-        cell = '\n'.join(self.atoms.get_cell_inp_lines())
+        cell = "\n".join(self.atoms.get_cell_inp_lines())
         self.bc_in = cell
         try:
-            self.bc_out, self.bc_err = bc_proc.communicate(
-                input=cell, timeout=timeout)
+            self.bc_out, self.bc_err = bc_proc.communicate(input=cell, timeout=timeout)
         except sbp.TimeoutExpired:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
@@ -72,11 +72,11 @@ class Buildcell:
 
         # Write the output from buildcell
         if write_cell:
-            with open(write_cell + '.cell', 'w') as output:
+            with open(write_cell + ".cell", "w") as output:
                 output.write(self.bc_out)
 
         # Process the result
-        outlines = self.bc_out.split('\n')
+        outlines = self.bc_out.split("\n")
         parser = PlainParser(outlines)
         parser.parse()
         cellout = CellInput()
@@ -96,6 +96,7 @@ class Buildcell:
     def gen_and_view(self, viewer=None, wrap=False, timeout=20):
         """Geneate one and view with viewer immediately. Wrap if needed."""
         from ase.visualize import view
+
         atoms = self.generate(timeout=timeout)
         if not atoms:
             return

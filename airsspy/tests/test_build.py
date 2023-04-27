@@ -31,7 +31,7 @@ from ..build import Buildcell
 
 @pytest.fixture
 def template_c2():
-    c2 = SeedAtoms('C2')
+    c2 = SeedAtoms("C2")
     c2.gentags.slack = 1
     c2.gentags.overlap = 1
     c2.gentags.minsep = 1.5
@@ -41,10 +41,10 @@ def template_c2():
 
 
 @pytest.mark.skipif(
-    spawn.find_executable('buildcell') is None or sys.version_info < (3, ),
-    reason='No buildcell executable in PATH or not running on Python 3')
+    spawn.find_executable("buildcell") is None or sys.version_info < (3,),
+    reason="No buildcell executable in PATH or not running on Python 3",
+)
 def test_generate(template_c2):
-
     bc = Buildcell(template_c2)
     atoms = bc.generate()
     assert atoms

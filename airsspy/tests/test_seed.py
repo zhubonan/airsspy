@@ -18,39 +18,36 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
 import pytest
-from ..seed import (SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam,
-                    tuple2range)
+from ..seed import SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam, tuple2range
 
 
 def test_bc_param():
-
     bcp = BuildcellParam()
     bcp.fix = True
     bcp.nform = 3
-    assert 'NFORM' in bcp.to_string()
-    bcp.minsep = [2, {'Ce-O': (2, 3)}]
-    assert 'Ce-O=2-3' in bcp.to_string()
+    assert "NFORM" in bcp.to_string()
+    bcp.minsep = [2, {"Ce-O": (2, 3)}]
+    assert "Ce-O=2-3" in bcp.to_string()
 
 
 def test_nested_range():
-
     bcp = BuildcellParam()
 
     # Test different possible configurations
     bcp.minsep = 2
-    assert 'MINSEP=2' in bcp.to_string()
+    assert "MINSEP=2" in bcp.to_string()
 
     bcp.minsep = (2, 3)
-    assert 'MINSEP=2-3' in bcp.to_string()
+    assert "MINSEP=2-3" in bcp.to_string()
 
-    bcp.minsep = (2, {'Ce-O': 1})
-    assert 'MINSEP=2 Ce-O=1' in bcp.to_string()
+    bcp.minsep = (2, {"Ce-O": 1})
+    assert "MINSEP=2 Ce-O=1" in bcp.to_string()
 
-    bcp.minsep = ((2, 3), {'Ce-O': 1})
-    assert 'MINSEP=2-3 Ce-O=1' in bcp.to_string()
+    bcp.minsep = ((2, 3), {"Ce-O": 1})
+    assert "MINSEP=2-3 Ce-O=1" in bcp.to_string()
 
-    bcp.minsep = (2, {'Ce-O': (1, 2)})
-    assert 'MINSEP=2 Ce-O=1-2' in bcp.to_string()
+    bcp.minsep = (2, {"Ce-O": (1, 2)})
+    assert "MINSEP=2 Ce-O=1-2" in bcp.to_string()
 
 
 def test_atom_param():
@@ -61,38 +58,37 @@ def test_atom_param():
     param = SeedAtomTag()
     param.num = 3
     param.posamp = (1, 2)
-    param.tagname = 'O1'
+    param.tagname = "O1"
     string = param.to_string()
-    assert string.startswith('# O1 %')
-    assert 'POSAMP=1-2' in string
-    assert 'NUM=3' in string
+    assert string.startswith("# O1 %")
+    assert "POSAMP=1-2" in string
+    assert "NUM=3" in string
 
 
 def test_template_atom():
-    ta = SeedAtom(symbol='C')
+    ta = SeedAtom(symbol="C")
     ta.xamp = 0
-    ta.tagname = 'C1'
-    assert ta.to_string() == '# C1 % XAMP=0'
+    ta.tagname = "C1"
+    assert ta.to_string() == "# C1 % XAMP=0"
 
 
 def test_template_atom_from_tmp():
-
-    bc = SeedAtoms(symbols='C2')
+    bc = SeedAtoms(symbols="C2")
     c1 = bc[0]
     c1.posamp = 1
-    assert c1.to_string() == '# C0 % POSAMP=1'
-    assert bc.arrays['atom_gentags'][0].to_string() == '# C0 % POSAMP=1'
+    assert c1.to_string() == "# C0 % POSAMP=1"
+    assert bc.arrays["atom_gentags"][0].to_string() == "# C0 % POSAMP=1"
 
     cell = bc.get_cell_inp()
-    assert 'positions_abs' in cell
+    assert "positions_abs" in cell
 
 
 def test_tuple2range():
     """
     Test tuple/number to string conversion
     """
-    assert tuple2range(2) == '2'
-    assert tuple2range((2, 3)) == '2-3'
+    assert tuple2range(2) == "2"
+    assert tuple2range((2, 3)) == "2-3"
 
 
 def test_template_atom_write():
@@ -102,23 +98,23 @@ def test_template_atom_write():
     from tempfile import mkdtemp
     import os
 
-    atoms = SeedAtoms('C4')
+    atoms = SeedAtoms("C4")
     atoms.gentags.symmops = (2, 3)
     atoms.gentags.sgrank = 2
-    atoms.gentags.minsep = [2, {'C-C': (2, 3)}]
+    atoms.gentags.minsep = [2, {"C-C": (2, 3)}]
     atoms[0].posamp = 3
     atoms[0].xamp = (2, 3)
-    atoms[1].tagname = 'CX0'
-    buff = '\n'.join(atoms.get_cell_inp_lines())
+    atoms[1].tagname = "CX0"
+    buff = "\n".join(atoms.get_cell_inp_lines())
 
-    assert '#SGRANK=2' in buff
-    assert '#SYMMOPS=2-3' in buff
-    assert '#MINSEP=2 C-C=2-3' in buff
-    assert 'XAMP=2-3' in buff
-    assert '# C0' in buff
-    assert '# CX0 ' in buff
+    assert "#SGRANK=2" in buff
+    assert "#SYMMOPS=2-3" in buff
+    assert "#MINSEP=2 C-C=2-3" in buff
+    assert "XAMP=2-3" in buff
+    assert "# C0" in buff
+    assert "# CX0 " in buff
 
     # Test actually writing the files
     tmp = mkdtemp()
-    fpath = os.path.join(tmp, 'test.cell')
+    fpath = os.path.join(tmp, "test.cell")
     atoms.write_seed(fpath)

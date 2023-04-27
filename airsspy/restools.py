@@ -21,7 +21,7 @@
 Tools for hanlding res files
 """
 import os
-import ase.io
+from ase.io import write
 
 
 def extract_res(fname):
@@ -33,23 +33,23 @@ def extract_res(fname):
     rems = []
     with open(fname) as fh:
         for line in fh:
-            if 'TITL' in line:
+            if "TITL" in line:
                 title = line.strip()
-            if 'REM' in line:
+            if "REM" in line:
                 rems.append(line.replace("REM", "").strip())
             # Break when data starts
-            if 'cell' in line:
+            if "cell" in line:
                 break
     entries = title.split()
     res = {}
-    res['rem'] = rems
-    res['uid'] = entries[1]
-    res['P'] = float(entries[2])
-    res['V'] = float(entries[3])
-    res['H'] = float(entries[4])
-    res['nat'] = int(entries[7])
-    res['sym'] = entries[8]
-    res['fname'] = fname
+    res["rem"] = rems
+    res["uid"] = entries[1]
+    res["P"] = float(entries[2])
+    res["V"] = float(entries[3])
+    res["H"] = float(entries[4])
+    res["nat"] = int(entries[7])
+    res["sym"] = entries[8]
+    res["fname"] = fname
     return res
 
 
@@ -61,29 +61,39 @@ def save_airss_res(atoms, info_dict, fname=None, force_write=False):
 
     # Prepare output file
     if fname is None:
-        fname = info_dict['uid'] + '.res'
+        fname = info_dict["uid"] + ".res"
     if os.path.isfile(fname) and not force_write:
-        raise FileExistsError(
-            "Switch on force_write to overwrite existing files")
+        raise FileExistsError("Switch on force_write to overwrite existing files")
 
-    P, V, H = info_dict['P'], info_dict['V'], info_dict['H']
+    P, V, H = info_dict["P"], info_dict["V"], info_dict["H"]
     # Get number of atoms, spin
-    nat, sg = info_dict['nat'], info_dict['sym']
+    nat, sg = info_dict["nat"], info_dict["sym"]
     # Construct title line
     pvh = " {:.3f} {:.3f} {:.6f} ".format(P, V, H)
-    title = 'TITL ' + info_dict['uid'] + ' ' + pvh + ' 0 ' + ' 0 ' + ' ' + str(
-        nat) + ' ' + sg + ' n - 1\n'
-    rems = info_dict.get('rem', [])
+    title = (
+        "TITL "
+        + info_dict["uid"]
+        + " "
+        + pvh
+        + " 0 "
+        + " 0 "
+        + " "
+        + str(nat)
+        + " "
+        + sg
+        + " n - 1\n"
+    )
+    rems = info_dict.get("rem", [])
 
     # Write to the top of res file
-    restmp = info_dict['uid'] + '.rtmp'
-    ase.io.write(restmp, atoms, format="res")
+    restmp = info_dict["uid"] + ".rtmp"
+    write(restmp, atoms, format="res")
     with open(restmp) as resin:
-        with open(fname, 'w') as fout:
+        with open(fname, "w") as fout:
             # Write the title
-            fout.write(title + '\n')
+            fout.write(title + "\n")
             for line in rems:
-                fout.write('REM ' + line + '\n')
+                fout.write("REM " + line + "\n")
             # Write the data lines
             for n, line in enumerate(resin):
                 if n > 0:

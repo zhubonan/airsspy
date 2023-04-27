@@ -30,8 +30,7 @@ from .build import BuildcellError
 
 
 class SeedAtoms(Atoms):
-    """Subclass of ase.atoms.Atoms object. Template for generating random cells
-    """
+    """Subclass of ase.atoms.Atoms object. Template for generating random cells"""
 
     def __init__(self, *args, **kwargs):
         """Initialise an SeedAtoms for buildcell.
@@ -58,31 +57,31 @@ class SeedAtoms(Atoms):
             tag.tagname = symbols[i] + str(i)
             tags.append(tag)
 
-        self.new_array('atom_gentags', tags, dtype=object, shape=None)
+        self.new_array("atom_gentags", tags, dtype=object, shape=None)
 
     def set_atom_tag(self, tag, index):
         """Set buildcell tags for individual atom
         if the SeedAtomTag object has no tagname, set automatically"""
         if tag.tagname is None:
             tag.tagname = self.get_chemical_symbols()[index]
-        self.arrays['atom_gentags'][index] = tag
+        self.arrays["atom_gentags"][index] = tag
 
     def get_atom_tag(self, index):
         """
         Return the buildcell tag for the atom of the index.
         Can be used for in-place change
         """
-        return self.arrays['atom_gentags'][index]
+        return self.arrays["atom_gentags"][index]
 
     @property
     def atom_tags(self):
         """Array of tags, each for one Atom"""
-        return self.arrays['atom_gentags']
+        return self.arrays["atom_gentags"]
 
     def write_seed(self, fpath):
         """Write the seed to file"""
-        with open(fpath, 'w') as fhandle:
-            fhandle.write('\n'.join(self.get_cell_inp_lines()))
+        with open(fpath, "w") as fhandle:
+            fhandle.write("\n".join(self.get_cell_inp_lines()))
 
     def get_cell_inp(self):
         """Return the python object represent the cell"""
@@ -94,14 +93,12 @@ class SeedAtoms(Atoms):
         """
         return get_cell_inp_lines(self)
 
-    def build_random_atoms(self,
-                           timeout=10,
-                           also_buildcell=False,
-                           fail_ok=True):
+    def build_random_atoms(self, timeout=10, also_buildcell=False, fail_ok=True):
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
         from .build import Buildcell
+
         buildcell = Buildcell(self)
         try:
             rand_atoms = buildcell.generate(timeout)
@@ -130,7 +127,7 @@ class SeedAtoms(Atoms):
         if isinstance(i, numbers.Integral):
             natoms = len(self)
             if i < -natoms or i >= natoms:
-                raise IndexError('Index out of range.')
+                raise IndexError("Index out of range.")
 
             return SeedAtom(atoms=self, index=i)
         elif isinstance(i, list) and i:
@@ -155,7 +152,8 @@ class SeedAtoms(Atoms):
             pbc=self._pbc,
             info=self.info,
             # should be communicated to the slice as well
-            celldisp=self._celldisp)
+            celldisp=self._celldisp,
+        )
         # TODO: Do we need to shuffle indices in adsorbate_info too?
 
         atoms.arrays = {}
@@ -173,7 +171,7 @@ def tagproperty(name, doc):
         return self.get_tag(name)
 
     def setter(self, value):
-        self.type_registry.update({name: 'tag'})
+        self.type_registry.update({name: "tag"})
         if value is True:
             self.set_tag(name)
         elif value is False:
@@ -192,7 +190,7 @@ def genericproperty(name, doc):
         return self.get_prop(name)
 
     def setter(self, value):
-        self.type_registry.update({name: 'generic'})
+        self.type_registry.update({name: "generic"})
         self.set_prop(name, value)
 
     def deleter(self):
@@ -211,7 +209,7 @@ def rangeproperty(name, doc):
                 raise ValueError("A tuple/list of two element must be used.")
             if any([not isinstance(x, numbers.Number) for x in value]):
                 raise ValueError("Both elements need to be a number")
-        self.type_registry.update({name: 'range'})
+        self.type_registry.update({name: "range"})
         self.set_prop(name, value)
 
     def deleter(self):
@@ -228,7 +226,7 @@ def nestedrangeproperty(name, doc):
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise RuntimeError("A tuple/list of two element must be used.")
-        self.type_registry.update({name: 'nested_range'})
+        self.type_registry.update({name: "nested_range"})
         self.set_prop(name, value)
 
     def deleter(self):
@@ -263,12 +261,12 @@ class TagHolder(object):
 
     def set_tag(self, tag):
         """Set a tag-like property"""
-        self.prop_data.__setitem__(tag, '')
+        self.prop_data.__setitem__(tag, "")
 
     def get_tag(self, tag):
         """Set a tag-like property"""
         value = self.prop_data.get(tag)
-        if value == '':
+        if value == "":
             return True
         return None
 
@@ -281,11 +279,11 @@ class TagHolder(object):
 
     def __repr__(self):
         string = self.to_string()
-        string = string.replace('\n', ' ')
-        string = string.replace('#', '')
+        string = string.replace("\n", " ")
+        string = string.replace("#", "")
         string = string.strip()
         if len(string) > 60:
-            string = string[:60] + '...'
+            string = string[:60] + "..."
         return "{}<{}>".format(type(self).__name__, string)
 
 
@@ -302,131 +300,135 @@ class BuildcellParam(TagHolder):
             type_string = self.type_registry[key]
             if value is False or value is None:
                 continue
-            if name == 'FIX':
+            if name == "FIX":
                 continue
-            if type_string == 'tag':
+            if type_string == "tag":
                 lines.append("#{}".format(name))
             # Allow direct passing of string
-            elif type_string == 'generic':
+            elif type_string == "generic":
                 lines.append("#{}={}".format(name, value))
                 continue
-            elif type_string in ('range', 'nested_range'):
+            elif type_string in ("range", "nested_range"):
                 # Check if there is a dictionary to unpack
                 # The value can be
                 if not isinstance(value, (list, tuple)):
-                    line = '#{}={}'.format(name, value)
+                    line = "#{}={}".format(name, value)
                 else:
                     # The value is a list/tuple
                     # is a simple range?
                     if all([isinstance(x, numbers.Number) for x in value]):
-                        line = '#{}={}'.format(name, tuple2range(value))
+                        line = "#{}={}".format(name, tuple2range(value))
                     # Deal with a nested range
                     else:
-                        line = '#{}={}'.format(name, tuple2range(value[0]))
+                        line = "#{}={}".format(name, tuple2range(value[0]))
                         tokens = [line]
                         if value[1]:
                             for k_tmp, v_tmp in value[1].items():
-                                tokens.append(k_tmp + '=' + tuple2range(v_tmp))
-                        line = ' '.join(tokens)
+                                tokens.append(k_tmp + "=" + tuple2range(v_tmp))
+                        line = " ".join(tokens)
                 lines.append(line)
 
-        return '\n'.join(lines) + '\n'
+        return "\n".join(lines) + "\n"
 
-    fix = tagproperty('FIX', 'Fix the cell')
-    abfix = tagproperty('ABFIX', 'Fix ab axes')
-    adjgen = genericproperty('ADJGEN', 'Adjust the general positions')
-    autoslack = tagproperty('AUTOSLACK', '')
-    breakamp = genericproperty('BREAKAMP', 'Amplitude for breaking symmetry')
-    celladapt = genericproperty('CELLADAPT', '')
-    cellamp = genericproperty('CELLAMP', 'Amplitude for cell')
-    cellcon = genericproperty('CELLCON', '')
-    coord = rangeproperty('COORD', '')
+    fix = tagproperty("FIX", "Fix the cell")
+    abfix = tagproperty("ABFIX", "Fix ab axes")
+    adjgen = genericproperty("ADJGEN", "Adjust the general positions")
+    autoslack = tagproperty("AUTOSLACK", "")
+    breakamp = genericproperty("BREAKAMP", "Amplitude for breaking symmetry")
+    celladapt = genericproperty("CELLADAPT", "")
+    cellamp = genericproperty("CELLAMP", "Amplitude for cell")
+    cellcon = genericproperty("CELLCON", "")
+    coord = rangeproperty("COORD", "")
     cylinder = genericproperty(
-        'CYLINDER',
-        'Confining cylinder(positive) or attractive line potential (neagtive)')
-    flip = tagproperty('flip', 'Enable mirror reflection of fragments')
-    maxbangle = genericproperty('MAXBANGLE', '')
-    maxtime = genericproperty('MAXTIME', '')
-    minbangle = genericproperty('MINBANGLE', '')
-    focus = genericproperty('FOCUS', 'Focus on composition?')
-    molecules = genericproperty('MOLECULES', '')
-    nocompact = genericproperty('NOCOMPACT', 'No compact cell')
-    nopush = genericproperty('NOPUSH', 'No pushing')
-    octet = genericproperty('OCTET', '')
-    permfrac = genericproperty('PERMFRAC', '')
-    permute = genericproperty('PERMUTE', '')
-    rad = genericproperty('RAD', '')
-    rash = genericproperty('RASH', '')
-    rash_angamp = genericproperty('RASH_ANGAMP', '')
-    rash_posamp = genericproperty('RASH_POSAMP', '')
-    remove = genericproperty('REMOVE', '')
-    slab = genericproperty('SLAB', '')
-    species = genericproperty('SPECIES', '')
-    sphere = genericproperty('SPHERE', '')
-    spin = genericproperty('SPIN', '')
-    supercell = genericproperty('SUPERCELL', '')
-    surface = tagproperty('SURFACE', '')
-    symm = genericproperty('SYMM', '')
-    symmno = genericproperty('SYMMNO', '')
-    symmorphic = tagproperty('SYMMORPHIC', '')
-    system = genericproperty('SYSTEM', 'Crystal system')
-    targvol = rangeproperty('TARGVOL', 'Target volume')
-    three = genericproperty('THREE', 'User three body hard sphere potential')
-    tight = tagproperty('TIGHT', 'Tigh packing?')
-    vacancies = genericproperty('VACANCIES', 'Introduct vacancies')
-    vacuum = genericproperty('VACUUM', 'Add vacuum')
-    width = genericproperty('WIDTH', 'Width of a confining slab spacer')
+        "CYLINDER",
+        "Confining cylinder(positive) or attractive line potential (neagtive)",
+    )
+    flip = tagproperty("flip", "Enable mirror reflection of fragments")
+    maxbangle = genericproperty("MAXBANGLE", "")
+    maxtime = genericproperty("MAXTIME", "")
+    minbangle = genericproperty("MINBANGLE", "")
+    focus = genericproperty("FOCUS", "Focus on composition?")
+    molecules = genericproperty("MOLECULES", "")
+    nocompact = genericproperty("NOCOMPACT", "No compact cell")
+    nopush = genericproperty("NOPUSH", "No pushing")
+    octet = genericproperty("OCTET", "")
+    permfrac = genericproperty("PERMFRAC", "")
+    permute = genericproperty("PERMUTE", "")
+    rad = genericproperty("RAD", "")
+    rash = genericproperty("RASH", "")
+    rash_angamp = genericproperty("RASH_ANGAMP", "")
+    rash_posamp = genericproperty("RASH_POSAMP", "")
+    remove = genericproperty("REMOVE", "")
+    slab = genericproperty("SLAB", "")
+    species = genericproperty("SPECIES", "")
+    sphere = genericproperty("SPHERE", "")
+    spin = genericproperty("SPIN", "")
+    supercell = genericproperty("SUPERCELL", "")
+    surface = tagproperty("SURFACE", "")
+    symm = genericproperty("SYMM", "")
+    symmno = genericproperty("SYMMNO", "")
+    symmorphic = tagproperty("SYMMORPHIC", "")
+    system = genericproperty("SYSTEM", "Crystal system")
+    targvol = rangeproperty("TARGVOL", "Target volume")
+    three = genericproperty("THREE", "User three body hard sphere potential")
+    tight = tagproperty("TIGHT", "Tigh packing?")
+    vacancies = genericproperty("VACANCIES", "Introduct vacancies")
+    vacuum = genericproperty("VACUUM", "Add vacuum")
+    width = genericproperty("WIDTH", "Width of a confining slab spacer")
 
-    cfix = tagproperty('CFIX', 'Fix the caxis')
-    cluster = tagproperty('CLUSTER', 'We are predicting CLUSTER')
+    cfix = tagproperty("CFIX", "Fix the caxis")
+    cluster = tagproperty("CLUSTER", "We are predicting CLUSTER")
     nform = rangeproperty(
-        'NFORM', ('Number of formula units. '
-                  'This must be set otherwise the number of atoms is n times '
-                  'the number of symmetries'))
-    minsep = nestedrangeproperty('MINSEP', 'Minimum separation constraints')
-    posamp = nestedrangeproperty('POSAMP', 'Position amplitudes')
-    symmops = rangeproperty('SYMMOPS',
-                            'Number of symmetry operation requested cell')
-    minamp = rangeproperty('MINAMP', 'Minimum aplitude of randomisation')
-    zamp = rangeproperty('ZAMP', 'Randomisation amplitude in Z')
-    xamp = rangeproperty('XAMP', 'Randomisation amplitude in X')
-    yamp = rangeproperty('YAMP', 'Randomisation amplitude in Y')
-    angamp = rangeproperty('ANGAMP',
-                           'Angular randomisation amplitude from fragments')
-    sgrank = rangeproperty('SGRANK', 'Minimum rank of the spacegroup')
-    species = nestedrangeproperty('SPECIES', 'Species to be put into the cell')
+        "NFORM",
+        (
+            "Number of formula units. "
+            "This must be set otherwise the number of atoms is n times "
+            "the number of symmetries"
+        ),
+    )
+    minsep = nestedrangeproperty("MINSEP", "Minimum separation constraints")
+    posamp = nestedrangeproperty("POSAMP", "Position amplitudes")
+    symmops = rangeproperty("SYMMOPS", "Number of symmetry operation requested cell")
+    minamp = rangeproperty("MINAMP", "Minimum aplitude of randomisation")
+    zamp = rangeproperty("ZAMP", "Randomisation amplitude in Z")
+    xamp = rangeproperty("XAMP", "Randomisation amplitude in X")
+    yamp = rangeproperty("YAMP", "Randomisation amplitude in Y")
+    angamp = rangeproperty("ANGAMP", "Angular randomisation amplitude from fragments")
+    sgrank = rangeproperty("SGRANK", "Minimum rank of the spacegroup")
+    species = nestedrangeproperty("SPECIES", "Species to be put into the cell")
     varvol = genericproperty(
-        'VARVOL', 'Target volume of cell with the original configuration')
+        "VARVOL", "Target volume of cell with the original configuration"
+    )
     slack = rangeproperty(
-        'SLACK', 'Slack the hard sphere potentials enforcing the MINSEP')
+        "SLACK", "Slack the hard sphere potentials enforcing the MINSEP"
+    )
     overlap = rangeproperty(
-        'OVERLAP', 'Threhold of the overlap for the hard sphere potentials')
-    compact = tagproperty('COMPACT', 'Compact the cell using Niggli reduction')
-    cons = genericproperty('CONS', 'Parameter for cell shape constraint')
-    natom = rangeproperty(
-        'NATOM', 'Number of atoms in cell, if not explicitly defined')
+        "OVERLAP", "Threhold of the overlap for the hard sphere potentials"
+    )
+    compact = tagproperty("COMPACT", "Compact the cell using Niggli reduction")
+    cons = genericproperty("CONS", "Parameter for cell shape constraint")
+    natom = rangeproperty("NATOM", "Number of atoms in cell, if not explicitly defined")
 
 
 class SeedAtomTag(TagHolder):
     """Tags for a single auto"""
 
-    tagname = genericproperty('tagname', 'Name of the tag')
-    posamp = rangeproperty('POSAMP', 'Position amplitude')
-    minamp = rangeproperty('POSAMP', 'Minimum positional amplitude')
-    zamp = rangeproperty('ZAMP', 'Amplitude in Z')
-    xamp = rangeproperty('XAMP', 'Amplitude in X')
-    yamp = rangeproperty('YAMP', 'Amplitude in Y')
-    num = rangeproperty('NUM', 'Number of atoms/fragments')
-    adatom = tagproperty('ADATOM', 'Add atoms after making supercell')
-    fix = tagproperty('FIX', 'FIX this atom')
-    nomove = tagproperty('NOMOVE', 'Do not move this atom (even in push)')
-    rad = genericproperty('RAD', 'Radius of ion')
-    occ = genericproperty('OCC', 'Occupation, can be fractional (e.g 1/3)')
-    perm = tagproperty('PERM', '')
-    athome = tagproperty('ATHOLE', '')
-    coord = rangeproperty('COORD', 'Coordination of the ion')
-    angamp = rangeproperty('ANGAMP',
-                           'Angular randomisation magnitude (for fragments)')
+    tagname = genericproperty("tagname", "Name of the tag")
+    posamp = rangeproperty("POSAMP", "Position amplitude")
+    minamp = rangeproperty("POSAMP", "Minimum positional amplitude")
+    zamp = rangeproperty("ZAMP", "Amplitude in Z")
+    xamp = rangeproperty("XAMP", "Amplitude in X")
+    yamp = rangeproperty("YAMP", "Amplitude in Y")
+    num = rangeproperty("NUM", "Number of atoms/fragments")
+    adatom = tagproperty("ADATOM", "Add atoms after making supercell")
+    fix = tagproperty("FIX", "FIX this atom")
+    nomove = tagproperty("NOMOVE", "Do not move this atom (even in push)")
+    rad = genericproperty("RAD", "Radius of ion")
+    occ = genericproperty("OCC", "Occupation, can be fractional (e.g 1/3)")
+    perm = tagproperty("PERM", "")
+    athome = tagproperty("ATHOLE", "")
+    coord = rangeproperty("COORD", "Coordination of the ion")
+    angamp = rangeproperty("ANGAMP", "Angular randomisation magnitude (for fragments)")
 
     def to_string(self):
         """
@@ -434,15 +436,15 @@ class SeedAtomTag(TagHolder):
         line in POSITIONS_FRAC / POSITIONS_ABS block
         """
         if self.disabled is True:
-            return ''
+            return ""
 
         tokens = []
         # Set the tag
-        tagname = self.prop_data.get('tagname')
+        tagname = self.prop_data.get("tagname")
         if not tagname:
-            raise ValueError('The tagname property must be set')
+            raise ValueError("The tagname property must be set")
 
-        tokens.append('# {} %'.format(self.prop_data['tagname']))
+        tokens.append("# {} %".format(self.prop_data["tagname"]))
         for key, value in self.prop_data.items():
             if key == "tagname":
                 continue
@@ -451,17 +453,17 @@ class SeedAtomTag(TagHolder):
             name = key.upper()
 
             # Process the value based on type string
-            if type_string == 'tag':
+            if type_string == "tag":
                 tokens.append(name)
-            elif type_string == 'range':
+            elif type_string == "range":
                 if isinstance(value, (list, tuple)):
-                    tokens.append('{}={}-{}'.format(name, *value))
+                    tokens.append("{}={}-{}".format(name, *value))
                 else:
-                    tokens.append('{}={}'.format(name, value))
+                    tokens.append("{}={}".format(name, value))
             else:
                 tokens.append("{}={}".format(name, value))
 
-        string = ' '.join(tokens)
+        string = " ".join(tokens)
         return string
 
 
@@ -474,10 +476,10 @@ class SeedAtom(Atom, SeedAtomTag):
         super(SeedAtom, self).__init__(*args, **kwargs)
         SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
-            self.prop_data = self.atoms.arrays['atom_gentags'][
-                self.index].prop_data
-            self.type_registry = self.atoms.arrays['atom_gentags'][
-                self.index].type_registry
+            self.prop_data = self.atoms.arrays["atom_gentags"][self.index].prop_data
+            self.type_registry = self.atoms.arrays["atom_gentags"][
+                self.index
+            ].type_registry
 
 
 def tuple2range(value):
@@ -515,10 +517,10 @@ def get_cell_inp_lines(atoms):
     # Insert tags in the cell block
     tags = atoms.gentags.get_prop_dict()
     for tag in tags:
-        if tag in ['FIX', 'CFIX', 'ABFIX']:
-            cell['lattice_cart'].append('#' + tag)
+        if tag in ["FIX", "CFIX", "ABFIX"]:
+            cell["lattice_cart"].append("#" + tag)
 
     lines = []
     lines.extend(cell.get_file_lines())
-    lines.extend(atoms.gentags.to_string().split('\n'))
+    lines.extend(atoms.gentags.to_string().split("\n"))
     return lines

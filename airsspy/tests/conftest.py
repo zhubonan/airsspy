@@ -29,10 +29,8 @@ import pytest
 @pytest.fixture
 def al_atoms():
     return Atoms(
-        'Al2',
-        cell=[2, 2, 2],
-        positions=[[0., 0., 0.], [1., 1., 1.]],
-        pbc=True)
+        "Al2", cell=[2, 2, 2], positions=[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], pbc=True
+    )
 
 
 @pytest.fixture

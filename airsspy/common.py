@@ -24,4 +24,5 @@ Common module
 
 class BuildcellError(RuntimeError):
     """Exception for not been able to build the random cell"""
+
     pass
