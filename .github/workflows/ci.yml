@@ -15,8 +15,8 @@ jobs:
 
       - uses: conda-incubator/setup-miniconda@v2
         with:
-        auto-update-conda: true
-        python-version: ${{ matrix.python-version }}
+          auto-update-conda: true
+          python-version: ${{ matrix.python-version }}
 
       - name: Install airss
         shell: bash -el {0}

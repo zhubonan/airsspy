@@ -62,10 +62,10 @@ class Buildcell:
         self.bc_in = cell
         try:
             self.bc_out, self.bc_err = bc_proc.communicate(input=cell, timeout=timeout)
-        except sbp.TimeoutExpired:
+        except sbp.TimeoutExpired as excep:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
-            raise BuildcellError
+            raise BuildcellError() from excep
         else:
             bc_proc.kill()
 
