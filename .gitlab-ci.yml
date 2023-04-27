@@ -42,7 +42,7 @@ build_docker:
   services:
     - docker:dind
   before_script:
-    - echo '0. Installing dependencies...' 
+    - echo '0. Installing dependencies...'
     - apk add --no-cache pigz python3
     - python3 -m venv venv
     - . venv/bin/activate

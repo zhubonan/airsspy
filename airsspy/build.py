@@ -71,7 +71,7 @@ class Buildcell:
 
         # Write the output from buildcell
         if write_cell:
-            with open(write_cell + ".cell", "w") as output:
+            with open(write_cell + ".cell", "w", encoding="utf-8") as output:
                 output.write(self.bc_out)
 
         # Process the result
@@ -80,7 +80,7 @@ class Buildcell:
         parser.parse()
         cellout = CellInput()
         for k, value in parser.get_dict().items():
-            cellout.__setitem__(k, value)
+            cellout[k] = value
 
         cell = cellout.get_cell()
         elements, positions, _ = cellout.get_positions()

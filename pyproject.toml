@@ -1,0 +1,22 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+
+[project]
+name = "airsspy"
+version = "0.1.4"
+description = "A wrapper for using AIRSS with python and ase."
+authors = [{name = "Bonan Zhu", email = "zhubonan@outlook.com"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+
+dependencies = ['ase~=3.17', 'castepinput~=0.1']
+
+[project.urls]
+"Homepage" = "https://github.com/zhubonan/airsspy"
+
+[project.optional-dependencies]
+
+testing = ['pytest']
+"pre-commit" = ['pre-commit']

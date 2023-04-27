@@ -20,9 +20,10 @@
 ###########################################################################
 
 from setuptools import setup, find_packages
-version = '0.1.4'
 
-if __name__ == '__main__':
+version = "0.1.4"
+
+if __name__ == "__main__":
     from os import path
     import os
 
@@ -31,24 +32,24 @@ if __name__ == '__main__':
         long_description = fh.read()
 
     setup(
-        name='airsspy',
+        name="airsspy",
         version=version,
-        url='https://github.com/zhubonan/airsspy',
+        url="https://github.com/zhubonan/airsspy",
         packages=find_packages(),
         install_requires=[
-            'ase~=3.17',
-            'castepinput~=0.1',
+            "ase~=3.17",
+            "castepinput~=0.1",
         ],
-        description='A wrapper for using AIRSS with python and ase.',
+        description="A wrapper for using AIRSS with python and ase.",
         extras_require={
-            'testing': ['pytest'],
+            "testing": ["pytest"],
             "pre-commit": [
                 "pre-commit>=1,<2",
                 "black",
-            ]
+            ],
         },
-        maintainer='Bonan Zhu',
-        maintainer_email='zhubonan@outlook.com',
+        maintainer="Bonan Zhu",
+        maintainer_email="zhubonan@outlook.com",
         long_description=long_description,
-        long_description_content_type='text/markdown',
+        long_description_content_type="text/markdown",
     )

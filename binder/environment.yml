@@ -1,0 +1,8 @@
+name: airsspy
+channels:
+  - conda-forge
+dependencies:
+  - airss
+  - ase
+  - pip:
+      - castepinput

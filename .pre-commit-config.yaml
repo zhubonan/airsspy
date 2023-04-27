@@ -1,9 +1,44 @@
+exclude: '^(doc)|(cookiecutters)'
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v2.5.0
+  hooks:
+  - id: trailing-whitespace
+    exclude: (example)
+  - id: end-of-file-fixer
+    exclude: (example)
+  - id: check-yaml
+    exclude: (example)
+    args: ['--unsafe']
+  - id: check-json
+    exclude: (example)
+  - id: check-added-large-files
+    exclude: (example|tests/test_data/PROCAR.mgo)
+  - id: double-quote-string-fixer
+    exclude: (example)
+  - id: forbid-new-submodules
+    exclude: (example)
+
+- repo: https://github.com/psf/black
+  rev: 23.3.0
+  hooks:
+    - id: black
+      # It is recommended to specify the latest version of Python
+      # supported by your project here, or alternatively use
+      # pre-commit's default_language_version, see
+      # https://pre-commit.com/#top_level-default_language_version
+      language_version: python3.9
+
 - repo: local
   hooks:
-  # yapf = yet another python formatter
-  - id: yapf
-    name: yapf
-    entry: yapf
-    language: system
+  - id: pylint
+    name: pylint
+    entry: pylint
     types: [python]
-    args: ["-i"]
+    language: system
+    exclude: |
+      (?x)(
+      ^tutorials/|
+      ^examples/|
+      ^tests
+      )
