@@ -20,7 +20,7 @@
 ###########################################################################
 
 from setuptools import setup, find_packages
-version = '0.1.3'
+version = '0.1.4'
 
 if __name__ == '__main__':
     from os import path
@@ -43,12 +43,12 @@ if __name__ == '__main__':
         extras_require={
             'testing': ['pytest'],
             "pre-commit": [
-                "pre-commit==1.11.0",
-                "yapf==0.24.0",
+                "pre-commit>=1,<2",
+                "black",
             ]
         },
         maintainer='Bonan Zhu',
-        maintainer_email='bon.zhu@protonmail.com',
+        maintainer_email='zhubonan@outlook.com',
         long_description=long_description,
         long_description_content_type='text/markdown',
     )
