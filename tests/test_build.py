@@ -25,8 +25,8 @@ import sys
 
 import pytest
 from distutils import spawn
-from ..seed import SeedAtoms
-from ..build import Buildcell
+from airsspy.seed import SeedAtoms
+from airsspy.build import Buildcell
 
 
 @pytest.fixture

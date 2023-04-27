@@ -1,4 +1,4 @@
-name: Python package
+name: Build, test and make binder cache
 
 on: [push]
 
@@ -33,11 +33,11 @@ jobs:
         run: |
           pytest
 
-  Create-MyBinderOrg-Cache:
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-    - name: cache binder build on mybinder.org
-      uses: jupyterhub/repo2docker-action@master
-      with:
-        MYBINDERORG_TAG: ${{ github.event.ref }} # This builds the container on mybinder.org with the branch that was pushed on.
+  # Create-MyBinderOrg-Cache:
+  #   needs: [build]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #   - name: cache binder build on mybinder.org
+  #     uses: jupyterhub/repo2docker-action@master
+  #     with:
+  #       MYBINDERORG_TAG: ${{ github.event.ref }} # This builds the container on mybinder.org with the branch that was pushed on.

@@ -18,7 +18,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
 import pytest
-from ..seed import SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam, tuple2range
+from airsspy.seed import SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam, tuple2range
 
 
 def test_bc_param():

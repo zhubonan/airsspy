@@ -13,9 +13,6 @@ repos:
   - id: check-json
     exclude: (example)
   - id: check-added-large-files
-    exclude: (example|tests/test_data/PROCAR.mgo)
-  - id: double-quote-string-fixer
-    exclude: (example)
   - id: forbid-new-submodules
     exclude: (example)
 

@@ -21,7 +21,7 @@
 Tests for the restool module
 """
 
-from ..restools import extract_res, save_airss_res
+from airsspy.restools import extract_res, save_airss_res
 from tempfile import mkstemp
 
 
