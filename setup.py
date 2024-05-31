@@ -38,6 +38,8 @@ if __name__ == '__main__':
         install_requires=[
             'ase~=3.17',
             'castepinput~=0.1',
+            'spglib<2',
+            "ipypb"
         ],
         description='A wrapper for using AIRSS with python and ase.',
         extras_require={
