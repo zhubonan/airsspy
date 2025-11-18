@@ -21,8 +21,20 @@
 Tests for the restool module
 """
 
-from airsspy.restools import extract_res, save_airss_res
+import pytest
+from airsspy.restools import (
+    RESFile,
+    TitlInfo,
+    extract_res,
+    format_minsep,
+    get_minsep,
+    parse_titl,
+    read_res_atoms,
+    save_airss_res,
+    unique,
+)
 from tempfile import mkstemp
+import numpy as np
 
 
 res_example = """
@@ -78,3 +90,111 @@ def test_save_airss_res(al_atoms, tmpfile):
     extracted = extract_res(tmpfile)
     for k, v in infodict.items():
         assert v == extracted[k]
+
+
+def test_parse_titl():
+    """Test parsing TITL line"""
+    line = "TITL Al-574-3531-1 -0.05 60.5091828526 -53.2326560919 0 0 8 (Fm-3m) n - 1"
+    titl = parse_titl(line)
+
+    assert isinstance(titl, TitlInfo)
+    assert titl.label == "Al-574-3531-1"
+    assert titl.pressure == -0.05
+    assert titl.volume == 60.5091828526
+    assert titl.enthalpy == -53.2326560919
+    assert titl.spin == 0.0
+    assert titl.spin_abs == 0.0
+    assert titl.natoms == 8
+    assert titl.symm == "(Fm-3m)"
+    assert titl.flag1 == "n"
+    assert titl.flag2 == "-"
+    assert titl.flag3 == "1"
+
+
+def test_read_res_atoms():
+    """Test reading RES file as Atoms"""
+    lines = res_example.strip().split('\n')
+    titl, atoms = read_res_atoms(lines)
+
+    assert isinstance(titl, TitlInfo)
+    assert titl.natoms == 8
+    assert len(atoms) == 8
+    assert atoms.get_chemical_formula() == "Al8"
+
+
+def test_unique():
+    """Test unique function"""
+    items = ["Al", "Si", "Al", "C", "Si", "Al"]
+    result = unique(items)
+    assert result == ["Al", "Si", "C"]
+
+
+def test_get_minsep():
+    """Test minimum separation calculation"""
+    species = ["Al", "Si", "Al"]
+    # Simple distance matrix for testing
+    dist_matrix = np.array([
+        [0.0, 2.5, 3.0],
+        [2.5, 0.0, 2.8],
+        [3.0, 2.8, 0.0]
+    ])
+
+    minsep = get_minsep(species, dist_matrix)
+    expected = {
+        "Al-Al": 3.0,  # distance between the two Al atoms
+        "Al-Si": 2.5,  # minimum Al-Si distance
+    }
+
+    assert minsep == expected
+
+
+def test_format_minsep():
+    """Test formatting minimum separations"""
+    minsep = {"Al-Al": 2.5, "Al-Si": 3.1}
+    result = format_minsep(minsep)
+    assert "Al-Al=2.50" in result
+    assert "Al-Si=3.10" in result
+
+
+def test_resfile_from_string():
+    """Test RESFile creation from string"""
+    res_obj = RESFile.from_string(res_example)
+
+    assert res_obj.label == "Al-574-3531-1"
+    assert res_obj.natoms == 8
+    assert res_obj.pressure == -0.05
+    assert res_obj.volume == 60.5091828526
+    assert res_obj.enthalpy == -53.2326560919
+
+
+def test_resfile_from_file(tmpfile):
+    """Test RESFile creation from file"""
+    # Write test RES file
+    with open(tmpfile, "w") as f:
+        f.write(res_example)
+
+    res_obj = RESFile.from_file(tmpfile)
+
+    assert res_obj.label == "Al-574-3531-1"
+    assert res_obj.natoms == 8
+
+
+def test_resfile_properties():
+    """Test RESFile properties"""
+    res_obj = RESFile.from_string(res_example)
+
+    assert res_obj.formula == "Al8"
+    assert res_obj.reduced_formula == "Al"
+    assert res_obj.spin == 0.0
+    assert res_obj.spin_abs == 0.0
+
+
+def test_resfile_to_res_lines():
+    """Test RESFile to RES lines conversion"""
+    res_obj = RESFile.from_string(res_example)
+    lines = res_obj.to_res_lines()
+
+    assert isinstance(lines, list)
+    assert any("TITL" in line for line in lines)
+    assert any("CELL" in line for line in lines)
+    assert any("END" in line for line in lines)

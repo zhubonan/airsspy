@@ -23,8 +23,64 @@ Import common used stuff to the model namespace
 from typing import Final
 
 from .build import Buildcell
+from .restools import (
+    RESFile,
+    TitlInfo,
+    extract_res,
+    format_minsep,
+    get_minsep,
+    get_spacegroup_atoms,
+    parse_titl,
+    read_res_atoms,
+    read_res_pmg,
+    save_airss_res,
+    unique,
+)
 from .seed import SeedAtoms
+from .utils import (
+    calc_kpt_tuple_recip,
+    count_pattern_in_file,
+    extract_number_from_string,
+    filter_out_stream,
+    find_pattern_in_file,
+    format_time_elapsed,
+    safe_cast_float,
+    safe_cast_int,
+    stream_to_list,
+    trim_stream,
+)
+from .utils import (
+    unique as utils_unique,
+)
 
-__version__: Final = "0.1.3"
+__version__: Final = "0.1.4"
 
-__all__ = ["SeedAtoms", "Buildcell"]
+__all__ = [
+    # Core classes
+    "SeedAtoms",
+    "Buildcell",
+    # RES file handling
+    "RESFile",
+    "TitlInfo",
+    "extract_res",
+    "save_airss_res",
+    "parse_titl",
+    "read_res_atoms",
+    "read_res_pmg",
+    "get_spacegroup_atoms",
+    "get_minsep",
+    "format_minsep",
+    "unique",
+    # Utilities
+    "trim_stream",
+    "filter_out_stream",
+    "calc_kpt_tuple_recip",
+    "utils_unique",
+    "stream_to_list",
+    "safe_cast_float",
+    "safe_cast_int",
+    "extract_number_from_string",
+    "find_pattern_in_file",
+    "count_pattern_in_file",
+    "format_time_elapsed",
+]
