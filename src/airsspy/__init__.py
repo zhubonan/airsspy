@@ -20,5 +20,11 @@
 Import common used stuff to the model namespace
 """
 
+from typing import Final
 
-__version__ = "0.1.3"
+from .build import Buildcell
+from .seed import SeedAtoms
+
+__version__: Final = "0.1.3"
+
+__all__ = ["SeedAtoms", "Buildcell"]

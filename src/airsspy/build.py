@@ -21,12 +21,17 @@ Module for building the random cell
 """
 
 import subprocess as sbp
+from typing import TYPE_CHECKING, Optional, Union
 
 from ase import Atoms
+from ase.atoms import Atoms as ASEAtoms
 from castepinput import CellInput
 from castepinput.parser import PlainParser
 
 from .common import BuildcellError
+
+if TYPE_CHECKING:
+    from .seed import SeedAtoms
 
 
 class Buildcell:
@@ -35,17 +40,17 @@ class Buildcell:
     Ab inito Radnom Structure Searhcing (AIRSS) package
     """
 
-    def __init__(self, atoms):
+    def __init__(self, atoms: Union["SeedAtoms", ASEAtoms]) -> None:
         """Initialise an Buildcell object"""
         self.atoms = atoms
-        self.proc = None
-        self.res_atoms = None
+        self.proc: Optional[sbp.Popen] = None
+        self.res_atoms: Optional[ASEAtoms] = None
         # Input and output from the buildcell program
-        self.bc_out = None
-        self.bc_err = None
-        self.bc_in = None
+        self.bc_out: Optional[str] = None
+        self.bc_err: Optional[str] = None
+        self.bc_in: Optional[str] = None
 
-    def generate(self, timeout=10, write_cell=None):
+    def generate(self, timeout: int = 10, write_cell: Optional[str] = None) -> ASEAtoms:
         """Generate a random atom based on a template
         timeout: time to wait for buildcell binary
         write_seed : Name of the output cell to be written"""
@@ -57,7 +62,7 @@ class Buildcell:
             stderr=sbp.PIPE,
         )
         self.proc = bc_proc
-        cell = "\n".join(self.atoms.get_cell_inp_lines())
+        cell = "\n".join(self.atoms.get_cell_inp_lines())  # type: ignore[union-attr]
         self.bc_in = cell
         try:
             self.bc_out, self.bc_err = bc_proc.communicate(input=cell, timeout=timeout)
@@ -87,11 +92,13 @@ class Buildcell:
         self.res_atoms = atoms
         return atoms
 
-    def write_seed(self, seedname):
+    def write_seed(self, seedname: str) -> None:
         """Write the seed for buildcell to the disk"""
-        self.atoms.write_seed(seedname)
+        self.atoms.write_seed(seedname)  # type: ignore[union-attr]
 
-    def gen_and_view(self, viewer=None, wrap=False, timeout=20):
+    def gen_and_view(
+        self, viewer: Optional[str] = None, wrap: bool = False, timeout: int = 20
+    ) -> None:
         """Geneate one and view with viewer immediately. Wrap if needed."""
         from ase.visualize import view
 

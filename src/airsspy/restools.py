@@ -20,17 +20,20 @@
 Tools for hanlding res files
 """
 import os
+from typing import Any, Dict, List, Optional, Union
 
+from ase import Atoms
 from ase.io import write
 
 
-def extract_res(fname):
+def extract_res(fname: str) -> Dict[str, Union[str, float, int, List[str]]]:
     """
     Extract information from res file.
     Returns a dictionary.
     The structure of he res file is not extracted
     """
-    rems = []
+    rems: List[str] = []
+    title: str = ""
     with open(fname) as fh:
         for line in fh:
             if "TITL" in line:
@@ -41,7 +44,7 @@ def extract_res(fname):
             if "cell" in line:
                 break
     entries = title.split()
-    res = {}
+    res: Dict[str, Union[str, float, int, List[str]]] = {}
     res["rem"] = rems
     res["uid"] = entries[1]
     res["P"] = float(entries[2])
@@ -53,7 +56,12 @@ def extract_res(fname):
     return res
 
 
-def save_airss_res(atoms, info_dict, fname=None, force_write=False):
+def save_airss_res(
+    atoms: Atoms,
+    info_dict: Dict[str, Any],
+    fname: Optional[str] = None,
+    force_write: bool = False,
+) -> None:
     """
     Save the relaxed structure in res format which is compatible with the
     ``cryan`` program.

@@ -20,9 +20,11 @@
 Classes for preparing AIRSS seed
 """
 import numbers
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from ase import Atom, Atoms
+from ase.atoms import Atoms as ASEAtoms
 from ase.constraints import FixBondLengths, FixConstraint
 from castepinput import CellInput
 
@@ -32,7 +34,7 @@ from .build import BuildcellError
 class SeedAtoms(Atoms):
     """Subclass of ase.atoms.Atoms object. Template for generating random cells"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialise an SeedAtoms for buildcell.
         Same arguments signature as ase.Atoms object
 
@@ -47,9 +49,9 @@ class SeedAtoms(Atoms):
         The ``atom_tags`` attribute also provide a convient way of accessing.
         """
         super().__init__(*args, **kwargs)
-        self.gentags = BuildcellParam()
+        self.gentags: BuildcellParam = BuildcellParam()
         # Construct tags for each Atom
-        tags = []
+        tags: List[SeedAtomTag] = []
         symbols = self.get_chemical_symbols()
         for i in range(len(self)):
             tag = SeedAtomTag()
@@ -59,41 +61,43 @@ class SeedAtoms(Atoms):
 
         self.new_array("atom_gentags", tags, dtype=object, shape=None)
 
-    def set_atom_tag(self, tag, index):
+    def set_atom_tag(self, tag: "SeedAtomTag", index: int) -> None:
         """Set buildcell tags for individual atom
         if the SeedAtomTag object has no tagname, set automatically"""
         if tag.tagname is None:
             tag.tagname = self.get_chemical_symbols()[index]
         self.arrays["atom_gentags"][index] = tag
 
-    def get_atom_tag(self, index):
+    def get_atom_tag(self, index: int) -> Any:
         """
         Return the buildcell tag for the atom of the index.
         Can be used for in-place change
         """
-        return self.arrays["atom_gentags"][index]
+        return self.arrays["atom_gentags"][index]  # type: ignore[return-value]
 
     @property
-    def atom_tags(self):
+    def atom_tags(self) -> np.ndarray:
         """Array of tags, each for one Atom"""
         return self.arrays["atom_gentags"]
 
-    def write_seed(self, fpath):
+    def write_seed(self, fpath: str) -> None:
         """Write the seed to file"""
         with open(fpath, "w") as fhandle:
             fhandle.write("\n".join(self.get_cell_inp_lines()))
 
-    def get_cell_inp(self):
+    def get_cell_inp(self) -> CellInput:
         """Return the python object represent the cell"""
         return get_cell_inp(self)
 
-    def get_cell_inp_lines(self):
+    def get_cell_inp_lines(self) -> List[str]:
         """
         Return a list of strings of the seed file
         """
         return get_cell_inp_lines(self)
 
-    def build_random_atoms(self, timeout=10, also_buildcell=False, fail_ok=True):
+    def build_random_atoms(
+        self, timeout: int = 10, also_buildcell: bool = False, fail_ok: bool = True
+    ) -> Optional[Union[ASEAtoms, Tuple[ASEAtoms, Any]]]:
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
@@ -104,13 +108,15 @@ class SeedAtoms(Atoms):
             rand_atoms = buildcell.generate(timeout)
         except BuildcellError as e:
             if fail_ok:
-                return
+                return None
             raise e
         if also_buildcell:
             return rand_atoms, buildcell
         return rand_atoms
 
-    def __getitem__(self, i):
+    def __getitem__(
+        self, i: Union[int, Sequence[int], slice]
+    ) -> Union["SeedAtom", "SeedAtoms"]:  # type: ignore[override]
         """Return a subset of the atoms.
 
         i -- scalar integer, list of integers, or slice object
@@ -124,7 +130,7 @@ class SeedAtoms(Atoms):
 
         """
 
-        if isinstance(i, numbers.Integral):
+        if isinstance(i, int):
             natoms = len(self)
             if i < -natoms or i >= natoms:
                 raise IndexError("Index out of range.")
@@ -148,11 +154,11 @@ class SeedAtoms(Atoms):
                     pass
 
         atoms = self.__class__(
-            cell=self._cell,
-            pbc=self._pbc,
+            cell=self.get_cell(),
+            pbc=self.get_pbc(),
             info=self.info,
             # should be communicated to the slice as well
-            celldisp=self._celldisp,
+            celldisp=self.get_celldisp(),
         )
         # TODO: Do we need to shuffle indices in adsorbate_info too?
 
@@ -164,46 +170,51 @@ class SeedAtoms(Atoms):
         return atoms
 
 
-def tagproperty(name, doc):
+def tagproperty(name: str, doc: str):
     """Set a tag-like property"""
 
-    def getter(self):
+    def getter(self: "TagHolder") -> Optional[bool]:
         return self.get_tag(name)
 
-    def setter(self, value):
+    def setter(self: "TagHolder", value: bool) -> None:
         self.type_registry.update({name: "tag"})
         if value is True:
             self.set_tag(name)
         elif value is False:
             self.delete(name)
 
-    def deleter(self):
+    def deleter(self: "TagHolder") -> None:
         self.delete(name)
 
     return property(getter, setter, deleter, doc)
 
 
-def genericproperty(name, doc):
+def genericproperty(name: str, doc: str):
     """Set a range-like property"""
 
-    def getter(self):
+    def getter(self: "TagHolder") -> Any:
         return self.get_prop(name)
 
-    def setter(self, value):
+    def setter(self: "TagHolder", value: Any) -> None:
         self.type_registry.update({name: "generic"})
         self.set_prop(name, value)
 
-    def deleter(self):
+    def deleter(self: "TagHolder") -> None:
         self.delete_prop(name)
 
     return property(getter, setter, deleter, doc)
 
 
-def rangeproperty(name, doc):
-    def getter(self):
+def rangeproperty(name: str, doc: str):
+    def getter(self: "TagHolder") -> Any:
         return self.get_prop(name)
 
-    def setter(self, value):
+    def setter(
+        self: "TagHolder",
+        value: Union[
+            numbers.Number, Tuple[numbers.Number, numbers.Number], List[numbers.Number]
+        ],
+    ) -> None:
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise ValueError("A tuple/list of two element must be used.")
@@ -212,24 +223,24 @@ def rangeproperty(name, doc):
         self.type_registry.update({name: "range"})
         self.set_prop(name, value)
 
-    def deleter(self):
+    def deleter(self: "TagHolder") -> None:
         self.delete_prop(name)
 
     return property(getter, setter, deleter, doc)
 
 
-def nestedrangeproperty(name, doc):
-    def getter(self):
+def nestedrangeproperty(name: str, doc: str):
+    def getter(self: "TagHolder") -> Any:
         return self.get_prop(name)
 
-    def setter(self, value):
+    def setter(self: "TagHolder", value: Union[Tuple[Any, Any], List[Any]]) -> None:
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise RuntimeError("A tuple/list of two element must be used.")
         self.type_registry.update({name: "nested_range"})
         self.set_prop(name, value)
 
-    def deleter(self):
+    def deleter(self: "TagHolder") -> None:
         self.delete_prop(name)
 
     return property(getter, setter, deleter, doc)
@@ -238,46 +249,50 @@ def nestedrangeproperty(name, doc):
 class TagHolder:
     """Container for the tags"""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         """A container for tags of a single SeedAtom"""
-        self.prop_data = {}
-        self.type_registry = {}
-        self.disabled = False
+        self.prop_data: Dict[str, Any] = {}
+        self.type_registry: Dict[str, str] = {}
+        self.disabled: bool = False
 
-    def get_prop_dict(self):
+    def get_prop_dict(self) -> Dict[str, Any]:
         return self.prop_data
 
-    def clear_all(self):
+    def clear_all(self) -> None:
         """Set all property to be None"""
         self.prop_data.clear()
 
-    def get_prop(self, value):
+    def get_prop(self, value: str) -> Any:
         """Get property"""
         return self.prop_data.get(value)
 
-    def set_prop(self, name, value):
+    def set_prop(self, name: str, value: Any) -> None:
         """Set property"""
         return self.prop_data.__setitem__(name, value)
 
-    def set_tag(self, tag):
+    def set_tag(self, tag: str) -> None:
         """Set a tag-like property"""
         self.prop_data.__setitem__(tag, "")
 
-    def get_tag(self, tag):
+    def get_tag(self, tag: str) -> Optional[bool]:
         """Set a tag-like property"""
         value = self.prop_data.get(tag)
         if value == "":
             return True
         return None
 
-    def delete_prop(self, name):
+    def delete_prop(self, name: str) -> None:
         """Deleta a property"""
         self.prop_data.pop(name)
 
-    def to_string(self):
+    def delete(self, name: str) -> None:
+        """Delete a property by name"""
+        self.delete_prop(name)
+
+    def to_string(self) -> str:
         raise NotImplementedError
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         string = self.to_string()
         string = string.replace("\n", " ")
         string = string.replace("#", "")
@@ -292,7 +307,7 @@ class BuildcellParam(TagHolder):
     A class for storing parameters for the Buldcell program
     """
 
-    def to_string(self):
+    def to_string(self) -> str:
         """Return the string that should go into the .cell file"""
         lines = []
         for key, value in self.prop_data.items():
@@ -440,7 +455,7 @@ class SeedAtomTag(TagHolder):
     mult = genericproperty("MULT", "Multiplicity")
     spin = genericproperty("SPIN", "Magnetic spin moment")
 
-    def to_string(self):
+    def to_string(self) -> str:
         """
         Return the per entry string for this atom to be appended after its
         line in POSITIONS_FRAC / POSITIONS_ABS block
@@ -482,7 +497,7 @@ class SeedAtom(Atom, SeedAtomTag):
     Element atoms in a AIRSS seed
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
@@ -492,7 +507,9 @@ class SeedAtom(Atom, SeedAtomTag):
             ].type_registry
 
 
-def tuple2range(value):
+def tuple2range(
+    value: Union[numbers.Number, List[numbers.Number], Tuple[numbers.Number, ...]],
+) -> str:
     """
     Return the string for a given value. If the value is a tuple
     make it a range.
@@ -502,7 +519,7 @@ def tuple2range(value):
     return str(value)
 
 
-def get_cell_inp(atoms):
+def get_cell_inp(atoms: "SeedAtoms") -> CellInput:
     """Get the CellInput holder for a given seed"""
     cell = CellInput()
 
@@ -519,7 +536,7 @@ def get_cell_inp(atoms):
     return cell
 
 
-def get_cell_inp_lines(atoms):
+def get_cell_inp_lines(atoms: "SeedAtoms") -> List[str]:
     """
     Write the seed to a file handle
     """
