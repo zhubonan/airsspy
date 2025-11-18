@@ -54,5 +54,3 @@ echo ${hint} >> examples/1.10/README
 
 # Install the package dependencies
 ${KERNEL_PYTHON_PREFIX}/bin/pip install --no-cache-dir spglib ipypb pandas
-
-

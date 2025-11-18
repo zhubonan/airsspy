@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 ###########################################################################
 # airss-ase                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
@@ -23,9 +22,9 @@ Module for building the random cell
 
 import subprocess as sbp
 
+from ase import Atoms
 from castepinput import CellInput
 from castepinput.parser import PlainParser
-from ase import Atoms
 
 from .common import BuildcellError
 

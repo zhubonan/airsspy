@@ -11,7 +11,7 @@
 @@ -2606,6 +2607,21 @@
            end if
         endif
- 
+
 +       if (gracefile) then
 +          ctemp="gracebat hull.agr -hdevice PostScript -hardcopy -printfile hull.ps && ps2pdf14 -dOptimize hull.ps"
 +          stat=0
@@ -28,12 +28,12 @@
 +
 +
      else if(num_points.eq.3) then
- 
+
         call write_ternary()
 @@ -2621,6 +2637,20 @@
            end if
         endif
- 
+
 +       if (gracefile) then
 +          ctemp="gracebat ternary.agr -hdevice PostScript -hardcopy -printfile ternary.ps && ps2pdf14 -dOptimize ternary.ps"
 +          stat=0
@@ -49,7 +49,7 @@
 +
 +
         call write_ternary_R()
- 
+
      else if(num_points.eq.4) then
 @@ -3775,7 +3805,9 @@
            num_tasks=num_tasks+1
@@ -63,10 +63,10 @@
            na=na+1
            read(argbuff(na),*,err=106) comp_1
 @@ -3928,6 +3960,7 @@
-        print '(a)', ' -ph, --pressure_hull                 Extract the stable structures with pressure' 
-        print '(a)', ' -<n>                                 Component <n>' 
-        print '(a)', ' -xg, --xmgrace                       Plot output with xmgrace' 
-+       print '(a)', ' -xgf, --xmgrace-fileout              Save output plot in PNG format' 
-        print '(a)', ' -c,  --compare <thresh > <structure> Compare structure to all others' 
-        print '(a)', '      --delete                        Delete unwanted structures' 
-        print '(a)', ' -g,  --geometry [thresh]             Calculate the atomic geometry for the structures (default 0.1)' 
+        print '(a)', ' -ph, --pressure_hull                 Extract the stable structures with pressure'
+        print '(a)', ' -<n>                                 Component <n>'
+        print '(a)', ' -xg, --xmgrace                       Plot output with xmgrace'
++       print '(a)', ' -xgf, --xmgrace-fileout              Save output plot in PNG format'
+        print '(a)', ' -c,  --compare <thresh > <structure> Compare structure to all others'
+        print '(a)', '      --delete                        Delete unwanted structures'
+        print '(a)', ' -g,  --geometry [thresh]             Calculate the atomic geometry for the structures (default 0.1)'

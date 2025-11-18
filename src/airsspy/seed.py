@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 ###########################################################################
 # airss-ase                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
@@ -23,9 +22,10 @@ Classes for preparing AIRSS seed
 import numbers
 
 import numpy as np
+from ase import Atom, Atoms
+from ase.constraints import FixBondLengths, FixConstraint
 from castepinput import CellInput
-from ase.constraints import FixConstraint, FixBondLengths
-from ase import Atoms, Atom
+
 from .build import BuildcellError
 
 
@@ -46,7 +46,7 @@ class SeedAtoms(Atoms):
         They can be retrieved using ``get_atom_tag`` or set with ``set_atom_tag``.
         The ``atom_tags`` attribute also provide a convient way of accessing.
         """
-        super(SeedAtoms, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.gentags = BuildcellParam()
         # Construct tags for each Atom
         tags = []
@@ -207,7 +207,7 @@ def rangeproperty(name, doc):
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise ValueError("A tuple/list of two element must be used.")
-            if any([not isinstance(x, numbers.Number) for x in value]):
+            if any(not isinstance(x, numbers.Number) for x in value):
                 raise ValueError("Both elements need to be a number")
         self.type_registry.update({name: "range"})
         self.set_prop(name, value)
@@ -235,13 +235,13 @@ def nestedrangeproperty(name, doc):
     return property(getter, setter, deleter, doc)
 
 
-class TagHolder(object):
+class TagHolder:
     """Container for the tags"""
 
     def __init__(self, *args, **kwargs):
         """A container for tags of a single SeedAtom"""
-        self.prop_data = dict()
-        self.type_registry = dict()
+        self.prop_data = {}
+        self.type_registry = {}
         self.disabled = False
 
     def get_prop_dict(self):
@@ -284,7 +284,7 @@ class TagHolder(object):
         string = string.strip()
         if len(string) > 60:
             string = string[:60] + "..."
-        return "{}<{}>".format(type(self).__name__, string)
+        return f"{type(self).__name__}<{string}>"
 
 
 class BuildcellParam(TagHolder):
@@ -303,24 +303,24 @@ class BuildcellParam(TagHolder):
             if name == "FIX":
                 continue
             if type_string == "tag":
-                lines.append("#{}".format(name))
+                lines.append(f"#{name}")
             # Allow direct passing of string
             elif type_string == "generic":
-                lines.append("#{}={}".format(name, value))
+                lines.append(f"#{name}={value}")
                 continue
             elif type_string in ("range", "nested_range"):
                 # Check if there is a dictionary to unpack
                 # The value can be
                 if not isinstance(value, (list, tuple)):
-                    line = "#{}={}".format(name, value)
+                    line = f"#{name}={value}"
                 else:
                     # The value is a list/tuple
                     # is a simple range?
-                    if all([isinstance(x, numbers.Number) for x in value]):
-                        line = "#{}={}".format(name, tuple2range(value))
+                    if all(isinstance(x, numbers.Number) for x in value):
+                        line = f"#{name}={tuple2range(value)}"
                     # Deal with a nested range
                     else:
-                        line = "#{}={}".format(name, tuple2range(value[0]))
+                        line = f"#{name}={tuple2range(value[0])}"
                         tokens = [line]
                         if value[1]:
                             for k_tmp, v_tmp in value[1].items():
@@ -353,7 +353,7 @@ class BuildcellParam(TagHolder):
     nopush = genericproperty("NOPUSH", "No pushing")
     octet = genericproperty("OCTET", "")
     permfrac = genericproperty("PERMFRAC", "")
-    permute = genericproperty("PERMUTE", "")
+    permute = genericproperty("PERMUTE", "Enable permutation or specify species")
     rad = genericproperty("RAD", "")
     rash = genericproperty("RASH", "")
     rash_angamp = genericproperty("RASH_ANGAMP", "")
@@ -408,6 +408,13 @@ class BuildcellParam(TagHolder):
     compact = tagproperty("COMPACT", "Compact the cell using Niggli reduction")
     cons = genericproperty("CONS", "Parameter for cell shape constraint")
     natom = rangeproperty("NATOM", "Number of atoms in cell, if not explicitly defined")
+    formula = genericproperty("FORMULA", "Chemical formula (e.g., Si2O4)")
+    seed = genericproperty("SEED", "Random seed for reproducible structures")
+    vol = rangeproperty("VOL", "Target cell volume")
+    nfails = genericproperty("NFAILS", "Number of failures before giving up")
+    hole = genericproperty("HOLE", "Create a hole in the structure")
+    holepos = genericproperty("HOLEPOS", "Position for hole constraint")
+    shift = genericproperty("SHIFT", "Coordinate shift")
 
 
 class SeedAtomTag(TagHolder):
@@ -415,7 +422,7 @@ class SeedAtomTag(TagHolder):
 
     tagname = genericproperty("tagname", "Name of the tag")
     posamp = rangeproperty("POSAMP", "Position amplitude")
-    minamp = rangeproperty("POSAMP", "Minimum positional amplitude")
+    minamp = rangeproperty("MINAMP", "Minimum positional amplitude")
     zamp = rangeproperty("ZAMP", "Amplitude in Z")
     xamp = rangeproperty("XAMP", "Amplitude in X")
     yamp = rangeproperty("YAMP", "Amplitude in Y")
@@ -426,9 +433,12 @@ class SeedAtomTag(TagHolder):
     rad = genericproperty("RAD", "Radius of ion")
     occ = genericproperty("OCC", "Occupation, can be fractional (e.g 1/3)")
     perm = tagproperty("PERM", "")
-    athome = tagproperty("ATHOLE", "")
+    athole = tagproperty("ATHOLE", "Place at hole position")
     coord = rangeproperty("COORD", "Coordination of the ion")
     angamp = rangeproperty("ANGAMP", "Angular randomisation magnitude (for fragments)")
+    vol = genericproperty("VOL", "Atomic volume")
+    mult = genericproperty("MULT", "Multiplicity")
+    spin = genericproperty("SPIN", "Magnetic spin moment")
 
     def to_string(self):
         """
@@ -459,9 +469,9 @@ class SeedAtomTag(TagHolder):
                 if isinstance(value, (list, tuple)):
                     tokens.append("{}={}-{}".format(name, *value))
                 else:
-                    tokens.append("{}={}".format(name, value))
+                    tokens.append(f"{name}={value}")
             else:
-                tokens.append("{}={}".format(name, value))
+                tokens.append(f"{name}={value}")
 
         string = " ".join(tokens)
         return string
@@ -473,7 +483,7 @@ class SeedAtom(Atom, SeedAtomTag):
     """
 
     def __init__(self, *args, **kwargs):
-        super(SeedAtom, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
             self.prop_data = self.atoms.arrays["atom_gentags"][self.index].prop_data
@@ -488,7 +498,7 @@ def tuple2range(value):
     make it a range.
     """
     if isinstance(value, (list, tuple)):
-        return "{}-{}".format(value[0], value[1])
+        return f"{value[0]}-{value[1]}"
     return str(value)
 
 

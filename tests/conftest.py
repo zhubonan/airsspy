@@ -18,10 +18,31 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
 """
-Import common used stuff to the model namespace
+Test configuration
 """
+import sys
+import os
+from pathlib import Path
 
-from .seed import SeedAtoms
-from .build import Buildcell
+# Add src directory to Python path
+src_path = Path(__file__).parent.parent / "src"
+if str(src_path) not in sys.path:
+    sys.path.insert(0, str(src_path))
 
-__version__ = "0.1.3"
+from ase import Atoms
+from tempfile import mkstemp
+import pytest
+
+
+@pytest.fixture
+def al_atoms():
+    return Atoms(
+        "Al2", cell=[2, 2, 2], positions=[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], pbc=True
+    )
+
+
+@pytest.fixture
+def tmpfile():
+    fname = mkstemp()[1]
+    yield fname
+    os.remove(fname)

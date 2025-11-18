@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 ###########################################################################
 # airss-ase                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
@@ -18,23 +17,8 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
 """
-Test configuration
+Import common used stuff to the model namespace
 """
-from ase import Atoms
-from tempfile import mkstemp
-import os
-import pytest
 
 
-@pytest.fixture
-def al_atoms():
-    return Atoms(
-        "Al2", cell=[2, 2, 2], positions=[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], pbc=True
-    )
-
-
-@pytest.fixture
-def tmpfile():
-    fname = mkstemp()[1]
-    yield fname
-    os.remove(fname)
+__version__ = "0.1.3"

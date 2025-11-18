@@ -23,10 +23,12 @@ Test the Buildcell class
 
 import sys
 
+import shutil
+import subprocess
+
 import pytest
-from distutils import spawn
-from ..seed import SeedAtoms
-from ..build import Buildcell
+from airsspy.seed import SeedAtoms
+from airsspy.build import Buildcell
 
 
 @pytest.fixture
@@ -41,7 +43,7 @@ def template_c2():
 
 
 @pytest.mark.skipif(
-    spawn.find_executable("buildcell") is None or sys.version_info < (3,),
+    shutil.which("buildcell") is None or sys.version_info < (3,),
     reason="No buildcell executable in PATH or not running on Python 3",
 )
 def test_generate(template_c2):

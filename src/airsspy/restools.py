@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 ###########################################################################
 # airss-ase                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
@@ -21,6 +20,7 @@
 Tools for hanlding res files
 """
 import os
+
 from ase.io import write
 
 
@@ -69,7 +69,7 @@ def save_airss_res(atoms, info_dict, fname=None, force_write=False):
     # Get number of atoms, spin
     nat, sg = info_dict["nat"], info_dict["sym"]
     # Construct title line
-    pvh = " {:.3f} {:.3f} {:.6f} ".format(P, V, H)
+    pvh = f" {P:.3f} {V:.3f} {H:.6f} "
     title = (
         "TITL "
         + info_dict["uid"]

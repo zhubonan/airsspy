@@ -18,7 +18,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
 import pytest
-from ..seed import SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam, tuple2range
+from airsspy.seed import SeedAtom, SeedAtoms, SeedAtomTag, BuildcellParam, tuple2range
 
 
 def test_bc_param():
@@ -89,6 +89,59 @@ def test_tuple2range():
     """
     assert tuple2range(2) == "2"
     assert tuple2range((2, 3)) == "2-3"
+
+
+def test_missing_keywords():
+    """Test newly added missing keywords"""
+    bcp = BuildcellParam()
+
+    # Test new global keywords
+    bcp.formula = "Si2O4"
+    bcp.seed = "test123"
+    bcp.vol = (100, 200)
+    bcp.nfails = 10
+    bcp.hole = 1.5
+    bcp.holepos = "0.0 0.0 0.5"
+    bcp.shift = "0.1 0.1 0.1"
+    bcp.permute = "Si O"
+
+    output = bcp.to_string()
+    assert "FORMULA=Si2O4" in output
+    assert "SEED=test123" in output
+    assert "VOL=100-200" in output
+    assert "NFAILS=10" in output
+    assert "HOLE=1.5" in output
+    assert "HOLEPOS=0.0 0.0 0.5" in output
+    assert "SHIFT=0.1 0.1 0.1" in output
+    assert "PERMUTE=Si O" in output
+
+
+def test_new_per_atom_keywords():
+    """Test newly added per-atom keywords"""
+    param = SeedAtomTag()
+    param.tagname = "Si1"
+    param.vol = 20.0
+    param.mult = 2
+    param.spin = 1.5
+    param.athole = True
+
+    output = param.to_string()
+    assert output.startswith("# Si1 %")
+    assert "VOL=20.0" in output
+    assert "MULT=2" in output
+    assert "SPIN=1.5" in output
+    assert "ATHOLE" in output
+
+
+def test_formula_vs_species_conflict():
+    """Test that FORMULA and SPECIES can coexist in airsspy"""
+    bcp = BuildcellParam()
+    bcp.formula = "C2H4"
+    bcp.species = "C H"
+
+    output = bcp.to_string()
+    assert "FORMULA=C2H4" in output
+    assert "SPECIES=C H" in output
 
 
 def test_template_atom_write():

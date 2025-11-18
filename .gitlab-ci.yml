@@ -1,39 +1,60 @@
-image: python:3.6
+image: python:3.11
 
 stages:
+  - lint
   - test
   - deploy
 
 before_script:
   - export PATH=$HOME/.local/bin:$PATH
-  - pip install --user twine
-  - pip install --user -e .[testing]
-  - python setup.py sdist
+  - python -m pip install --upgrade pip
+  - pip install .[dev,test]
 
-pytest3:
-  stage: test
-  image: python:3.6
+lint:
+  stage: lint
   script:
-    - python -m pytest airsspy/
+    - ruff check src/
+    - ruff format --check src/
+    - mypy src/ --ignore-missing-imports
+
+pytest:
+  stage: test
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+  image: python:$PYTHON_VERSION
+  script:
+    - pip install .[test]
+    - python -m pytest tests/ --cov=src/airsspy --cov-report=xml
+    - python -m coverage report
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
 
 buildcell_check:
   # Test building with buildcell and run tests
   stage: test
+  image: python:3.11
   script:
-    # Install gfortran
+    # Install system dependencies
     - apt-get update
     - apt-get install -y gfortran liblapack-dev libopenblas-dev curl
+    # Install Python dependencies
+    - pip install .[test]
     # Get and compile AIRSS 0.9.1
     - curl -L -o AIRSS.tgz http://bit.ly/2KtvEWU
     - tar zxf AIRSS.tgz
     - cd airss-0.9.1 ; export FC=gfortran ; make all; make install
     - export PATH=$(pwd)/bin:$PATH
     - cd ../
-    # Install the package
-    - pip install --user -e .[testing]
-    - python -m pytest airsspy/tests/test_build.py
-  only:
-    - master
+    # Run buildcell-specific tests
+    - python -m pytest tests/test_build.py -v
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+    - if: $CI_COMMIT_BRANCH == "main"
 
 build_docker:
   # Test building docker image using repo2docker
@@ -42,7 +63,7 @@ build_docker:
   services:
     - docker:dind
   before_script:
-    - echo '0. Installing dependencies...' 
+    - echo '0. Installing dependencies...'
     - apk add --no-cache pigz python3
     - python3 -m venv venv
     - . venv/bin/activate
@@ -55,24 +76,39 @@ build_docker:
   only:
     - master
 
+build_package:
+  stage: deploy
+  script:
+    - pip install build
+    - python -m build
+  artifacts:
+    paths:
+      - dist/
+  only:
+    - tags
+    - master
+
 stage_production:
   stage: deploy
+  needs: [build_package]
   variables:
     TWINE_USERNAME: $STAGE_USERNAME
     TWINE_PASSWORD: $STAGE_PASSWORD
   script:
     - twine check dist/*
     - twine upload --repository-url $PACKAGR_REPOSITORY_URL dist/*
-  except:
-    - tags
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master"
+      when: manual
 
 deploy_production:
   stage: deploy
+  needs: [build_package]
   variables:
     TWINE_USERNAME: $PRODUCTION_USERNAME
     TWINE_PASSWORD: $PRODUCTION_PASSWORD
   script:
     - twine check dist/*
     - twine upload dist/*
-  only:
-    - tags
+  rules:
+    - if: $CI_COMMIT_TAG
