@@ -195,7 +195,6 @@ class BoolTag:
         return instance.get_tag(self.storage_name)
 
     def __set__(self, instance: "TagHolder", value: bool) -> None:
-        instance.type_registry.update({self.storage_name: "tag"})
         if value is True:
             instance.set_tag(self.storage_name)
         elif value is False:
@@ -230,7 +229,6 @@ class GenericTag:
         return instance.get_prop(self.storage_name)
 
     def __set__(self, instance: "TagHolder", value: Any) -> None:
-        instance.type_registry.update({self.storage_name: "generic"})
         instance.set_prop(self.storage_name, value)
 
     def __delete__(self, instance: "TagHolder") -> None:
@@ -273,7 +271,6 @@ class RangeTag:
                 raise ValueError("A tuple/list of two element must be used.")
             if any(not isinstance(x, numbers.Number) for x in value):
                 raise ValueError("Both elements need to be a number")
-        instance.type_registry.update({self.storage_name: "range"})
         instance.set_prop(self.storage_name, value)
 
     def __delete__(self, instance: "TagHolder") -> None:
@@ -310,7 +307,6 @@ class NestedRangeTag:
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise RuntimeError("A tuple/list of two element must be used.")
-        instance.type_registry.update({self.storage_name: "nested_range"})
         instance.set_prop(self.storage_name, value)
 
     def __delete__(self, instance: "TagHolder") -> None:
@@ -323,8 +319,21 @@ class TagHolder:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """A container for tags of a single SeedAtom"""
         self.prop_data: Dict[str, Any] = {}
-        self.type_registry: Dict[str, str] = {}
         self.disabled: bool = False
+        self._descriptor_cache: Optional[Dict[str, Any]] = None
+
+    def _get_descriptors(self) -> Dict[str, Any]:
+        """Build a cache of descriptors {storage_name: descriptor}"""
+        if self._descriptor_cache is None:
+            self._descriptor_cache = {}
+            # Iterate through the MRO to find all descriptors
+            for cls in type(self).__mro__:
+                for _, attr in cls.__dict__.items():
+                    if isinstance(
+                        attr, (BoolTag, GenericTag, RangeTag, NestedRangeTag)
+                    ):
+                        self._descriptor_cache[attr.storage_name] = attr
+        return self._descriptor_cache
 
     def get_prop_dict(self) -> Dict[str, Any]:
         return self.prop_data
@@ -381,22 +390,23 @@ class BuildcellParam(TagHolder):
     def to_string(self) -> str:
         """Return the string that should go into the .cell file"""
         lines = []
+        descriptors = self._get_descriptors()
+
         for key, value in self.prop_data.items():
             name = key.upper()
-            type_string = self.type_registry[key]
+            descriptor = descriptors.get(key)
+
             if value is False or value is None:
                 continue
             if name == "FIX":
                 continue
-            if type_string == "tag":
+
+            if isinstance(descriptor, BoolTag):
                 lines.append(f"#{name}")
-            # Allow direct passing of string
-            elif type_string == "generic":
+            elif isinstance(descriptor, GenericTag):
                 lines.append(f"#{name}={value}")
-                continue
-            elif type_string in ("range", "nested_range"):
+            elif isinstance(descriptor, (RangeTag, NestedRangeTag)):
                 # Check if there is a dictionary to unpack
-                # The value can be
                 if not isinstance(value, (list, tuple)):
                     line = f"#{name}={value}"
                 else:
@@ -530,17 +540,19 @@ class SeedAtomTag(TagHolder):
             raise ValueError("The tagname property must be set")
 
         tokens.append("# {} %".format(self.prop_data["tagname"]))
+        descriptors = self._get_descriptors()
+
         for key, value in self.prop_data.items():
             if key == "tagname":
                 continue
 
-            type_string = self.type_registry[key]
+            descriptor = descriptors.get(key)
             name = key.upper()
 
-            # Process the value based on type string
-            if type_string == "tag":
+            # Process the value based on descriptor type
+            if isinstance(descriptor, BoolTag):
                 tokens.append(name)
-            elif type_string == "range":
+            elif isinstance(descriptor, RangeTag):
                 if isinstance(value, (list, tuple)):
                     tokens.append("{}={}-{}".format(name, *value))
                 else:
@@ -562,9 +574,6 @@ class SeedAtom(Atom, SeedAtomTag):
         SeedAtomTag.__init__(self, *args, **kwargs)
         if self.atoms is not None:
             self.prop_data = self.atoms.arrays["atom_gentags"][self.index].prop_data
-            self.type_registry = self.atoms.arrays["atom_gentags"][
-                self.index
-            ].type_registry
 
 
 def tuple2range(

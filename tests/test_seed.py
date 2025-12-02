@@ -472,8 +472,9 @@ def test_property_deletion():
     assert "NFORM" not in output
 
 
-def test_type_registry_tracking():
-    """Test that type_registry correctly tracks property types"""
+def test_descriptor_type_introspection():
+    """Test that _get_descriptors correctly identifies descriptors"""
+    from airsspy.seed import BoolTag, GenericTag, RangeTag, NestedRangeTag
     bcp = BuildcellParam()
 
     # Set different property types
@@ -482,11 +483,17 @@ def test_type_registry_tracking():
     bcp.nform = 3  # range
     bcp.minsep = (2, {})  # nested_range
 
-    # Verify type registry
-    assert bcp.type_registry["FIX"] == "tag"
-    assert bcp.type_registry["FORMULA"] == "generic"
-    assert bcp.type_registry["NFORM"] == "range"
-    assert bcp.type_registry["MINSEP"] == "nested_range"
+    # Get descriptors
+    descriptors = bcp._get_descriptors()
+
+    # Verify descriptor types
+    assert isinstance(descriptors.get("FIX"), BoolTag)
+    assert isinstance(descriptors.get("FORMULA"), GenericTag)
+    assert isinstance(descriptors.get("NFORM"), RangeTag)
+    assert isinstance(descriptors.get("MINSEP"), NestedRangeTag)
+
+    # Test unknown descriptor returns None
+    assert descriptors.get("UNKNOWN_KEY") is None
 
 
 def test_clear_all():
