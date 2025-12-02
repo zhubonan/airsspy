@@ -410,7 +410,6 @@ class BuildcellParam(TagHolder):
     yamp = rangeproperty("YAMP", "Randomisation amplitude in Y")
     angamp = rangeproperty("ANGAMP", "Angular randomisation amplitude from fragments")
     sgrank = rangeproperty("SGRANK", "Minimum rank of the spacegroup")
-    species = nestedrangeproperty("SPECIES", "Species to be put into the cell")
     varvol = genericproperty(
         "VARVOL", "Target volume of cell with the original configuration"
     )
