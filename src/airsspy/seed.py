@@ -170,47 +170,100 @@ class SeedAtoms(Atoms):
         return atoms
 
 
-def tagproperty(name: str, doc: str):
-    """Set a tag-like property"""
+class BoolTag:
+    """Descriptor for tag-like properties (boolean flags)"""
 
-    def getter(self: "TagHolder") -> Optional[bool]:
-        return self.get_tag(name)
+    def __init__(self, doc: str = "", storage_name: Optional[str] = None) -> None:
+        self.doc = doc
+        self.name: str = ""
+        self._storage_name = storage_name
 
-    def setter(self: "TagHolder", value: bool) -> None:
-        self.type_registry.update({name: "tag"})
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+        if self._storage_name is None:
+            self._storage_name = name.upper()
+
+    @property
+    def storage_name(self) -> str:
+        """Storage name for the property, guaranteed to be set after __set_name__"""
+        assert self._storage_name is not None, "Descriptor not initialized"
+        return self._storage_name
+
+    def __get__(self, instance: Optional["TagHolder"], owner: type) -> Optional[bool]:
+        if instance is None:
+            return None
+        return instance.get_tag(self.storage_name)
+
+    def __set__(self, instance: "TagHolder", value: bool) -> None:
+        instance.type_registry.update({self.storage_name: "tag"})
         if value is True:
-            self.set_tag(name)
+            instance.set_tag(self.storage_name)
         elif value is False:
-            self.delete(name)
+            instance.delete(self.storage_name)
 
-    def deleter(self: "TagHolder") -> None:
-        self.delete(name)
-
-    return property(getter, setter, deleter, doc)
+    def __delete__(self, instance: "TagHolder") -> None:
+        instance.delete(self.storage_name)
 
 
-def genericproperty(name: str, doc: str):
-    """Set a range-like property"""
+class GenericTag:
+    """Descriptor for generic properties (any value type)"""
 
-    def getter(self: "TagHolder") -> Any:
-        return self.get_prop(name)
+    def __init__(self, doc: str = "", storage_name: Optional[str] = None) -> None:
+        self.doc = doc
+        self.name: str = ""
+        self._storage_name = storage_name
 
-    def setter(self: "TagHolder", value: Any) -> None:
-        self.type_registry.update({name: "generic"})
-        self.set_prop(name, value)
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+        if self._storage_name is None:
+            self._storage_name = name.upper()
 
-    def deleter(self: "TagHolder") -> None:
-        self.delete_prop(name)
+    @property
+    def storage_name(self) -> str:
+        """Storage name for the property, guaranteed to be set after __set_name__"""
+        assert self._storage_name is not None, "Descriptor not initialized"
+        return self._storage_name
 
-    return property(getter, setter, deleter, doc)
+    def __get__(self, instance: Optional["TagHolder"], owner: type) -> Any:
+        if instance is None:
+            return None
+        return instance.get_prop(self.storage_name)
+
+    def __set__(self, instance: "TagHolder", value: Any) -> None:
+        instance.type_registry.update({self.storage_name: "generic"})
+        instance.set_prop(self.storage_name, value)
+
+    def __delete__(self, instance: "TagHolder") -> None:
+        instance.delete_prop(self.storage_name)
 
 
-def rangeproperty(name: str, doc: str):
-    def getter(self: "TagHolder") -> Any:
-        return self.get_prop(name)
+class RangeTag:
+    """Descriptor for range properties (number or tuple of two numbers)"""
 
-    def setter(
-        self: "TagHolder",
+    def __init__(self, doc: str = "", storage_name: Optional[str] = None) -> None:
+        self.doc = doc
+        self.name: str = ""
+        self._storage_name = storage_name
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+        if self._storage_name is None:
+            self._storage_name = name.upper()
+
+    @property
+    def storage_name(self) -> str:
+        """Storage name for the property, guaranteed to be set after __set_name__"""
+        assert self._storage_name is not None, "Descriptor not initialized"
+        return self._storage_name
+
+    def __get__(self, instance: Optional["TagHolder"], owner: type) -> Any:
+        if instance is None:
+            return None
+        return instance.get_prop(self.storage_name)
+
+    def __set__(
+        self,
+        instance: "TagHolder",
         value: Union[
             numbers.Number, Tuple[numbers.Number, numbers.Number], List[numbers.Number]
         ],
@@ -220,30 +273,48 @@ def rangeproperty(name: str, doc: str):
                 raise ValueError("A tuple/list of two element must be used.")
             if any(not isinstance(x, numbers.Number) for x in value):
                 raise ValueError("Both elements need to be a number")
-        self.type_registry.update({name: "range"})
-        self.set_prop(name, value)
+        instance.type_registry.update({self.storage_name: "range"})
+        instance.set_prop(self.storage_name, value)
 
-    def deleter(self: "TagHolder") -> None:
-        self.delete_prop(name)
-
-    return property(getter, setter, deleter, doc)
+    def __delete__(self, instance: "TagHolder") -> None:
+        instance.delete_prop(self.storage_name)
 
 
-def nestedrangeproperty(name: str, doc: str):
-    def getter(self: "TagHolder") -> Any:
-        return self.get_prop(name)
+class NestedRangeTag:
+    """Descriptor for nested range properties (tuple/list of two elements)"""
 
-    def setter(self: "TagHolder", value: Union[Tuple[Any, Any], List[Any]]) -> None:
+    def __init__(self, doc: str = "", storage_name: Optional[str] = None) -> None:
+        self.doc = doc
+        self.name: str = ""
+        self._storage_name = storage_name
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+        if self._storage_name is None:
+            self._storage_name = name.upper()
+
+    @property
+    def storage_name(self) -> str:
+        """Storage name for the property, guaranteed to be set after __set_name__"""
+        assert self._storage_name is not None, "Descriptor not initialized"
+        return self._storage_name
+
+    def __get__(self, instance: Optional["TagHolder"], owner: type) -> Any:
+        if instance is None:
+            return None
+        return instance.get_prop(self.storage_name)
+
+    def __set__(
+        self, instance: "TagHolder", value: Union[Tuple[Any, Any], List[Any]]
+    ) -> None:
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise RuntimeError("A tuple/list of two element must be used.")
-        self.type_registry.update({name: "nested_range"})
-        self.set_prop(name, value)
+        instance.type_registry.update({self.storage_name: "nested_range"})
+        instance.set_prop(self.storage_name, value)
 
-    def deleter(self: "TagHolder") -> None:
-        self.delete_prop(name)
-
-    return property(getter, setter, deleter, doc)
+    def __delete__(self, instance: "TagHolder") -> None:
+        instance.delete_prop(self.storage_name)
 
 
 class TagHolder:
@@ -345,114 +416,104 @@ class BuildcellParam(TagHolder):
 
         return "\n".join(lines) + "\n"
 
-    fix = tagproperty("FIX", "Fix the cell")
-    abfix = tagproperty("ABFIX", "Fix ab axes")
-    adjgen = genericproperty("ADJGEN", "Adjust the general positions")
-    autoslack = tagproperty("AUTOSLACK", "")
-    breakamp = genericproperty("BREAKAMP", "Amplitude for breaking symmetry")
-    celladapt = genericproperty("CELLADAPT", "")
-    cellamp = genericproperty("CELLAMP", "Amplitude for cell")
-    cellcon = genericproperty("CELLCON", "")
-    coord = rangeproperty("COORD", "")
-    cylinder = genericproperty(
-        "CYLINDER",
-        "Confining cylinder(positive) or attractive line potential (neagtive)",
+    fix = BoolTag("Fix the cell")
+    abfix = BoolTag("Fix ab axes")
+    adjgen = GenericTag("Adjust the general positions")
+    autoslack = BoolTag("")
+    breakamp = GenericTag("Amplitude for breaking symmetry")
+    celladapt = GenericTag("")
+    cellamp = GenericTag("Amplitude for cell")
+    cellcon = GenericTag("")
+    coord = RangeTag("")
+    cylinder = GenericTag(
+        "Confining cylinder(positive) or attractive line potential (neagtive)"
     )
-    flip = tagproperty("flip", "Enable mirror reflection of fragments")
-    maxbangle = genericproperty("MAXBANGLE", "")
-    maxtime = genericproperty("MAXTIME", "")
-    minbangle = genericproperty("MINBANGLE", "")
-    focus = genericproperty("FOCUS", "Focus on composition?")
-    molecules = genericproperty("MOLECULES", "")
-    nocompact = genericproperty("NOCOMPACT", "No compact cell")
-    nopush = genericproperty("NOPUSH", "No pushing")
-    octet = genericproperty("OCTET", "")
-    permfrac = genericproperty("PERMFRAC", "")
-    permute = genericproperty("PERMUTE", "Enable permutation or specify species")
-    rad = genericproperty("RAD", "")
-    rash = genericproperty("RASH", "")
-    rash_angamp = genericproperty("RASH_ANGAMP", "")
-    rash_posamp = genericproperty("RASH_POSAMP", "")
-    remove = genericproperty("REMOVE", "")
-    slab = genericproperty("SLAB", "")
-    species = genericproperty("SPECIES", "")
-    sphere = genericproperty("SPHERE", "")
-    spin = genericproperty("SPIN", "")
-    supercell = genericproperty("SUPERCELL", "")
-    surface = tagproperty("SURFACE", "")
-    symm = genericproperty("SYMM", "")
-    symmno = genericproperty("SYMMNO", "")
-    symmorphic = tagproperty("SYMMORPHIC", "")
-    system = genericproperty("SYSTEM", "Crystal system")
-    targvol = rangeproperty("TARGVOL", "Target volume")
-    three = genericproperty("THREE", "User three body hard sphere potential")
-    tight = tagproperty("TIGHT", "Tigh packing?")
-    vacancies = genericproperty("VACANCIES", "Introduct vacancies")
-    vacuum = genericproperty("VACUUM", "Add vacuum")
-    width = genericproperty("WIDTH", "Width of a confining slab spacer")
+    flip = BoolTag("Enable mirror reflection of fragments", storage_name="flip")
+    maxbangle = GenericTag("")
+    maxtime = GenericTag("")
+    minbangle = GenericTag("")
+    focus = GenericTag("Focus on composition?")
+    molecules = GenericTag("")
+    nocompact = GenericTag("No compact cell")
+    nopush = GenericTag("No pushing")
+    octet = GenericTag("")
+    permfrac = GenericTag("")
+    permute = GenericTag("Enable permutation or specify species")
+    rad = GenericTag("")
+    rash = GenericTag("")
+    rash_angamp = GenericTag("")
+    rash_posamp = GenericTag("")
+    remove = GenericTag("")
+    slab = GenericTag("")
+    species = GenericTag("")
+    sphere = GenericTag("")
+    spin = GenericTag("")
+    supercell = GenericTag("")
+    surface = BoolTag("")
+    symm = GenericTag("")
+    symmno = GenericTag("")
+    symmorphic = BoolTag("")
+    system = GenericTag("Crystal system")
+    targvol = RangeTag("Target volume")
+    three = GenericTag("User three body hard sphere potential")
+    tight = BoolTag("Tigh packing?")
+    vacancies = GenericTag("Introduct vacancies")
+    vacuum = GenericTag("Add vacuum")
+    width = GenericTag("Width of a confining slab spacer")
 
-    cfix = tagproperty("CFIX", "Fix the caxis")
-    cluster = tagproperty("CLUSTER", "We are predicting CLUSTER")
-    nform = rangeproperty(
-        "NFORM",
-        (
-            "Number of formula units. "
-            "This must be set otherwise the number of atoms is n times "
-            "the number of symmetries"
-        ),
+    cfix = BoolTag("Fix the caxis")
+    cluster = BoolTag("We are predicting CLUSTER")
+    nform = RangeTag(
+        "Number of formula units. "
+        "This must be set otherwise the number of atoms is n times "
+        "the number of symmetries"
     )
-    minsep = nestedrangeproperty("MINSEP", "Minimum separation constraints")
-    posamp = nestedrangeproperty("POSAMP", "Position amplitudes")
-    symmops = rangeproperty("SYMMOPS", "Number of symmetry operation requested cell")
-    minamp = rangeproperty("MINAMP", "Minimum aplitude of randomisation")
-    zamp = rangeproperty("ZAMP", "Randomisation amplitude in Z")
-    xamp = rangeproperty("XAMP", "Randomisation amplitude in X")
-    yamp = rangeproperty("YAMP", "Randomisation amplitude in Y")
-    angamp = rangeproperty("ANGAMP", "Angular randomisation amplitude from fragments")
-    sgrank = rangeproperty("SGRANK", "Minimum rank of the spacegroup")
-    varvol = genericproperty(
-        "VARVOL", "Target volume of cell with the original configuration"
-    )
-    slack = rangeproperty(
-        "SLACK", "Slack the hard sphere potentials enforcing the MINSEP"
-    )
-    overlap = rangeproperty(
-        "OVERLAP", "Threhold of the overlap for the hard sphere potentials"
-    )
-    compact = tagproperty("COMPACT", "Compact the cell using Niggli reduction")
-    cons = genericproperty("CONS", "Parameter for cell shape constraint")
-    natom = rangeproperty("NATOM", "Number of atoms in cell, if not explicitly defined")
-    formula = genericproperty("FORMULA", "Chemical formula (e.g., Si2O4)")
-    seed = genericproperty("SEED", "Random seed for reproducible structures")
-    vol = rangeproperty("VOL", "Target cell volume")
-    nfails = genericproperty("NFAILS", "Number of failures before giving up")
-    hole = genericproperty("HOLE", "Create a hole in the structure")
-    holepos = genericproperty("HOLEPOS", "Position for hole constraint")
-    shift = genericproperty("SHIFT", "Coordinate shift")
+    minsep = NestedRangeTag("Minimum separation constraints")
+    posamp = NestedRangeTag("Position amplitudes")
+    symmops = RangeTag("Number of symmetry operation requested cell")
+    minamp = RangeTag("Minimum aplitude of randomisation")
+    zamp = RangeTag("Randomisation amplitude in Z")
+    xamp = RangeTag("Randomisation amplitude in X")
+    yamp = RangeTag("Randomisation amplitude in Y")
+    angamp = RangeTag("Angular randomisation amplitude from fragments")
+    sgrank = RangeTag("Minimum rank of the spacegroup")
+    varvol = GenericTag("Target volume of cell with the original configuration")
+    slack = RangeTag("Slack the hard sphere potentials enforcing the MINSEP")
+    overlap = RangeTag("Threhold of the overlap for the hard sphere potentials")
+    compact = BoolTag("Compact the cell using Niggli reduction")
+    cons = GenericTag("Parameter for cell shape constraint")
+    natom = RangeTag("Number of atoms in cell, if not explicitly defined")
+    formula = GenericTag("Chemical formula (e.g., Si2O4)")
+    seed = GenericTag("Random seed for reproducible structures")
+    vol = RangeTag("Target cell volume")
+    nfails = GenericTag("Number of failures before giving up")
+    hole = GenericTag("Create a hole in the structure")
+    holepos = GenericTag("Position for hole constraint")
+    shift = GenericTag("Coordinate shift")
 
 
 class SeedAtomTag(TagHolder):
     """Tags for a single auto"""
 
-    tagname = genericproperty("tagname", "Name of the tag")
-    posamp = rangeproperty("POSAMP", "Position amplitude")
-    minamp = rangeproperty("MINAMP", "Minimum positional amplitude")
-    zamp = rangeproperty("ZAMP", "Amplitude in Z")
-    xamp = rangeproperty("XAMP", "Amplitude in X")
-    yamp = rangeproperty("YAMP", "Amplitude in Y")
-    num = rangeproperty("NUM", "Number of atoms/fragments")
-    adatom = tagproperty("ADATOM", "Add atoms after making supercell")
-    fix = tagproperty("FIX", "FIX this atom")
-    nomove = tagproperty("NOMOVE", "Do not move this atom (even in push)")
-    rad = genericproperty("RAD", "Radius of ion")
-    occ = genericproperty("OCC", "Occupation, can be fractional (e.g 1/3)")
-    perm = tagproperty("PERM", "")
-    athole = tagproperty("ATHOLE", "Place at hole position")
-    coord = rangeproperty("COORD", "Coordination of the ion")
-    angamp = rangeproperty("ANGAMP", "Angular randomisation magnitude (for fragments)")
-    vol = genericproperty("VOL", "Atomic volume")
-    mult = genericproperty("MULT", "Multiplicity")
-    spin = genericproperty("SPIN", "Magnetic spin moment")
+    tagname = GenericTag("Name of the tag", storage_name="tagname")
+    posamp = RangeTag("Position amplitude")
+    minamp = RangeTag("Minimum positional amplitude")
+    zamp = RangeTag("Amplitude in Z")
+    xamp = RangeTag("Amplitude in X")
+    yamp = RangeTag("Amplitude in Y")
+    num = RangeTag("Number of atoms/fragments")
+    adatom = BoolTag("Add atoms after making supercell")
+    fix = BoolTag("FIX this atom")
+    nomove = BoolTag("Do not move this atom (even in push)")
+    rad = GenericTag("Radius of ion")
+    occ = GenericTag("Occupation, can be fractional (e.g 1/3)")
+    perm = BoolTag("")
+    athole = BoolTag("Place at hole position")
+    coord = RangeTag("Coordination of the ion")
+    angamp = RangeTag("Angular randomisation magnitude (for fragments)")
+    vol = GenericTag("Atomic volume")
+    mult = GenericTag("Multiplicity")
+    spin = GenericTag("Magnetic spin moment")
 
     def to_string(self) -> str:
         """
