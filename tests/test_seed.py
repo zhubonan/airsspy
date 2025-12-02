@@ -171,3 +171,336 @@ def test_template_atom_write():
     tmp = mkdtemp()
     fpath = os.path.join(tmp, "test.cell")
     atoms.write_seed(fpath)
+
+
+# ============================================================================
+# PHASE 1: Comprehensive Tests (added for dataclass modernization)
+# ============================================================================
+
+
+def test_all_buildcell_tag_properties():
+    """Test all tag properties in BuildcellParam"""
+    bcp = BuildcellParam()
+
+    # Test tag properties (boolean-like)
+    tag_properties = [
+        "fix",
+        "abfix",
+        "autoslack",
+        "flip",
+        "surface",
+        "symmorphic",
+        "cfix",
+        "cluster",
+        "tight",
+        "compact",
+    ]
+
+    for prop_name in tag_properties:
+        # Test setting to True
+        setattr(bcp, prop_name, True)
+        assert getattr(bcp, prop_name) is True, f"{prop_name} should be True"
+
+        # Test setting to False should remove it
+        setattr(bcp, prop_name, False)
+        assert getattr(bcp, prop_name) is None, f"{prop_name} should be None after False"
+
+
+def test_all_buildcell_range_properties():
+    """Test all range properties in BuildcellParam"""
+    bcp = BuildcellParam()
+
+    # Test range properties (number or 2-tuple)
+    range_properties = [
+        "coord",
+        "nform",
+        "symmops",
+        "minamp",
+        "zamp",
+        "xamp",
+        "yamp",
+        "angamp",
+        "sgrank",
+        "slack",
+        "overlap",
+        "natom",
+        "vol",
+        "targvol",
+    ]
+
+    for prop_name in range_properties:
+        # Test single number
+        setattr(bcp, prop_name, 5)
+        assert getattr(bcp, prop_name) == 5, f"{prop_name} should be 5"
+
+        # Test tuple
+        setattr(bcp, prop_name, (2, 10))
+        assert getattr(bcp, prop_name) == (2, 10), f"{prop_name} should be (2, 10)"
+
+        # Test validation - tuple with wrong length should fail
+        with pytest.raises(ValueError, match="two element"):
+            setattr(bcp, prop_name, (1, 2, 3))
+
+        # Test validation - tuple with non-numeric should fail
+        with pytest.raises(ValueError, match="number"):
+            setattr(bcp, prop_name, (1, "abc"))
+
+
+def test_all_buildcell_generic_properties():
+    """Test all generic properties in BuildcellParam"""
+    bcp = BuildcellParam()
+
+    # Test generic properties (any value)
+    generic_properties = {
+        "adjgen": "test_value",
+        "breakamp": 1.5,
+        "celladapt": "value",
+        "cellamp": 2.0,
+        "cellcon": "constraint",
+        "cylinder": 3.0,
+        "maxbangle": 180,
+        "maxtime": 100,
+        "minbangle": 0,
+        "focus": "composition",
+        "molecules": "H2O",
+        "nocompact": True,
+        "nopush": True,
+        "octet": "value",
+        "permfrac": 0.5,
+        "permute": "Si O",
+        "rad": 1.5,
+        "rash": "value",
+        "rash_angamp": 1.0,
+        "rash_posamp": 0.5,
+        "remove": "H",
+        "slab": "001",
+        "species": "C H O",  # Generic type per user requirement
+        "sphere": 5.0,
+        "spin": 2.0,
+        "supercell": "2x2x2",
+        "symm": "P1",
+        "symmno": 1,
+        "system": "cubic",
+        "three": "value",
+        "vacancies": "Si",
+        "vacuum": 10.0,
+        "width": 5.0,
+        "varvol": 100.0,
+        "cons": "constraint",
+        "formula": "Si2O4",
+        "seed": "12345",
+        "nfails": 10,
+        "hole": 1.5,
+        "holepos": "0 0 0",
+        "shift": "0.1 0.1 0.1",
+    }
+
+    for prop_name, test_value in generic_properties.items():
+        setattr(bcp, prop_name, test_value)
+        assert getattr(bcp, prop_name) == test_value, f"{prop_name} should be {test_value}"
+
+
+def test_all_buildcell_nested_range_properties():
+    """Test all nested range properties in BuildcellParam"""
+    bcp = BuildcellParam()
+
+    # Test minsep (nested range)
+    bcp.minsep = 2
+    assert bcp.minsep == 2
+
+    bcp.minsep = (2, 3)
+    assert bcp.minsep == (2, 3)
+
+    bcp.minsep = (2, {"Ce-O": (1, 2)})
+    assert bcp.minsep == (2, {"Ce-O": (1, 2)})
+
+    # Test species (nested range) - note: not posamp, which is range
+    bcp.species = ((1, 2), {"Si": 3})
+    assert bcp.species == ((1, 2), {"Si": 3})
+
+
+def test_all_seedatomtag_properties():
+    """Test all properties in SeedAtomTag"""
+    tag = SeedAtomTag()
+
+    # Generic property
+    tag.tagname = "C1"
+    assert tag.tagname == "C1"
+
+    # Range properties
+    tag.posamp = 1.5
+    assert tag.posamp == 1.5
+    tag.posamp = (1, 2)
+    assert tag.posamp == (1, 2)
+
+    tag.minamp = 0.5
+    tag.zamp = (0, 1)
+    tag.xamp = (0, 1)
+    tag.yamp = (0, 1)
+    tag.num = 3
+    tag.coord = (4, 6)
+    tag.angamp = (0, 180)
+
+    # Generic properties
+    tag.rad = 1.5
+    tag.occ = "1/3"
+    tag.vol = 20.0
+    tag.mult = 2
+    tag.spin = 1.5
+
+    # Tag properties
+    tag.adatom = True
+    assert tag.adatom is True
+    tag.adatom = False
+    assert tag.adatom is None
+
+    tag.fix = True
+    assert tag.fix is True
+    tag.nomove = True
+    assert tag.nomove is True
+    tag.perm = True
+    tag.athole = True
+
+
+def test_serialization_snapshot_buildcell():
+    """Capture exact serialization output for BuildcellParam"""
+    bcp = BuildcellParam()
+    bcp.nform = 3
+    bcp.symmops = (2, 4)
+    bcp.fix = True
+    bcp.minsep = [2, {"Ce-O": (2, 3)}]
+    bcp.formula = "Si2O4"
+    bcp.sgrank = 2
+
+    output = bcp.to_string()
+
+    # Verify exact format
+    assert "#NFORM=3" in output
+    assert "#SYMMOPS=2-4" in output
+    assert "#SGRANK=2" in output
+    assert "#MINSEP=2 Ce-O=2-3" in output
+    assert "#FORMULA=Si2O4" in output
+    # FIX should NOT appear in output (special case)
+    assert "#FIX" not in output
+
+
+def test_serialization_snapshot_seedatomtag():
+    """Capture exact serialization output for SeedAtomTag"""
+    tag = SeedAtomTag()
+    tag.tagname = "C1"
+    tag.posamp = (1, 2)
+    tag.num = 3
+    tag.fix = True
+
+    output = tag.to_string()
+
+    # Verify exact format
+    assert output.startswith("# C1 %")
+    assert "POSAMP=1-2" in output
+    assert "NUM=3" in output
+    assert "FIX" in output
+
+
+def test_numpy_array_storage():
+    """Verify SeedAtomTag works correctly in numpy arrays"""
+    import numpy as np
+
+    # Create SeedAtomTag instances
+    tags = [SeedAtomTag() for _ in range(5)]
+    tags[0].tagname = "C0"
+    tags[0].posamp = (1, 2)
+
+    # Store in numpy array
+    arr = np.array(tags, dtype=object)
+
+    # Verify they're the same objects
+    assert arr[0] is tags[0]
+
+    # Verify modification works
+    arr[1].tagname = "O1"
+    assert tags[1].tagname == "O1"
+
+    arr[2].num = 3
+    assert tags[2].num == 3
+
+    # Verify serialization
+    assert "POSAMP=1-2" in arr[0].to_string()
+    assert "O1" in arr[1].to_string()
+
+
+def test_full_workflow_integration():
+    """Integration test with SeedAtoms"""
+    atoms = SeedAtoms("C4")
+
+    # Set BuildcellParam properties
+    atoms.gentags.symmops = (2, 3)
+    atoms.gentags.sgrank = 2
+    atoms.gentags.minsep = [2, {"C-C": (2, 3)}]
+    atoms.gentags.compact = True
+
+    # Set SeedAtomTag properties
+    atoms[0].posamp = 3
+    atoms[0].xamp = (2, 3)
+    atoms[1].tagname = "CX0"
+    atoms[2].fix = True
+
+    # Get output
+    lines = atoms.get_cell_inp_lines()
+    buff = "\n".join(lines)
+
+    # Verify all properties appear correctly
+    assert "#SGRANK=2" in buff
+    assert "#SYMMOPS=2-3" in buff
+    assert "#MINSEP=2 C-C=2-3" in buff
+    assert "XAMP=2-3" in buff
+    assert "# C0" in buff
+    assert "# CX0 " in buff
+
+
+def test_property_deletion():
+    """Test that properties can be deleted"""
+    bcp = BuildcellParam()
+    bcp.nform = 3
+    assert bcp.nform == 3
+
+    # Delete property
+    del bcp.nform
+    assert bcp.nform is None
+
+    # Verify it doesn't appear in serialization
+    output = bcp.to_string()
+    assert "NFORM" not in output
+
+
+def test_type_registry_tracking():
+    """Test that type_registry correctly tracks property types"""
+    bcp = BuildcellParam()
+
+    # Set different property types
+    bcp.fix = True  # tag
+    bcp.formula = "Si2O4"  # generic
+    bcp.nform = 3  # range
+    bcp.minsep = (2, {})  # nested_range
+
+    # Verify type registry
+    assert bcp.type_registry["FIX"] == "tag"
+    assert bcp.type_registry["FORMULA"] == "generic"
+    assert bcp.type_registry["NFORM"] == "range"
+    assert bcp.type_registry["MINSEP"] == "nested_range"
+
+
+def test_clear_all():
+    """Test clear_all method"""
+    bcp = BuildcellParam()
+    bcp.nform = 3
+    bcp.formula = "Si2O4"
+    bcp.fix = True
+
+    # Clear all
+    bcp.clear_all()
+
+    # Verify all cleared
+    assert bcp.nform is None
+    assert bcp.formula is None
+    assert bcp.fix is None
+    assert len(bcp.prop_data) == 0
