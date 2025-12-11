@@ -1,3 +1,13 @@
+---
+jupytext:
+  text_representation:
+    format_name: myst
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
+
 # How to Create Structure Seeds
 
 Learn how to create seed files for different structure search scenarios.
@@ -8,7 +18,9 @@ Learn how to create seed files for different structure search scenarios.
 
 Create a seed with a fixed composition:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 from airsspy import SeedAtoms
 
 # Fixed composition: 6 carbon and 12 oxygen atoms
@@ -19,7 +31,9 @@ seed = SeedAtoms('C6O12', cell=[5, 5, 5], pbc=True)
 
 Use per-atom tags to specify variable composition:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('C', cell=[5, 5, 5], pbc=True)
 carbon = seed[0]
 carbon.num = (4, 8)  # 4-8 carbon atoms will be generated
@@ -29,7 +43,9 @@ carbon.num = (4, 8)  # 4-8 carbon atoms will be generated
 
 Global parameters apply to the entire structure:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('Si8', cell=[5, 5, 5], pbc=True)
 
 # Basic constraints
@@ -48,7 +64,9 @@ seed.gentags.targvol = 10.0         # Target volume per formula unit
 
 Set parameters for individual atoms:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('O2', cell=[5, 5, 5], pbc=True)
 
 # Access first oxygen atom
@@ -71,7 +89,9 @@ The `minsep` parameter controls minimum atomic separations.
 
 Set a global minimum separation for all atom pairs:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed.gentags.minsep = 1.5  # All pairs must be ≥1.5 Å apart
 ```
 
@@ -79,7 +99,9 @@ seed.gentags.minsep = 1.5  # All pairs must be ≥1.5 Å apart
 
 Set different separations for specific atom pairs:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('Si2O4', cell=[5, 5, 5], pbc=True)
 
 # Format: (default_value, {pair_dict})
@@ -95,7 +117,9 @@ This means:
 
 Use ranges to allow buildcell to vary the constraint:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 # Format: (default_range, {pair_ranges})
 seed.gentags.minsep = ((1.5, 2.0), {'Si-O': (1.8, 2.2)})
 ```
@@ -108,7 +132,9 @@ Buildcell will randomly select separations within these ranges.
 
 Create a seed with different atom types and per-atom constraints:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('AlNO', cell=[4, 4, 4], pbc=True)
 
 # Aluminum
@@ -137,7 +163,9 @@ seed.gentags.minsep = (1.5, {
 
 Request specific symmetry operations:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('C8', cell=[3, 3, 3], pbc=True)
 seed[0].num = 8
 
@@ -155,7 +183,9 @@ seed.gentags.symmorphic = True
 
 Control the generated cell volume:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('Si4', cell=[4, 4, 4], pbc=True)
 seed[0].num = 4
 
@@ -173,7 +203,9 @@ seed.gentags.cellamp = 0.5           # Randomize cell shape
 
 Control where atoms can be placed:
 
-```python
+```{code-cell} ipython3
+:tags: [hide-output]
+
 seed = SeedAtoms('Fe2', cell=[5, 5, 5], pbc=True)
 
 fe1 = seed[0]
@@ -194,38 +226,38 @@ fe2.zamp = 0.5          # Z direction: ±0.5 Å
 
 Save the seed to a .cell file:
 
-```python
-seed.write_seed('myseed.cell')
+```{code-cell} ipython3
+:tags: [hide-output]
+
+import tempfile
+import os
+
+temp_dir = tempfile.gettempdir()
+seed_path = os.path.join(temp_dir, 'myseed.cell')
+seed.write_seed(seed_path)
+print(f"Seed written to {seed_path}")
 ```
 
 ### Get as String
 
 View the seed content:
 
-```python
+```{code-cell} ipython3
+# Create a clean example seed for demonstration
+seed = SeedAtoms('Si', cell=[5, 5, 5], pbc=True)
+seed[0].num = 4
+seed.gentags.minsep = 2.0
+seed.gentags.varvol = 20
+
 lines = seed.get_cell_inp_lines()
 print('\n'.join(lines))
-```
-
-Example output:
-```
-%BLOCK lattice_cart
-5.0000000000  0.0000000000  0.0000000000
-0.0000000000  5.0000000000  0.0000000000
-0.0000000000  0.0000000000  5.0000000000
-%ENDBLOCK lattice_cart
-%BLOCK positions_abs
-Si  0.0000000000 0.0000000000 0.0000000000 # Si0 % NUM=4
-%ENDBLOCK positions_abs
-#MINSEP=2.0
-#VARVOL=20
 ```
 
 ## Complete Example
 
 Here's a complete example for a silicon-oxygen system:
 
-```python
+```{code-cell} ipython3
 from airsspy import SeedAtoms
 
 # Create seed
@@ -247,11 +279,20 @@ seed.gentags.varvol = 15
 seed.gentags.symmops = (2, 4)
 seed.gentags.compact = True
 
-# Save to file
-seed.write_seed('SiO2-search.cell')
+# Show the generated seed
+print("Seed file content:")
+print('\n'.join(seed.get_cell_inp_lines()))
 
 # Generate a structure
+print("\nGenerating a random structure...")
 random_structure = seed.build_random_atoms(timeout=15)
+
+if random_structure is not None:
+    print(f"✓ Generated structure with {len(random_structure)} atoms")
+    print(f"  Volume: {random_structure.get_volume():.2f} Å³")
+    print(f"  Formula: {random_structure.get_chemical_formula()}")
+else:
+    print("✗ Failed to generate structure")
 ```
 
 ## Tips and Best Practices

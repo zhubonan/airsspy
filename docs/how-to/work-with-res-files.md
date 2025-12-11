@@ -1,3 +1,13 @@
+---
+jupytext:
+  text_representation:
+    format_name: myst
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
+
 # How to Work with RES Files
 
 Learn how to read, write, and analyze AIRSS .res output files.
@@ -9,17 +19,66 @@ RES files are the standard output format from AIRSS searches. They contain:
 - Computed properties (energy, volume, pressure)
 - Metadata (unique ID, space group)
 
+## Setup: Create Sample RES Files
+
+First, let's create some sample RES files for demonstration:
+
+```{code-cell} ipython3
+:tags: [hide-output]
+
+from airsspy import SeedAtoms, save_airss_res
+from ase.calculators.lj import LennardJones
+from ase.optimize import BFGS
+from ase.constraints import UnitCellFilter
+import tempfile
+import os
+
+# Create temporary directory for examples
+temp_dir = tempfile.gettempdir()
+example_dir = os.path.join(temp_dir, 'res_examples')
+os.makedirs(example_dir, exist_ok=True)
+
+# Generate and save 3 example structures
+seed = SeedAtoms('Al', cell=[2, 2, 2], pbc=True)
+seed[0].num = 4
+seed.gentags.minsep = 1.5
+
+calc = LennardJones()
+
+for i in range(3):
+    atoms = seed.build_random_atoms()
+    if atoms is not None:
+        atoms.set_calculator(calc)
+        opt = BFGS(UnitCellFilter(atoms), logfile=None)
+        opt.run(fmax=0.05)
+
+        info_dict = {
+            'uid': f'Al-example-{i+1}',
+            'P': 0.0,
+            'V': atoms.get_volume(),
+            'H': atoms.get_potential_energy(),
+            'nat': len(atoms),
+            'sym': 'P1'
+        }
+
+        res_path = os.path.join(example_dir, f'Al-example-{i+1}.res')
+        save_airss_res(atoms, info_dict, res_path, force_write=True)
+
+print(f"Created 3 example RES files in {example_dir}")
+```
+
 ## Reading RES Files
 
 ### Using RESFile Class
 
 The most convenient way to work with RES files:
 
-```python
+```{code-cell} ipython3
 from airsspy import RESFile
 
 # Load a RES file
-res = RESFile.from_file('structure.res')
+res_path = os.path.join(example_dir, 'Al-example-1.res')
+res = RESFile.from_file(res_path)
 
 # Access properties
 print(f"Formula: {res.formula}")
@@ -27,17 +86,19 @@ print(f"Enthalpy: {res.enthalpy:.4f} eV")
 print(f"Volume: {res.volume:.2f} Å³")
 print(f"Pressure: {res.pressure:.2f} GPa")
 print(f"Space group: {res.symm}")
+print(f"Number of atoms: {res.natoms}")
 ```
 
 ### Loading Multiple Files
 
 Process a directory of RES files:
 
-```python
+```{code-cell} ipython3
 from pathlib import Path
 from airsspy import RESFile
 
-res_files = Path('.').glob('*.res')
+# Load all example RES files
+res_files = Path(example_dir).glob('*.res')
 structures = []
 
 for fpath in res_files:
@@ -48,39 +109,41 @@ for fpath in res_files:
 structures.sort(key=lambda r: r.enthalpy)
 
 print("Lowest energy structures:")
-for res in structures[:5]:
-    print(f"{res.label}: {res.enthalpy:.4f} eV")
+for i, res in enumerate(structures, 1):
+    print(f"  {i}. {res.label}: {res.enthalpy:.4f} eV, V={res.volume:.2f} Å³")
 ```
 
 ### Fast Loading (Metadata Only)
 
 Load only the TITL line without parsing structure:
 
-```python
-res = RESFile.from_file('structure.res', only_titl=True)
+```{code-cell} ipython3
+res = RESFile.from_file(res_path, only_titl=True)
 
 # Access metadata (faster)
 print(f"Label: {res.label}")
-print(f"Enthalpy: {res.enthalpy}")
+print(f"Enthalpy: {res.enthalpy:.4f} eV")
+print(f"Volume: {res.volume:.2f} Å³")
 # Note: structure will be None with only_titl=True
+print(f"Structure loaded: {res.structure is not None}")
 ```
 
 ### Using extract_res Function
 
 Extract metadata as a dictionary:
 
-```python
+```{code-cell} ipython3
 from airsspy import extract_res
 
-info = extract_res('structure.res')
+info = extract_res(res_path)
 
-print(info['uid'])      # Unique identifier
-print(info['H'])        # Enthalpy
-print(info['V'])        # Volume
-print(info['P'])        # Pressure
-print(info['nat'])      # Number of atoms
-print(info['sym'])      # Space group
-print(info['rem'])      # REM lines (list)
+print("Extracted metadata:")
+print(f"  UID: {info['uid']}")
+print(f"  Enthalpy: {info['H']:.4f} eV")
+print(f"  Volume: {info['V']:.2f} Å³")
+print(f"  Pressure: {info['P']:.2f} GPa")
+print(f"  N atoms: {info['nat']}")
+print(f"  Space group: {info['sym']}")
 ```
 
 ## Working with Structures
@@ -89,10 +152,10 @@ print(info['rem'])      # REM lines (list)
 
 Convert RES structure to ASE Atoms:
 
-```python
+```{code-cell} ipython3
 from airsspy import RESFile
 
-res = RESFile.from_file('structure.res')
+res = RESFile.from_file(res_path)
 
 # Get as ASE Atoms
 atoms = res.atoms
@@ -101,26 +164,23 @@ atoms = res.atoms
 print(f"Chemical formula: {atoms.get_chemical_formula()}")
 print(f"Number of atoms: {len(atoms)}")
 print(f"Cell volume: {atoms.get_volume():.2f} Å³")
-
-# Can use ASE I/O
-from ase.io import write
-write('structure.cif', atoms)
+print(f"Positions shape: {atoms.get_positions().shape}")
 ```
 
 ### Get Pymatgen Structure
 
 Get the pymatgen Structure object:
 
-```python
-res = RESFile.from_file('structure.res')
+```{code-cell} ipython3
+res = RESFile.from_file(res_path)
 
 # Access pymatgen Structure
 structure = res.structure
 
 # Use pymatgen functionality
 print(f"Composition: {structure.composition}")
+print(f"Reduced formula: {structure.composition.reduced_formula}")
 print(f"Density: {structure.density:.2f} g/cm³")
-print(f"Lattice: {structure.lattice}")
 ```
 
 ## Writing RES Files
@@ -129,106 +189,64 @@ print(f"Lattice: {structure.lattice}")
 
 Save an ASE Atoms object as a RES file:
 
-```python
-from airsspy import save_airss_res
-from ase import Atoms
+```{code-cell} ipython3
+from airsspy import save_airss_res, SeedAtoms
 
-# Your atoms object (from calculation, generation, etc.)
-atoms = Atoms('C4', positions=[[0,0,0], [1,1,1], [2,2,2], [3,3,3]],
-              cell=[5, 5, 5], pbc=True)
+# Create a simple structure
+seed = SeedAtoms('C', cell=[3, 3, 3], pbc=True)
+seed[0].num = 4
+seed.gentags.minsep = 1.5
 
-# Prepare metadata
-info_dict = {
-    'uid': 'carbon-test-1',
-    'P': 0.0,                           # Pressure (GPa)
-    'V': atoms.get_volume(),            # Volume (Å³)
-    'H': -20.5,                         # Enthalpy/energy (eV)
-    'nat': len(atoms),                  # Number of atoms
-    'sym': 'P1'                         # Space group
-}
+atoms = seed.build_random_atoms()
 
-# Save to file
-save_airss_res(atoms, info_dict, 'carbon-test-1.res')
-```
+if atoms is not None:
+    # Prepare metadata
+    info_dict = {
+        'uid': 'carbon-demo',
+        'P': 0.0,                           # Pressure (GPa)
+        'V': atoms.get_volume(),            # Volume (Å³)
+        'H': -20.5,                         # Enthalpy/energy (eV)
+        'nat': len(atoms),                  # Number of atoms
+        'sym': 'P1'                         # Space group
+    }
 
-### Overwrite Protection
+    # Save to file
+    demo_path = os.path.join(example_dir, 'carbon-demo.res')
+    save_airss_res(atoms, info_dict, demo_path, force_write=True)
+    print(f"✓ Saved to {demo_path}")
 
-By default, `save_airss_res` won't overwrite existing files:
-
-```python
-# This will raise FileExistsError if file exists
-save_airss_res(atoms, info_dict, 'existing.res')
-
-# Force overwrite
-save_airss_res(atoms, info_dict, 'existing.res', force_write=True)
+    # Read it back to verify
+    res = RESFile.from_file(demo_path)
+    print(f"✓ Verified: {res.label}, {res.natoms} atoms, H={res.enthalpy:.4f} eV")
 ```
 
 ### Auto-naming
 
 Let the function generate the filename from uid:
 
-```python
-info_dict = {'uid': 'my-structure', 'P': 0.0, 'V': 64.0,
-             'H': -10.0, 'nat': 8, 'sym': 'Fm-3m'}
+```{code-cell} ipython3
+:tags: [hide-output]
 
-# Filename will be 'my-structure.res'
-save_airss_res(atoms, info_dict)
-```
+if atoms is not None:
+    info_dict = {
+        'uid': 'auto-named-structure',
+        'P': 0.0,
+        'V': atoms.get_volume(),
+        'H': -15.0,
+        'nat': len(atoms),
+        'sym': 'P1'
+    }
 
-## Analyzing MINSEP
+    # Change to example directory
+    import os
+    orig_dir = os.getcwd()
+    os.chdir(example_dir)
 
-Extract minimum separation information:
+    # Filename will be 'auto-named-structure.res'
+    save_airss_res(atoms, info_dict, force_write=True)
 
-```python
-from airsspy import RESFile, format_minsep
-
-res = RESFile.from_file('structure.res')
-
-# Get minsep as dictionary
-minsep_dict = res.get_minsep(string=False)
-print(minsep_dict)
-# Example: {'C-C': 1.52, 'C-O': 1.43, 'O-O': 2.45}
-
-# Get minsep as formatted string
-minsep_str = res.get_minsep(string=True)
-print(minsep_str)
-# Example: "C-C=1.52 C-O=1.43 O-O=2.45"
-```
-
-## Advanced Reading
-
-### Using read_res_atoms
-
-Low-level function that returns atoms and TITL info:
-
-```python
-from airsspy import read_res_atoms
-
-with open('structure.res') as f:
-    lines = f.readlines()
-
-titl_info, atoms = read_res_atoms(lines)
-
-print(f"Label: {titl_info.label}")
-print(f"Enthalpy: {titl_info.enthalpy}")
-print(f"Atoms: {len(atoms)}")
-```
-
-### Using read_res_pmg
-
-Get pymatgen Structure with additional data:
-
-```python
-from airsspy import read_res_pmg
-
-with open('structure.res') as f:
-    lines = f.readlines()
-
-titl_info, rem_lines, structure, spins = read_res_pmg(lines)
-
-print(f"REM lines: {rem_lines}")
-print(f"Structure: {structure.composition}")
-print(f"Spins: {spins}")
+    os.chdir(orig_dir)
+    print(f"Saved as auto-named-structure.res")
 ```
 
 ## Batch Processing
@@ -237,13 +255,13 @@ print(f"Spins: {spins}")
 
 Process and rank all structures in a search:
 
-```python
+```{code-cell} ipython3
 from pathlib import Path
 from airsspy import RESFile
 
-# Load all RES files
+# Load all RES files from example directory
 results = []
-for fpath in Path('.').glob('*.res'):
+for fpath in Path(example_dir).glob('*.res'):
     try:
         res = RESFile.from_file(str(fpath))
         results.append({
@@ -255,86 +273,39 @@ for fpath in Path('.').glob('*.res'):
             'symm': res.symm
         })
     except Exception as e:
-        print(f"Failed to load {fpath}: {e}")
+        print(f"Failed to load {fpath.name}: {e}")
 
 # Sort by enthalpy
 results.sort(key=lambda x: x['enthalpy'])
 
 # Print summary
-print(f"\n{'Rank':<6} {'Label':<20} {'Enthalpy':<12} {'Volume':<10} {'Symm':<10}")
-print("-" * 70)
-for i, r in enumerate(results[:10], 1):
-    print(f"{i:<6} {r['label']:<20} {r['enthalpy']:<12.4f} {r['volume']:<10.2f} {r['symm']:<10}")
-```
-
-### Export to DataFrame
-
-Convert results to pandas DataFrame for analysis:
-
-```python
-import pandas as pd
-from pathlib import Path
-from airsspy import RESFile
-
-# Load structures
-data = []
-for fpath in Path('.').glob('*.res'):
-    res = RESFile.from_file(str(fpath))
-    data.append({
-        'label': res.label,
-        'enthalpy': res.enthalpy,
-        'volume': res.volume,
-        'pressure': res.pressure,
-        'natoms': res.natoms,
-        'symm': res.symm,
-        'formula': res.formula
-    })
-
-# Create DataFrame
-df = pd.DataFrame(data)
-df = df.sort_values('enthalpy')
-
-print(df.head(10))
-
-# Save to CSV
-df.to_csv('results_summary.csv', index=False)
-```
-
-## Symmetry Analysis
-
-### Using get_spacegroup_atoms
-
-Get symmetry information for an atoms object:
-
-```python
-from airsspy import get_spacegroup_atoms
-
-atoms = ...  # Your atoms object
-
-# Detect space group
-sg_info = get_spacegroup_atoms(atoms, symprec=0.1, angle_tolerance=5.0)
-print(f"Space group: {sg_info}")
+print(f"\n{'Rank':<6} {'Label':<25} {'Enthalpy':<12} {'Volume':<10} {'Symm':<10}")
+print("-" * 75)
+for i, r in enumerate(results[:5], 1):
+    print(f"{i:<6} {r['label']:<25} {r['enthalpy']:<12.4f} {r['volume']:<10.2f} {r['symm']:<10}")
 ```
 
 ## Complete Example: Post-Processing
 
 Here's a complete example for analyzing AIRSS results:
 
-```python
+```{code-cell} ipython3
 from pathlib import Path
-from airsspy import RESFile, format_minsep
+from airsspy import RESFile
 
-def analyze_search_results(pattern='*.res', top_n=10):
+def analyze_search_results(directory, top_n=5):
     """Analyze and summarize AIRSS search results"""
 
     # Load all structures
     structures = []
-    for fpath in Path('.').glob(pattern):
+    search_path = Path(directory)
+
+    for fpath in search_path.glob('*.res'):
         try:
             res = RESFile.from_file(str(fpath))
             structures.append(res)
         except Exception as e:
-            print(f"Warning: Could not load {fpath}: {e}")
+            print(f"Warning: Could not load {fpath.name}: {e}")
 
     if not structures:
         print("No structures found!")
@@ -345,7 +316,7 @@ def analyze_search_results(pattern='*.res', top_n=10):
 
     print(f"\nAnalyzed {len(structures)} structures")
     print(f"Energy range: {structures[-1].enthalpy - structures[0].enthalpy:.4f} eV")
-    print(f"\nTop {top_n} structures:\n")
+    print(f"\nTop {min(top_n, len(structures))} structures:\n")
 
     # Print summary table
     print(f"{'#':<4} {'Label':<25} {'Energy':<12} {'V/atom':<10} {'Symm':<12}")
@@ -358,12 +329,13 @@ def analyze_search_results(pattern='*.res', top_n=10):
     # Symmetry distribution
     symmetries = [res.symm for res in structures]
     print(f"\nSpace group distribution:")
-    for sg in sorted(set(symmetries)):
+    unique_symms = sorted(set(symmetries))
+    for sg in unique_symms[:5]:  # Show top 5
         count = symmetries.count(sg)
-        print(f"  {sg}: {count} structures")
+        print(f"  {sg}: {count} structure(s)")
 
-# Run analysis
-analyze_search_results(top_n=10)
+# Run analysis on our example directory
+analyze_search_results(example_dir, top_n=5)
 ```
 
 ## Troubleshooting

@@ -83,6 +83,31 @@ jobs:
     - name: Run buildcell tests
       run: pytest tests/test_build.py -v
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Conda
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        python-version: "3.11"
+        miniforge-version: latest
+        environment-file: docs/environment.yml
+        activate-environment: airsspy-docs
+    - name: Install package with docs dependencies
+      shell: bash -el {0}
+      run: |
+        pip install -e .[docs]
+    - name: Build documentation
+      shell: bash -el {0}
+      run: |
+        sphinx-build -W --keep-going docs docs/_build/html
+    - name: Upload documentation artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: documentation
+        path: docs/_build/html/
+
   build:
     runs-on: ubuntu-latest
     needs: [lint, test]

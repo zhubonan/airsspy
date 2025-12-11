@@ -5,3 +5,4 @@ docs/_build
 airss/
 build/
 docs/apidocs
+docs/jupyter_execute

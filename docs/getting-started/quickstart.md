@@ -1,3 +1,13 @@
+---
+jupytext:
+  text_representation:
+    format_name: myst
+kernelspec:
+  display_name: Python 3
+  language: python
+  name: python3
+---
+
 # Quickstart Tutorial
 
 Learn the basics of airsspy by performing a simple random structure search.
@@ -14,7 +24,7 @@ This tutorial demonstrates a complete AIRSS workflow: creating a seed, generatin
 
 ### Step 1: Import Required Modules
 
-```python
+```{code-cell} ipython3
 from airsspy import SeedAtoms, Buildcell
 from ase.calculators.lj import LennardJones
 from ase.optimize import BFGS
@@ -25,7 +35,7 @@ from ase.constraints import UnitCellFilter
 
 A seed defines the search template. Let's search for an 8-atom aluminum structure:
 
-```python
+```{code-cell} ipython3
 # Define the search seed
 seed = SeedAtoms('Al', cell=[2, 2, 2], pbc=True)
 seed.gentags.minsep = 1.5  # Minimum separation constraint
@@ -45,26 +55,13 @@ al.num = 8
 
 You can view the seed file content:
 
-```python
+```{code-cell} ipython3
 print('\n'.join(seed.get_cell_inp_lines()))
-```
-
-Output:
-```
-%BLOCK lattice_cart
-2.0000000000  0.0000000000  0.0000000000
-0.0000000000  2.0000000000  0.0000000000
-0.0000000000  0.0000000000  2.0000000000
-%ENDBLOCK lattice_cart
-%BLOCK positions_abs
-Al  0.0000000000 0.0000000000 0.0000000000 # Al0 % NUM=8
-%ENDBLOCK positions_abs
-#MINSEP=1.5
 ```
 
 ### Step 4: Generate a Random Structure
 
-```python
+```{code-cell} ipython3
 random_atoms = seed.build_random_atoms()
 
 # Check the generated structure
@@ -85,7 +82,7 @@ The buildcell program:
 
 Now let's generate and relax multiple random structures:
 
-```python
+```{code-cell} ipython3
 def relax_structure(seed, calculator, n_structures=10):
     """
     Generate and relax multiple random structures
@@ -110,8 +107,9 @@ def relax_structure(seed, calculator, n_structures=10):
     return results
 
 # Run the search with Lennard-Jones potential
+# Note: Using 5 structures for faster documentation build (typically use 20+)
 lj_calc = LennardJones()
-structures = relax_structure(seed, lj_calc, n_structures=20)
+structures = relax_structure(seed, lj_calc, n_structures=5)
 print(f"Successfully relaxed {len(structures)} structures")
 ```
 
@@ -119,7 +117,7 @@ print(f"Successfully relaxed {len(structures)} structures")
 
 Check the energies and identify the lowest-energy structure:
 
-```python
+```{code-cell} ipython3
 # Get energies
 energies = [atoms.get_potential_energy() for atoms in structures]
 
@@ -135,22 +133,28 @@ print(f"Energy range: {max(energies) - min(energies):.4f} eV")
 
 If you have spglib installed, you can analyze the symmetry:
 
-```python
-from spglib import get_spacegroup
+```{code-cell} ipython3
+try:
+    from airsspy import get_spacegroup_atoms
 
-symmetries = [get_spacegroup(atoms, symprec=0.5) for atoms in structures]
-print("Space groups found:")
-for sym in set(symmetries):
-    count = symmetries.count(sym)
-    print(f"  {sym}: {count} structures")
+    symmetries = [get_spacegroup_atoms(atoms, symprec=0.5) for atoms in structures]
+    print("Space groups found:")
+    for sym in set(symmetries):
+        count = symmetries.count(sym)
+        print(f"  {sym}: {count} structures")
+except ImportError:
+    print("spglib not installed - skipping symmetry analysis")
+    print("Install with: pip install spglib")
 ```
 
 ### Step 8: Save Results
 
 Save the best structure in AIRSS .res format:
 
-```python
+```{code-cell} ipython3
 from airsspy import save_airss_res
+import tempfile
+import os
 
 # Prepare metadata
 info_dict = {
@@ -162,15 +166,24 @@ info_dict = {
     'sym': 'P1'  # Would be determined by symmetry analysis
 }
 
-save_airss_res(best_structure, info_dict, 'Al-best.res')
-print("Saved best structure to Al-best.res")
+# Save to temporary file for this tutorial
+temp_dir = tempfile.gettempdir()
+res_path = os.path.join(temp_dir, 'Al-best.res')
+save_airss_res(best_structure, info_dict, res_path)
+print(f"Saved best structure to {res_path}")
+
+# Show a snippet of the res file
+with open(res_path, 'r') as f:
+    lines = f.readlines()[:10]  # First 10 lines
+    print("\nFirst few lines of .res file:")
+    print(''.join(lines))
 ```
 
 ## Complete Example Code
 
 Here's the full working example:
 
-```python
+```{code-cell} ipython3
 from airsspy import SeedAtoms
 from ase.calculators.lj import LennardJones
 from ase.optimize import BFGS
@@ -184,9 +197,9 @@ seed[0].num = 8
 # Set up calculator
 calc = LennardJones()
 
-# Run search
+# Run search (using 5 for faster execution, typically use 20+)
 results = []
-for i in range(20):
+for i in range(5):
     atoms = seed.build_random_atoms()
     if atoms is None:
         continue

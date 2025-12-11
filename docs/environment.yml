@@ -1,0 +1,22 @@
+# Conda environment for building documentation with executable notebooks
+# This includes the AIRSS package which provides the buildcell executable
+
+name: airsspy-docs
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # AIRSS package with buildcell executable
+  - airss-with-default-names
+
+  # Python and build tools
+  - python=3.11
+  - pip
+
+  # Core dependencies for airsspy (will also be installed via pip)
+  - numpy>=1.20
+  - ase>=3.17
+
+  # Documentation will be installed via pip install -e .[docs]
