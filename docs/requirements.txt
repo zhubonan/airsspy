@@ -1,0 +1,28 @@
+# Documentation build requirements for ReadTheDocs
+# Install with: pip install -r docs/requirements.txt
+
+# Sphinx core
+sphinx>=7.0
+
+# Theme
+pydata-sphinx-theme>=0.15
+
+# MyST Markdown and notebooks
+myst-nb>=1.0
+
+# Auto-documentation
+autodoc2>=0.5
+
+# UI components
+sphinx-design>=0.5
+sphinx-copybutton>=0.5
+sphinx-togglebutton>=0.3
+
+# Notebook execution
+ipykernel
+
+# Package dependencies (needed for autodoc2 to import modules)
+ase>=3.17
+castepinput>=0.1
+numpy>=1.20
+pymatgen>=2022.0.0
