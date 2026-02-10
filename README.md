@@ -2,6 +2,7 @@ airsspy
 ---------
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/zhubonan/airsspy/HEAD)
+[![Documentation Status](https://readthedocs.org/projects/airsspy/badge/?version=latest)](https://airsspy.readthedocs.io/en/latest/?badge=latest)
 
 A package to help working with the Ab initio Random Structure Searching ([AIRSS](https://www.mtg.msm.cam.ac.uk/Codes/AIRSS))
 using Atomic simulation environment ([ase](https://wiki.fysik.dtu.dk/ase/)).
@@ -18,6 +19,10 @@ and here, for building search seeds.
 AIRSS is a open source code licensed under GPLv2,
 this package does not contain any source code of AIRSS nor links to it.
 
+Documentation
+-------------
+
+Full documentation is available at [airsspy.readthedocs.io](https://airsspy.readthedocs.io/).
 
 What this does
 --------------
