@@ -59,7 +59,7 @@ To prepare a seed for generating a *sensible* random structure:
 ```python
 from airsspy import SeedAtoms
 seed = SeedAtoms('C6')
-seed.buiid.varvol = 20
+seed.build.varvol = 20
 seed.build.symmops = (2, 4)
 
 # Can also access per `atom` tags/ketwords just like in ASE

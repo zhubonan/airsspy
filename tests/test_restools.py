@@ -31,8 +31,8 @@ from airsspy.restools import (
     parse_titl,
     read_res_atoms,
     save_airss_res,
-    unique,
 )
+from airsspy.utils import unique
 from tempfile import mkstemp
 import numpy as np
 

@@ -34,7 +34,6 @@ from .restools import (
     read_res_atoms,
     read_res_pmg,
     save_airss_res,
-    unique,
 )
 from .seed import SeedAtoms
 from .utils import (
@@ -48,9 +47,7 @@ from .utils import (
     safe_cast_int,
     stream_to_list,
     trim_stream,
-)
-from .utils import (
-    unique as utils_unique,
+    unique,
 )
 
 __version__: Final = "0.1.4"
@@ -70,12 +67,11 @@ __all__ = [
     "get_spacegroup_atoms",
     "get_minsep",
     "format_minsep",
-    "unique",
     # Utilities
+    "unique",
     "trim_stream",
     "filter_out_stream",
     "calc_kpt_tuple_recip",
-    "utils_unique",
     "stream_to_list",
     "safe_cast_float",
     "safe_cast_int",
