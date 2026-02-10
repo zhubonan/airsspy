@@ -19,6 +19,7 @@
 """
 Tools for handling res files
 """
+
 import os
 import re
 from collections import namedtuple
@@ -331,8 +332,6 @@ def _get_res_lines(
 
     lines.append("END")
     return lines
-
-
 
 
 def read_res_atoms(lines: List[str]) -> Tuple[TitlInfo, Atoms]:

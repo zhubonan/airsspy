@@ -19,6 +19,7 @@
 """
 Classes for preparing AIRSS seed
 """
+
 import numbers
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
