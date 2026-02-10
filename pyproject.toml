@@ -34,7 +34,7 @@ dependencies = [
     "ase>=3.17",
     "castepinput>=0.1",
     "numpy>=1.20",
-    "pymatgen>=2022.0.0",
+    "pymatgen>=2024.2.20",
 ]
 
 [project.optional-dependencies]
