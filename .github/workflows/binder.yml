@@ -1,5 +1,13 @@
 name: Binder
-on: [push]
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
 
 jobs:
   Create-MyBinderOrg-Cache:
@@ -9,4 +17,4 @@ jobs:
       uses: jupyterhub/repo2docker-action@master
       with:
         NO_PUSH: true
-        MYBINDERORG_TAG: ${{ github.event.ref }} # This builds the container on mybinder.org with the branch that was pushed on.
+        # Removed MYBINDERORG_TAG to avoid SSL certificate issues
