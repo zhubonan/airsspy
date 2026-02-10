@@ -51,6 +51,7 @@ test = [
 ]
 dev = [
     "ruff",
+    "mypy",
     "pre-commit",
     "build",
     "twine",
