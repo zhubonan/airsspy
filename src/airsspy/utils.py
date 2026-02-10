@@ -19,6 +19,7 @@
 """
 General utility functions for AIRSS workflows
 """
+
 import io
 import re
 from typing import List, Optional, TextIO, Tuple
