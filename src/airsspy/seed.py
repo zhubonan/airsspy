@@ -503,7 +503,7 @@ class BuildcellParam(TagHolder):
 
 
 class SeedAtomTag(TagHolder):
-    """Tags for a single auto"""
+    """Tags for a single atom"""
 
     tagname = GenericTag("Name of the tag", storage_name="tagname")
     posamp = RangeTag("Position amplitude")

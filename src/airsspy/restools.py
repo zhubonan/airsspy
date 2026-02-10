@@ -33,6 +33,8 @@ from ase.io import write
 from pymatgen.core import Structure
 from pymatgen.io.ase import AseAtomsAdaptor
 
+from .utils import unique
+
 try:
     from spglib import get_spacegroup
 
@@ -220,7 +222,7 @@ def _read_res(lines: List[str]) -> Dict[str, Any]:
 
         elif tokens[0] == "SFAC":
             for atom_line in lines[line_no:]:
-                if line.strip() == "END":
+                if atom_line.strip() == "END":
                     break
 
                 match = RES_COORD_PATT_WITH_SPIN.search(atom_line)
@@ -314,6 +316,8 @@ def _get_res_lines(
     lines.append("LATT -1")
 
     unique_species = unique(species)
+    if not unique_species:
+        raise ValueError("Cannot write RES file with empty species list")
     lines.append("SFAC " + " ".join(unique_species))
     lookup = {s: i + 1 for i, s in enumerate(unique_species)}
 
@@ -329,13 +333,6 @@ def _get_res_lines(
     return lines
 
 
-def unique(items: List[Any]) -> List[Any]:
-    """Get a list of ordered unique items"""
-    out = []
-    for item in items:
-        if item not in out:
-            out.append(item)
-    return out
 
 
 def read_res_atoms(lines: List[str]) -> tuple[TitlInfo, Atoms]:

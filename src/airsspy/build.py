@@ -70,8 +70,6 @@ class Buildcell:
             bc_proc.kill()
             self.bc_out, self.bc_err = bc_proc.communicate()
             raise BuildcellError() from excep
-        else:
-            bc_proc.kill()
 
         # Write the output from buildcell
         if write_cell:
