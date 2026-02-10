@@ -22,7 +22,7 @@ Tools for handling res files
 import os
 import re
 from collections import namedtuple
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from ase import Atoms
@@ -335,7 +335,7 @@ def _get_res_lines(
 
 
 
-def read_res_atoms(lines: List[str]) -> tuple[TitlInfo, Atoms]:
+def read_res_atoms(lines: List[str]) -> Tuple[TitlInfo, Atoms]:
     """Read a RES file, return as (TitlInfo, ase.Atoms)"""
     out = _read_res(lines)
     return out["titl"], Atoms(
@@ -348,7 +348,7 @@ def read_res_atoms(lines: List[str]) -> tuple[TitlInfo, Atoms]:
 
 def read_res_pmg(
     lines: List[str],
-) -> tuple[TitlInfo, List[str], Optional[Structure], List[float]]:
+) -> Tuple[TitlInfo, List[str], Optional[Structure], List[float]]:
     """Read a RES file, return as (TitlInfo, rem_lines, pymatgen.Structure, spins)"""
     out = _read_res(lines)
     cell = cellpar_to_cell(out["cellpar"])
