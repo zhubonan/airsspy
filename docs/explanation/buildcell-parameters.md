@@ -107,7 +107,7 @@ seed.gentags.natom = 8           # Exactly 8 atoms
 |-----------|------|-------------|
 | `adjgen` | int | Adjust general positions |
 | `breakamp` | float | Symmetry breaking amplitude |
-| `celladapt` | any | Enable cell adaptation |
+| `celladapt` | bool | Enable cell adaptation |
 | `cellcon` | any | Cell constraints |
 | `cons` | str | Additional constraints |
 | `cylinder` | any | Cylindrical constraint |

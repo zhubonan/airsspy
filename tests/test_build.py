@@ -50,9 +50,11 @@ def test_generate(template_c2):
     bc = Buildcell(template_c2)
     atoms = bc.generate()
     assert atoms
+    assert atoms.pbc.tolist() == [True, True, True]
     assert bc.bc_err
     assert bc.bc_out
 
     # The method of the template atoms should also work
     atoms = template_c2.build_random_atoms()
     assert atoms
+    assert atoms.pbc.tolist() == [True, True, True]

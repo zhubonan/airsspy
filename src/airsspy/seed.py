@@ -388,6 +388,16 @@ class BuildcellParam(TagHolder):
     A class for storing parameters for the Buldcell program
     """
 
+    def populate_defaults(self) -> "BuildcellParam":
+        """Apply the active cell-level defaults used by AIRSS ``gencell``."""
+        self.symmops = (2, 4)
+        self.nform = 1
+        self.slack = 0.25
+        self.overlap = 0.1
+        self.compact = True
+        self.celladapt = True
+        return self
+
     def to_string(self) -> str:
         """Return the string that should go into the .cell file"""
         lines = []
@@ -432,7 +442,7 @@ class BuildcellParam(TagHolder):
     adjgen = GenericTag("Adjust the general positions")
     autoslack = BoolTag("")
     breakamp = GenericTag("Amplitude for breaking symmetry")
-    celladapt = GenericTag("")
+    celladapt = BoolTag("")
     cellamp = GenericTag("Amplitude for cell")
     cellcon = GenericTag("")
     coord = RangeTag("")
