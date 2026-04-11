@@ -530,3 +530,16 @@ def test_clear_all():
     assert bcp.formula is None
     assert bcp.fix is None
     assert len(bcp.prop_data) == 0
+
+
+def test_range_tag_random_choice():
+    """Test that RangeTag supports {'random': [2, 3, 4]} dict syntax"""
+    bcp = BuildcellParam()
+
+    # Set nform with random-choice dict
+    bcp.nform = {"random": [2, 3, 4, 6, 8]}
+    assert bcp.nform == {"random": [2, 3, 4, 6, 8]}
+
+    # Verify serialization produces #NFORM={2,3,4,6,8}
+    output = bcp.to_string()
+    assert "#NFORM={2,3,4,6,8}" in output

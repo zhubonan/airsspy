@@ -6,3 +6,5 @@ airss/
 build/
 docs/apidocs
 docs/jupyter_execute
+CLAUDE.md
+AGENTS.md

@@ -264,10 +264,21 @@ class RangeTag:
         self,
         instance: "TagHolder",
         value: Union[
-            numbers.Number, Tuple[numbers.Number, numbers.Number], List[numbers.Number]
+            numbers.Number,
+            Tuple[numbers.Number, numbers.Number],
+            List[numbers.Number],
+            Dict[str, List[int]],
         ],
     ) -> None:
-        if isinstance(value, (tuple, list)):
+        if isinstance(value, dict):
+            # Support {'random': [2, 3, 4, 6, 8]} syntax for buildcell
+            if list(value.keys()) != ["random"]:
+                raise ValueError("Dict value must have a single key 'random'")
+            if not isinstance(value["random"], list) or not all(
+                isinstance(x, int) for x in value["random"]
+            ):
+                raise ValueError("'random' value must be a list of integers")
+        elif isinstance(value, (tuple, list)):
             if len(value) != 2:
                 raise ValueError("A tuple/list of two element must be used.")
             if any(not isinstance(x, numbers.Number) for x in value):
@@ -417,8 +428,11 @@ class BuildcellParam(TagHolder):
             elif isinstance(descriptor, GenericTag):
                 lines.append(f"#{name}={value}")
             elif isinstance(descriptor, (RangeTag, NestedRangeTag)):
-                # Check if there is a dictionary to unpack
-                if not isinstance(value, (list, tuple)):
+                # Support dict values like {'random': [2, 3, 4, 6, 8]}
+                if isinstance(value, dict) and "random" in value:
+                    choices = ",".join(str(x) for x in value["random"])
+                    line = f"#{name}={{{choices}}}"
+                elif not isinstance(value, (list, tuple, dict)):
                     line = f"#{name}={value}"
                 else:
                     # The value is a list/tuple
