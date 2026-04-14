@@ -21,7 +21,8 @@ Classes for preparing AIRSS seed
 """
 
 import numbers
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from collections.abc import Sequence
+from typing import Any, Optional, Union
 
 import numpy as np
 from ase import Atom, Atoms
@@ -52,7 +53,7 @@ class SeedAtoms(Atoms):
         super().__init__(*args, **kwargs)
         self.gentags: BuildcellParam = BuildcellParam()
         # Construct tags for each Atom
-        tags: List[SeedAtomTag] = []
+        tags: list[SeedAtomTag] = []
         symbols = self.get_chemical_symbols()
         for i in range(len(self)):
             tag = SeedAtomTag()
@@ -90,7 +91,7 @@ class SeedAtoms(Atoms):
         """Return the python object represent the cell"""
         return get_cell_inp(self)
 
-    def get_cell_inp_lines(self) -> List[str]:
+    def get_cell_inp_lines(self) -> list[str]:
         """
         Return a list of strings of the seed file
         """
@@ -98,7 +99,7 @@ class SeedAtoms(Atoms):
 
     def build_random_atoms(
         self, timeout: int = 10, also_buildcell: bool = False, fail_ok: bool = True
-    ) -> Optional[Union[ASEAtoms, Tuple[ASEAtoms, Any]]]:
+    ) -> Optional[Union[ASEAtoms, tuple[ASEAtoms, Any]]]:
         """
         Returns the randomize Atoms built using ``buildcell`` program
         """
@@ -265,9 +266,9 @@ class RangeTag:
         instance: "TagHolder",
         value: Union[
             numbers.Number,
-            Tuple[numbers.Number, numbers.Number],
-            List[numbers.Number],
-            Dict[str, List[int]],
+            tuple[numbers.Number, numbers.Number],
+            list[numbers.Number],
+            dict[str, list[int]],
         ],
     ) -> None:
         if isinstance(value, dict):
@@ -314,7 +315,7 @@ class NestedRangeTag:
         return instance.get_prop(self.storage_name)
 
     def __set__(
-        self, instance: "TagHolder", value: Union[Tuple[Any, Any], List[Any]]
+        self, instance: "TagHolder", value: Union[tuple[Any, Any], list[Any]]
     ) -> None:
         if isinstance(value, (tuple, list)):
             if len(value) != 2:
@@ -330,11 +331,11 @@ class TagHolder:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """A container for tags of a single SeedAtom"""
-        self.prop_data: Dict[str, Any] = {}
+        self.prop_data: dict[str, Any] = {}
         self.disabled: bool = False
-        self._descriptor_cache: Optional[Dict[str, Any]] = None
+        self._descriptor_cache: Optional[dict[str, Any]] = None
 
-    def _get_descriptors(self) -> Dict[str, Any]:
+    def _get_descriptors(self) -> dict[str, Any]:
         """Build a cache of descriptors {storage_name: descriptor}"""
         if self._descriptor_cache is None:
             self._descriptor_cache = {}
@@ -347,7 +348,7 @@ class TagHolder:
                         self._descriptor_cache[attr.storage_name] = attr
         return self._descriptor_cache
 
-    def get_prop_dict(self) -> Dict[str, Any]:
+    def get_prop_dict(self) -> dict[str, Any]:
         return self.prop_data
 
     def clear_all(self) -> None:
@@ -602,7 +603,7 @@ class SeedAtom(Atom, SeedAtomTag):
 
 
 def tuple2range(
-    value: Union[numbers.Number, List[numbers.Number], Tuple[numbers.Number, ...]],
+    value: Union[numbers.Number, list[numbers.Number], tuple[numbers.Number, ...]],
 ) -> str:
     """
     Return the string for a given value. If the value is a tuple
@@ -630,7 +631,7 @@ def get_cell_inp(atoms: "SeedAtoms") -> CellInput:
     return cell
 
 
-def get_cell_inp_lines(atoms: "SeedAtoms") -> List[str]:
+def get_cell_inp_lines(atoms: "SeedAtoms") -> list[str]:
     """
     Write the seed to a file handle
     """

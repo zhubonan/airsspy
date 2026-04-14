@@ -8,7 +8,7 @@ version = "0.1.4"
 description = "A wrapper for using AIRSS with python and ase"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 authors = [
     {name = "Bonan Zhu", email = "zhubonan@outlook.com"}
 ]
@@ -22,7 +22,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -40,10 +39,26 @@ dependencies = [
 [project.optional-dependencies]
 analysis = [
     "pandas>=1.3.0",
+    "plotly",
+    "tqdm",
 ]
 full = [
     "pandas>=1.3.0",
     "spglib>=1.16",
+]
+jobflow = [
+    "jobflow>=0.1",
+    "maggma>=0.50",
+    "castepinput>=0.1",
+]
+database = [
+    "pymongo",
+    "mongomock",
+]
+cli = [
+    "click>=8.0",
+    "tabulate",
+    "tqdm",
 ]
 test = [
     "pytest>=6.0",
@@ -67,6 +82,9 @@ docs = [
     "ipykernel",  # For notebook execution
 ]
 
+[project.scripts]
+airss = "airsspy.cli:cli"
+
 [project.urls]
 Homepage = "https://github.com/zhubonan/airsspy"
 Repository = "https://github.com/zhubonan/airsspy"
@@ -85,7 +103,7 @@ include = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py39"
 
 [tool.ruff.lint]
 select = [
