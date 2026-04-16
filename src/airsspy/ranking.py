@@ -589,6 +589,189 @@ def eliminate_similar(
 
 
 # ---------------------------------------------------------------------------
+# Phase diagram / Maxwell construction
+# ---------------------------------------------------------------------------
+
+
+def infer_elements(records: list[StructureRecord]) -> list[str]:
+    """Infer the element list from all structures' species_counts.
+
+    Returns elements sorted by atomic number.
+    """
+    all_elements: set[str] = set()
+    for rec in records:
+        all_elements.update(rec.species_counts.keys())
+    return sorted(all_elements, key=lambda el: _ELEMENT_ORDER.get(el, 200))
+
+
+def check_elemental_references(
+    records: list[StructureRecord], elements: list[str]
+) -> list[str]:
+    """Check which elemental references are present.
+
+    Returns a list of elements that have no pure-element structure.
+    """
+    # Build a set of compositions that are pure elements
+    has_pure: set[str] = set()
+    for rec in records:
+        if len(rec.species_counts) == 1:
+            el = next(iter(rec.species_counts))
+            has_pure.add(el)
+    return [el for el in elements if el not in has_pure]
+
+
+def records_to_pd_entries(records: list[StructureRecord]) -> list:
+    """Convert StructureRecords to pymatgen PDEntry objects.
+
+    Uses Composition(species_counts) and total enthalpy as energy.
+    Sets entry.name = label for display.
+    """
+    from pymatgen.analysis.phase_diagram import PDEntry
+    from pymatgen.core.composition import Composition
+
+    entries = []
+    for rec in records:
+        comp = Composition(rec.species_counts)
+        entry = PDEntry(comp, energy=rec.enthalpy, name=rec.label)
+        entries.append(entry)
+    return entries
+
+
+def maxwell_construction(
+    records: list[StructureRecord],
+    elements: list[str] | None = None,
+    delta_e: float | None = None,
+    verbose: bool = True,
+) -> tuple[list[dict], object]:
+    """Compute convex hull using pymatgen PhaseDiagram.
+
+    Args:
+        records: Structure records to analyse.
+        elements: Element list for the chemical system. If None, inferred.
+        delta_e: Filter structures with e_above_hull above this (eV/atom).
+        verbose: If True, print warnings to stderr.
+
+    Returns:
+        Tuple of (output_records, PhaseDiagram, elements).
+        Each output dict has all rank fields plus:
+        - e_above_hull: energy above hull (eV/atom)
+        - hull_energy_per_atom: hull energy at this composition (eV/atom)
+        - formation_energy_per_atom: formation energy (eV/atom)
+        - on_hull: True if structure is on the convex hull
+
+    Raises:
+        ValueError: If fewer than 2 elements in the system.
+    """
+    import sys
+    import warnings
+
+    from pymatgen.analysis.phase_diagram import PDEntry, PhaseDiagram
+    from pymatgen.core.composition import Composition
+    from pymatgen.core import Element
+
+    if elements is None:
+        elements = infer_elements(records)
+
+    if len(elements) < 2:
+        raise ValueError(
+            f"Need at least 2 elements for a phase diagram, got {len(elements)}: "
+            f"{','.join(elements)}"
+        )
+
+    # Filter out records with no species data (e.g., unfinished runs)
+    valid_records = [r for r in records if r.species_counts]
+    if len(valid_records) < len(records):
+        skipped = len(records) - len(valid_records)
+        if verbose:
+            print(f"Warning: skipping {skipped} structures with no atom data", file=sys.stderr)
+
+    # Convert records to PDEntry
+    entries = records_to_pd_entries(valid_records)
+
+    # Add fake elemental references for any missing pure elements
+    missing = check_elemental_references(valid_records, elements)
+    fake_entries = []
+    if missing:
+        msg = f"Warning: no structures for pure elements: {', '.join(missing)}. Using E=0 references."
+        if verbose:
+            print(msg, file=sys.stderr)
+        for el in missing:
+            fake_entry = PDEntry(
+                Composition(el), energy=0.0, name=f"{el} (ref)"
+            )
+            fake_entries.append(fake_entry)
+        entries.extend(fake_entries)
+
+    # Build phase diagram — try with real Element objects first,
+    # fall back to letting pymatgen auto-detect (handles dummy species like A, B)
+    try:
+        pd_elements = [Element(el) for el in elements]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pd = PhaseDiagram(entries, elements=pd_elements)
+    except ValueError:
+        # Non-standard species names (e.g., A, B) — let pymatgen auto-detect
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            pd = PhaseDiagram(entries)
+
+    # Compute hull data for each record
+    output_records: list[dict] = []
+    for i, rec in enumerate(valid_records):
+        entry = entries[i]
+        comp = entry.composition
+
+        # Energy per atom (enthalpy / natoms)
+        h_per_atom = rec.enthalpy / rec.natoms if rec.natoms > 0 else rec.enthalpy
+
+        # Hull energy and energy above hull
+        hull_e = pd.get_hull_energy_per_atom(comp)
+        e_above = pd.get_e_above_hull(entry)
+        if e_above is None:
+            e_above = float("inf")
+
+        # Formation energy per atom
+        form_e = pd.get_form_energy_per_atom(entry)
+
+        on_hull = e_above < 1e-4
+
+        # Filter by delta_e
+        if delta_e is not None and e_above > delta_e:
+            continue
+
+        output_records.append(
+            {
+                "label": rec.label,
+                "pressure": rec.pressure,
+                "volume_per_fu": rec.volume_per_fu,
+                "enthalpy_per_fu": rec.enthalpy_per_fu,
+                "enthalpy_per_atom": h_per_atom,
+                "hull_energy_per_atom": hull_e,
+                "e_above_hull": e_above,
+                "formation_energy_per_atom": form_e,
+                "on_hull": on_hull,
+                "spin_per_fu": rec.spin / rec.n_formula_units
+                if rec.n_formula_units > 0
+                else 0.0,
+                "spin_abs_per_fu": rec.spin_abs / rec.n_formula_units
+                if rec.n_formula_units > 0
+                else 0.0,
+                "nfu": rec.n_formula_units,
+                "formula": rec.reduced_formula,
+                "symm": rec.symm,
+                "copies": rec.copies,
+                "source": rec.source,
+                "species_counts": rec.species_counts,
+            }
+        )
+
+    # Sort by e_above_hull (stable first), then by enthalpy_per_atom
+    output_records.sort(key=lambda r: (r["e_above_hull"], r["enthalpy_per_atom"]))
+
+    return output_records, pd, elements
+
+
+# ---------------------------------------------------------------------------
 # Ranking and output
 # ---------------------------------------------------------------------------
 
@@ -810,4 +993,214 @@ def format_rank_line(
     if summary_mode:
         parts.append(f"{rec.get('group_copies', rec['copies']):>6d}")
 
+    return " ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Maxwell plotting
+# ---------------------------------------------------------------------------
+
+
+def plot_maxwell(
+    ranked: list[dict],
+    elements: list[str],
+) -> object:
+    """Build a cryan-style convex hull plot using plotly.
+
+    Returns a plotly ``go.Figure``.  The layout has a main panel showing
+    formation enthalpy vs composition with all structures as scatter
+    points and the convex hull as lines, plus a right-hand panel listing
+    the stable phases (formula, nfu, space group, composition).
+
+    Args:
+        ranked: Output dicts from ``maxwell_construction()``.
+        elements: Element list (2 for binary).
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    if len(elements) != 2:
+        raise ValueError("Custom plot only supported for binary systems")
+
+    el_b, el_a = elements  # sorted by atomic number
+    x_label = f"x in {el_b}<sub>1-x</sub>{el_a}<sub>x</sub>"
+
+    # --- Collect scatter data ---
+    x_all, y_all, colors_all, labels_all = [], [], [], []
+    stable_seen: dict[str, dict] = {}
+
+    for rec in ranked:
+        sc = rec["species_counts"]
+        total = sum(sc.values())
+        x = sc.get(el_a, 0) / total if total > 0 else 0.0
+        y = rec["formation_energy_per_atom"]
+
+        x_all.append(x)
+        y_all.append(y)
+        labels_all.append(rec["label"])
+        colors_all.append("black" if rec["on_hull"] else "red")
+
+        if rec["on_hull"]:
+            formula = rec["formula"]
+            symm = rec["symm"].strip("()")
+            if formula not in stable_seen or y < stable_seen[formula]["y"]:
+                stable_seen[formula] = {
+                    "formula": formula,
+                    "nfu": rec["nfu"],
+                    "symm": symm,
+                    "x": x,
+                    "y": y,
+                }
+
+    stable_entries = sorted(stable_seen.values(), key=lambda s: s["x"])
+
+    # --- Build figure with two columns ---
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        column_widths=[0.72, 0.28],
+        horizontal_spacing=0.03,
+        specs=[[{"type": "xy"}, {"type": "domain"}]],
+        print_grid=False,
+    )
+
+    # Main panel: all structures
+    fig.add_trace(
+        go.Scatter(
+            x=x_all,
+            y=y_all,
+            mode="markers",
+            marker=dict(size=5, color=colors_all),
+            text=labels_all,
+            hovertemplate="x=%{x:.3f}<br>E<sub>f</sub>=%{y:.4f}<br>%{text}<extra></extra>",
+            showlegend=False,
+        ),
+        row=1,
+        col=1,
+    )
+
+    # Hull line over stable entries
+    if len(stable_entries) >= 2:
+        fig.add_trace(
+            go.Scatter(
+                x=[s["x"] for s in stable_entries],
+                y=[s["y"] for s in stable_entries],
+                mode="lines+markers",
+                line=dict(color="black", width=2),
+                marker=dict(size=7, color="black", symbol="circle"),
+                text=[s["formula"] for s in stable_entries],
+                hovertemplate="%{text}<extra></extra>",
+                showlegend=False,
+            ),
+            row=1,
+            col=1,
+        )
+
+    # Right panel: stable phases table
+    fig.add_trace(
+        go.Table(
+            header=dict(
+                values=["Phase", "nfu", "Space Group", "x"],
+                fill_color="lightgrey",
+                align="left",
+                font=dict(size=12),
+                line_color="black",
+            ),
+            cells=dict(
+                values=[
+                    [s["formula"] for s in stable_entries],
+                    [str(s["nfu"]) for s in stable_entries],
+                    [s["symm"] for s in stable_entries],
+                    [f"{s['x']:.3f}" for s in stable_entries],
+                ],
+                fill_color="white",
+                align="left",
+                font=dict(size=11),
+                line_color="black",
+            ),
+        ),
+        row=1,
+        col=2,
+    )
+
+    # Styling
+    fig.update_xaxes(title_text=x_label, range=[-0.02, 1.02], row=1, col=1)
+    fig.update_yaxes(title_text="Formation Enthalpy (eV/atom)", row=1, col=1)
+    fig.update_xaxes(showticklabels=False, showgrid=False, row=1, col=2)
+    fig.update_yaxes(showticklabels=False, showgrid=False, row=1, col=2)
+
+    fig.update_layout(
+        title=f"Convex Hull: {el_b}-{el_a}",
+        height=600,
+        width=900,
+        margin=dict(l=60, r=20, t=50, b=60),
+    )
+
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Maxwell formatting
+# ---------------------------------------------------------------------------
+
+
+def format_maxwell_header(
+    show_spin: bool = False,
+    long_labels: bool = False,
+) -> str:
+    """Format the header line for Maxwell construction output."""
+    struct_fmt = f"{'structure':>40s}" if long_labels else f"{'structure':<20s}"
+
+    parts = [
+        struct_fmt,
+        f"{'P/GPa':>9s}",
+        f"{'V/A^3':>10s}",
+        f"{'H/eV/atom':>12s}",
+        f"{'hull(eV/at)':>12s}",
+        f"{'e_hull(eV)':>11s}",
+        f"{'st':>3s}",
+    ]
+    if show_spin:
+        parts.append(f"{'S':>6s}")
+        parts.append(f"{'|S|':>6s}")
+    parts.extend(
+        [
+            f"{'nfu':>7s}",
+            f"{'formula':>18s}",
+            f"{'space group':>11s}",
+            f"{'#':>5s}",
+        ]
+    )
+    return " ".join(parts)
+
+
+def format_maxwell_line(
+    rec: dict,
+    long_labels: bool = False,
+    show_spin: bool = False,
+) -> str:
+    """Format a single Maxwell construction record as a cryan-compatible output line."""
+    label = rec["label"] if long_labels else rec["label"][:20]
+    status = "+" if rec["on_hull"] else "-"
+
+    parts = [
+        f"{label:>40s}" if long_labels else f"{label:<20s}",
+        f"{rec['pressure']:>9.2f}",
+        f"{rec['volume_per_fu']:>10.3f}",
+        f"{rec['enthalpy_per_atom']:>12.6f}",
+        f"{rec['hull_energy_per_atom']:>12.6f}",
+        f"{rec['e_above_hull']:>11.6f}",
+        f"{status:>3s}",
+    ]
+    if show_spin:
+        parts.append(f"{rec.get('spin_per_fu', 0.0):>6.2f}")
+        parts.append(f"{rec.get('spin_abs_per_fu', 0.0):>6.2f}")
+    parts.extend(
+        [
+            f"{rec['nfu']:>7d}",
+            f"{rec['formula']:>18s}",
+            f"{rec['symm'].strip('()'):>11s}",
+            f"{rec['copies']:>5d}",
+        ]
+    )
     return " ".join(parts)

@@ -267,6 +267,7 @@ def compose_task_doc(struct_name: str) -> dict:
                 if " Total  Charge(e)   Spin(hbar/2)" in line:
                     in_spin_group = True
                     spin_moms = []
+                    continue
                 if " Length (A)" in line:
                     in_spin_group = False
                 if in_spin_group:

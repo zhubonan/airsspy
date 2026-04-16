@@ -8,8 +8,10 @@ querying results, checking the environment, and utility tools.
 import click
 
 from .cmd_check import check
+from .cmd_convert import convert
 from .cmd_db import db
 from .cmd_deploy import deploy
+from .cmd_rank import rank
 from .cmd_tools import tools
 
 
@@ -46,4 +48,6 @@ def cli(ctx, db_host, db_port, db_name):
 cli.add_command(deploy)
 cli.add_command(db)
 cli.add_command(check)
+cli.add_command(convert)
+cli.add_command(rank)
 cli.add_command(tools)

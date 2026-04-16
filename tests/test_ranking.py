@@ -11,12 +11,18 @@ from airsspy.ranking import (
     _compute_distance_fingerprint,
     _parse_res_fast,
     _reduce_formula,
+    check_elemental_references,
     eliminate_similar,
     format_header,
+    format_maxwell_header,
+    format_maxwell_line,
     format_rank_line,
+    infer_elements,
+    maxwell_construction,
     rank_structures,
     read_res_file,
     read_res_stream,
+    records_to_pd_entries,
     summary_structures,
 )
 
@@ -800,3 +806,299 @@ class TestParsingEdgeCases:
         )
         # nfu=1 for empty counts, so this tests the normal path
         assert rec.enthalpy_per_fu == -5.0
+
+
+# ---------------------------------------------------------------------------
+# Binary system test data (Si-O for Maxwell construction tests)
+# ---------------------------------------------------------------------------
+
+RES_O2 = """\
+TITL O2-001 0.0 20.0 -10.000000 0 0 2 (P1) n - 1
+CELL 1.0  3.0 4.0 5.0 90.0 90.0 90.0
+LATT -1
+SFAC O
+O      1  0.0  0.0  0.0  1.0
+O      1  0.5  0.5  0.5  1.0
+END
+"""
+
+RES_SIO2_STABLE = """\
+TITL SiO2-001 0.0 45.0 -85.000000 0 0 6 (P-1) n - 1
+CELL 1.0  4.5 5.0 5.5 90.0 90.0 90.0
+LATT -1
+SFAC Si O
+Si     1  0.0  0.0  0.0  1.0
+Si     1  0.5  0.5  0.0  1.0
+O      2  0.25 0.25 0.5  1.0
+O      2  0.75 0.75 0.5  1.0
+O      2  0.25 0.75 0.0  1.0
+O      2  0.75 0.25 0.0  1.0
+END
+"""
+
+RES_SIO2_UNSTABLE = """\
+TITL SiO2-002 0.0 48.0 -82.000000 0 0 6 (P1) n - 1
+CELL 1.0  4.8 5.2 5.6 90.0 90.0 90.0
+LATT -1
+SFAC Si O
+Si     1  0.1  0.1  0.1  1.0
+Si     1  0.6  0.6  0.1  1.0
+O      2  0.3  0.3  0.6  1.0
+O      2  0.8  0.8  0.6  1.0
+O      2  0.3  0.8  0.1  1.0
+O      2  0.8  0.3  0.1  1.0
+END
+"""
+
+RES_SIO = """\
+TITL SiO-001 0.0 35.0 -55.000000 0 0 4 (P1) n - 1
+CELL 1.0  4.0 4.5 5.0 90.0 90.0 90.0
+LATT -1
+SFAC Si O
+Si     1  0.0  0.0  0.0  1.0
+Si     1  0.5  0.5  0.5  1.0
+O      2  0.25 0.25 0.25  1.0
+O      2  0.75 0.75 0.75  1.0
+END
+"""
+
+
+# ---------------------------------------------------------------------------
+# Maxwell helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestMaxwellHelpers:
+    def test_infer_elements_binary(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+            StructureRecord(
+                label="SiO2-001", pressure=0.0, volume=45.0, enthalpy=-80.5,
+                natoms=6, species_counts={"Si": 2, "O": 4},
+            ),
+        ]
+        elements = infer_elements(records)
+        assert elements == ["O", "Si"]  # sorted by atomic number
+
+    def test_infer_elements_single_raises(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+        ]
+        elements = infer_elements(records)
+        assert elements == ["Si"]
+
+    def test_check_elemental_references_all_present(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+            StructureRecord(
+                label="O2-001", pressure=0.0, volume=20.0, enthalpy=-10.0,
+                natoms=2, species_counts={"O": 2},
+            ),
+        ]
+        missing = check_elemental_references(records, ["Si", "O"])
+        assert missing == []
+
+    def test_check_elemental_references_missing_o(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+            StructureRecord(
+                label="SiO2-001", pressure=0.0, volume=45.0, enthalpy=-80.5,
+                natoms=6, species_counts={"Si": 2, "O": 4},
+            ),
+        ]
+        missing = check_elemental_references(records, ["Si", "O"])
+        assert missing == ["O"]
+
+    def test_records_to_pd_entries(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+        ]
+        entries = records_to_pd_entries(records)
+        assert len(entries) == 1
+        assert entries[0].name == "Si-001"
+        assert entries[0].energy == -42.5
+        assert entries[0].composition.reduced_formula == "Si"
+
+
+# ---------------------------------------------------------------------------
+# Maxwell construction tests
+# ---------------------------------------------------------------------------
+
+
+class TestMaxwellConstruction:
+    def _make_binary_records(self):
+        """Create a Si-O binary system with stable and unstable phases."""
+        records = []
+        for res_text in [RES_SI_1, RES_O2, RES_SIO2_STABLE, RES_SIO2_UNSTABLE, RES_SIO]:
+            lines = res_text.strip().splitlines()
+            rec = _parse_res_fast(lines)
+            if rec is not None:
+                records.append(rec)
+        return records
+
+    def test_binary_hull_basic(self):
+        records = self._make_binary_records()
+        ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
+        assert len(ranked) == 5
+        # Si and O should be on hull (elemental references)
+        si_rec = next(r for r in ranked if r["formula"] == "Si4")
+        o_rec = next(r for r in ranked if r["formula"] == "O2")
+        assert si_rec["on_hull"] == True
+        assert o_rec["on_hull"] == True
+
+    def test_binary_hull_stable_compound(self):
+        records = self._make_binary_records()
+        ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
+        # The stable SiO2 should be on hull
+        sio2_stable = next(r for r in ranked if r["label"] == "SiO2-001")
+        assert sio2_stable["on_hull"] == True
+        assert sio2_stable["e_above_hull"] == pytest.approx(0.0, abs=1e-4)
+
+    def test_binary_hull_unstable_compound(self):
+        records = self._make_binary_records()
+        ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
+        # The unstable SiO2 should be above hull
+        sio2_unstable = next(r for r in ranked if r["label"] == "SiO2-002")
+        assert sio2_unstable["on_hull"] == False
+        assert sio2_unstable["e_above_hull"] > 0
+
+    def test_fake_elemental_reference(self):
+        """When missing elemental reference, fake E=0 entry is created."""
+        records = [
+            StructureRecord(
+                label="SiO2-001", pressure=0.0, volume=45.0, enthalpy=-80.5,
+                natoms=6, species_counts={"Si": 2, "O": 4},
+            ),
+        ]
+        # No pure Si or O — should use fake references
+        ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"], verbose=False)
+        assert len(ranked) == 1
+        assert ranked[0]["e_above_hull"] >= 0
+
+    def test_single_element_raises(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+        ]
+        with pytest.raises(ValueError, match="at least 2 elements"):
+            maxwell_construction(records, elements=["Si"])
+
+    def test_delta_e_filter(self):
+        records = self._make_binary_records()
+        ranked, pd, _ = maxwell_construction(
+            records, elements=["Si", "O"], delta_e=0.1
+        )
+        # All on-hull entries should remain
+        for r in ranked:
+            assert r["e_above_hull"] <= 0.1 + 1e-6
+
+    def test_inferred_elements(self):
+        """Elements auto-detected when not provided."""
+        records = self._make_binary_records()
+        ranked, pd, _ = maxwell_construction(records)
+        assert len(pd.elements) == 2
+        elem_syms = {el.symbol for el in pd.elements}
+        assert elem_syms == {"Si", "O"}
+
+    def test_sorted_by_e_above_hull(self):
+        records = self._make_binary_records()
+        ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
+        for i in range(1, len(ranked)):
+            assert ranked[i]["e_above_hull"] >= ranked[i - 1]["e_above_hull"]
+
+
+# ---------------------------------------------------------------------------
+# Maxwell formatting tests
+# ---------------------------------------------------------------------------
+
+
+class TestMaxwellFormatting:
+    def test_format_maxwell_header(self):
+        header = format_maxwell_header()
+        assert "structure" in header
+        assert "hull(eV/at)" in header
+        assert "e_hull(eV)" in header
+        assert "st" in header
+
+    def test_format_maxwell_header_with_spin(self):
+        header = format_maxwell_header(show_spin=True)
+        assert "S" in header
+        assert "|S|" in header
+
+    def test_format_maxwell_line_stable(self):
+        rec = {
+            "label": "SiO2-001",
+            "pressure": 0.0,
+            "volume_per_fu": 22.5,
+            "enthalpy_per_atom": -14.166667,
+            "hull_energy_per_atom": -14.166667,
+            "e_above_hull": 0.0,
+            "on_hull": True,
+            "spin_per_fu": 0.0,
+            "spin_abs_per_fu": 0.0,
+            "nfu": 1,
+            "formula": "SiO2",
+            "symm": "(P-1)",
+            "copies": 1,
+        }
+        line = format_maxwell_line(rec)
+        assert "SiO2-001" in line
+        assert "+" in line
+
+    def test_format_maxwell_line_unstable(self):
+        rec = {
+            "label": "SiO2-002",
+            "pressure": 0.0,
+            "volume_per_fu": 24.0,
+            "enthalpy_per_atom": -13.666667,
+            "hull_energy_per_atom": -14.166667,
+            "e_above_hull": 0.5,
+            "on_hull": False,
+            "spin_per_fu": 0.0,
+            "spin_abs_per_fu": 0.0,
+            "nfu": 1,
+            "formula": "SiO2",
+            "symm": "(P1)",
+            "copies": 1,
+        }
+        line = format_maxwell_line(rec)
+        assert "SiO2-002" in line
+        assert "-" in line
+        assert "0.500000" in line
+
+    def test_format_maxwell_line_long_label(self):
+        rec = {
+            "label": "very-long-label-exceeding-twenty-chars",
+            "pressure": 0.0,
+            "volume_per_fu": 10.0,
+            "enthalpy_per_atom": -10.0,
+            "hull_energy_per_atom": -10.0,
+            "e_above_hull": 0.0,
+            "on_hull": True,
+            "spin_per_fu": 0.0,
+            "spin_abs_per_fu": 0.0,
+            "nfu": 1,
+            "formula": "Si",
+            "symm": "(P1)",
+            "copies": 1,
+        }
+        line_short = format_maxwell_line(rec, long_labels=False)
+        line_long = format_maxwell_line(rec, long_labels=True)
+        assert len(line_long) > len(line_short)
