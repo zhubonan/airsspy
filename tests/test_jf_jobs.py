@@ -173,6 +173,31 @@ def test_search_maker_pp3_success(mock_buildcell, mock_runner_cls, mock_compose)
     assert response.output.n_finished == 1
 
 
+@patch("airsspy.jf.jobs.compose_abacus_task_doc")
+@patch("airsspy.jf.jobs.AirssAbacusRelaxRunner")
+@patch("airsspy.jf.jobs.run_buildcell")
+def test_search_maker_abacus_success(mock_buildcell, mock_runner_cls, mock_compose):
+    mock_buildcell.return_value = {
+        "struct_name": "Si-001",
+        "seed_name": "Si",
+        "struct_content": "cell",
+    }
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = 0
+    mock_runner_cls.return_value = mock_runner
+    mock_compose.return_value = _make_task_doc()
+
+    maker = AirssSearchMaker(n_structures=1, code="abacus")
+    response = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput=MagicMock(),
+        project_name="test",
+    )
+
+    assert response.output.n_finished == 1
+
+
 @patch("airsspy.jf.jobs.compose_task_doc")
 @patch("airsspy.jf.jobs.run_buildcell")
 def test_search_maker_invalid_code(mock_buildcell, mock_compose):
@@ -284,6 +309,27 @@ def test_relax_maker_gulp_success(mock_runner_cls, mock_compose):
     mock_compose.return_value = _make_task_doc()
 
     maker = AirssRelaxMaker(code="gulp", executable="ggulp")
+    response = maker.make(
+        structures=[MagicMock()],
+        struct_names=["Si-001"],
+        cellinputs=[MagicMock()],
+        paraminput=MagicMock(),
+        project_name="test",
+        seed_name="Si",
+    )
+
+    assert response.output.n_finished == 1
+
+
+@patch("airsspy.jf.jobs.compose_abacus_task_doc")
+@patch("airsspy.jf.jobs.AirssAbacusRelaxRunner")
+def test_relax_maker_abacus_success(mock_runner_cls, mock_compose):
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = 0
+    mock_runner_cls.return_value = mock_runner
+    mock_compose.return_value = _make_task_doc()
+
+    maker = AirssRelaxMaker(code="abacus", executable="abacus")
     response = maker.make(
         structures=[MagicMock()],
         struct_names=["Si-001"],

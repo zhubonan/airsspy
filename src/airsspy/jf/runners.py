@@ -477,3 +477,289 @@ class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
 
     def _get_cmd(self, struct_name: str) -> list[str]:
         return ["pp3_relax", self.executable, struct_name]
+
+
+class AirssAbacusRelaxRunner:
+    """
+    Execute a cyclic ABACUS geometry optimisation.
+
+    Calls the ABACUS binary directly and manages the relaxation loop
+    in Python, following the same two-phase pattern as ``abacus_relax``:
+
+    1. Three short rough runs with ``relax_nmax=3``
+    2. Full convergence loop until two successive convergences
+
+    Between each ABACUS invocation, the structure is read from
+    ``STRU_ION_D``, converted back to .cell format, and fed into the
+    next iteration.
+    """
+
+    def __init__(
+        self,
+        executable: str = "abacus",
+        cycles: int = 4,
+        max_fails: int = 2,
+        max_iterations: int = 200,
+        pressure: float = 0.0,
+    ) -> None:
+        self.executable = executable
+        self.cycles = cycles
+        self.max_fails = max_fails
+        self.max_iterations = max_iterations
+        self.pressure = pressure
+
+    def _set_input_param(self, input_path: str, key: str, value: str) -> None:
+        """Set or add a parameter in an ABACUS INPUT file."""
+        content = Path(input_path).read_text()
+        lines = content.splitlines()
+        found = False
+        for i, line in enumerate(lines):
+            if re.match(rf"^\s*{re.escape(key)}", line):
+                lines[i] = f"{key} {value}"
+                found = True
+                break
+        if not found:
+            lines.append(f"{key} {value}")
+        Path(input_path).write_text("\n".join(lines))
+
+    def _detect_logfile(self, workdir: str, input_path: str) -> str:
+        """Detect the ABACUS log file path based on calculation type."""
+        from ..abacustools import detect_logfile
+
+        result = detect_logfile(workdir, input_path)
+        return result or ""
+
+    def prepare_inputs(
+        self,
+        struct_name: str,
+        cell_content: str,
+        input_content: str,
+    ) -> None:
+        """Write .cell and .INPUT files, convert .cell to STRU.
+
+        Args:
+            struct_name: Structure name (without extension).
+            cell_content: Content of the .cell file.
+            input_content: Content of the ABACUS INPUT file.
+        """
+        workdir = f"{struct_name}.abacus"
+        Path(workdir).mkdir(parents=True, exist_ok=True)
+
+        # Write .cell file
+        cell_path = struct_name + ".cell"
+        Path(cell_path).write_text(cell_content)
+
+        # Write INPUT file
+        input_path = struct_name + ".INPUT"
+        Path(input_path).write_text(input_content)
+
+        # Convert .cell to STRU using cell2stru
+        proc = subprocess.run(
+            ["cell2stru"],
+            input=cell_content,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(f"cell2stru failed for {struct_name}: {proc.stderr}")
+        Path(f"{workdir}/STRU").write_text(proc.stdout)
+
+        # Copy INPUT to workdir
+        Path(f"{workdir}/INPUT").write_text(input_content)
+
+    def _run_single(
+        self,
+        struct_name: str,
+        workdir: str,
+        input_path: str,
+    ) -> Optional[dict]:
+        """Run a single ABACUS calculation and parse results.
+
+        Returns:
+            Dict with converged, n_steps, energy, pressure, volume
+            or None if the calculation crashed.
+        """
+        proc = subprocess.run(
+            self.executable.split(),
+            capture_output=True,
+            text=True,
+            cwd=workdir,
+            check=False,
+        )
+
+        # Write stdout capture for compose_abacus_task_doc
+        Path(f"{workdir}/abacus_out").write_text(proc.stdout + proc.stderr)
+
+        # Check for crash (ABACUS writes "TOTAL  Time" on success)
+        if "TOTAL  Time" not in proc.stdout and "TOTAL  Time" not in proc.stderr:
+            logger.warning("ABACUS crashed for %s", struct_name)
+            return None
+
+        logfile = self._detect_logfile(workdir, input_path)
+        if not logfile:
+            logger.warning("No ABACUS log file found for %s", struct_name)
+            return None
+
+        from ..abacustools import parse_abacus_log
+
+        log_data = parse_abacus_log(logfile)
+        return log_data
+
+    def run(
+        self,
+        struct_name: str,
+        cell_content: str,
+        input_content: str,
+    ) -> int:
+        """
+        Run cyclic ABACUS relaxation.
+
+        Args:
+            struct_name: Structure name (without extension).
+            cell_content: Content of the .cell file.
+            input_content: Content of the ABACUS INPUT file.
+
+        Returns:
+            0 if converged, 1 if not converged or failed.
+        """
+        self.prepare_inputs(struct_name, cell_content, input_content)
+
+        workdir = f"{struct_name}.abacus"
+        input_path = f"{workdir}/INPUT"
+
+        # Save original relax_nmax if set by user
+        user_relax_nmax = None
+        input_lines = Path(input_path).read_text().splitlines()
+        for line in input_lines:
+            m = re.match(r"^\s*relax_nmax\s+(\S+)", line)
+            if m:
+                user_relax_nmax = m.group(1)
+                break
+
+        fail_counter = 0
+        success_counter = 0
+        iter_counter = 0
+        maxit = self.max_iterations
+
+        # Phase 1: rough runs with relax_nmax=3
+        if maxit > 0:
+            self._set_input_param(input_path, "relax_nmax", "3")
+
+            for _ in range(3):
+                if fail_counter > self.max_fails:
+                    return 1
+                result = self._run_single(struct_name, workdir, input_path)
+                if result is None:
+                    fail_counter += 1
+                    continue
+                fail_counter = 0
+                iter_counter += result.get("n_ionic_steps", 0)
+
+                if result.get("converged"):
+                    success_counter += 1
+                else:
+                    success_counter = 0
+
+                # Update cell from output
+                self._update_cell(struct_name, workdir)
+
+            # Restore original relax_nmax
+            if user_relax_nmax is None:
+                # Remove the line we added
+                content = Path(input_path).read_text()
+                lines = [
+                    line
+                    for line in content.splitlines()
+                    if not re.match(r"^\s*relax_nmax", line)
+                ]
+                Path(input_path).write_text("\n".join(lines))
+            else:
+                self._set_input_param(input_path, "relax_nmax", user_relax_nmax)
+
+        elif maxit < 0:
+            # Single-point energy
+            saved_calc = None
+            for line in Path(input_path).read_text().splitlines():
+                m = re.match(r"^\s*calculation\s+(\S+)", line)
+                if m:
+                    saved_calc = m.group(1)
+                    break
+            self._set_input_param(input_path, "calculation", "scf")
+
+            result = self._run_single(struct_name, workdir, input_path)
+            if result is None:
+                return 1
+            self._update_cell(struct_name, workdir)
+
+            if saved_calc:
+                self._set_input_param(input_path, "calculation", saved_calc)
+
+            success_counter = 2
+        else:
+            success_counter = 2
+
+        # Phase 2: full convergence loop
+        cycle = 0
+        while success_counter < 2 and cycle < self.cycles:
+            if fail_counter > self.max_fails:
+                return 1
+            if iter_counter >= abs(maxit) if maxit > 0 else self.max_iterations:
+                break
+
+            result = self._run_single(struct_name, workdir, input_path)
+            if result is None:
+                fail_counter += 1
+                cycle += 1
+                continue
+            fail_counter = 0
+            iter_counter += result.get("n_ionic_steps", 0)
+
+            if result.get("converged"):
+                success_counter += 1
+            else:
+                success_counter = 0
+
+            if iter_counter >= (maxit if maxit > 0 else self.max_iterations):
+                break
+
+            self._update_cell(struct_name, workdir)
+            cycle += 1
+
+        return 0 if success_counter >= 2 else 1
+
+    def _update_cell(self, struct_name: str, workdir: str) -> None:
+        """Read STRU_ION_D output and update the input .cell file."""
+        from castepinput.inputs import CellInput
+
+        from ..abacustools import parse_abacus_stru
+
+        stru_path = Path(workdir) / "OUT.ABACUS" / "STRU_ION_D"
+        if not stru_path.is_file():
+            return
+
+        elements, positions, cell = parse_abacus_stru(str(stru_path))
+
+        # Convert fractional to Cartesian positions
+        cart_positions = positions @ cell
+
+        cell_path = struct_name + ".cell"
+        if not Path(cell_path).is_file():
+            return
+
+        in_cell = CellInput.from_file(cell_path)
+        in_cell.set_cell(cell.tolist())
+        in_cell.set_positions(elements, cart_positions.tolist())
+        in_cell.save(cell_path)
+
+        # Also regenerate STRU for next ABACUS run
+        cell_content = Path(cell_path).read_text()
+        proc = subprocess.run(
+            ["cell2stru"],
+            input=cell_content,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            Path(f"{workdir}/STRU").write_text(proc.stdout)

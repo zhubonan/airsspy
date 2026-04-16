@@ -17,6 +17,7 @@ from pymatgen.core import Structure
 
 from .documents import AirssJobDoc, AirssResultDoc, RelaxOutcome
 from .runners import (
+    AirssAbacusRelaxRunner,
     AirssCastepRelaxRunner,
     AirssGulpRelaxRunner,
     AirssPp3RelaxRunner,
@@ -123,6 +124,22 @@ class AirssSearchMaker(Maker):
                 return_code = runner.run(
                     struct_name, struct_content, param_content, seed_name=seed_name
                 )
+            elif self.code == "abacus":
+                from ..abacustools import compose_abacus_task_doc
+
+                struct_content = Path(struct_name + ".cell").read_text()
+                param_content = (
+                    paraminput.get_string()
+                    if hasattr(paraminput, "get_string")
+                    else str(paraminput)
+                )
+                runner = AirssAbacusRelaxRunner(
+                    executable=self.executable,
+                    max_iterations=self.max_iterations,
+                )
+                return_code = runner.run(
+                    struct_name, struct_content, param_content
+                )
             else:
                 raise ValueError(f"Unknown code: {self.code}")
 
@@ -131,7 +148,12 @@ class AirssSearchMaker(Maker):
             else:
                 relax_status = RelaxOutcome.ERRORED
 
-            task_doc = compose_task_doc(struct_name)
+            if self.code == "abacus":
+                from ..abacustools import compose_abacus_task_doc
+
+                task_doc = compose_abacus_task_doc(struct_name)
+            else:
+                task_doc = compose_task_doc(struct_name)
             result_doc = AirssResultDoc(
                 struct_name=struct_name,
                 seed_name=seed_name,
@@ -262,6 +284,26 @@ class AirssRelaxMaker(Maker):
                 return_code = runner.run(
                     struct_name, struct_content, param_content, seed_name=seed_name
                 )
+            elif self.code == "abacus":
+                from ..abacustools import compose_abacus_task_doc
+
+                struct_content = (
+                    cellinput.get_string()
+                    if hasattr(cellinput, "get_string")
+                    else str(cellinput)
+                )
+                param_content = (
+                    paraminput.get_string()
+                    if hasattr(paraminput, "get_string")
+                    else str(paraminput)
+                )
+                runner = AirssAbacusRelaxRunner(
+                    executable=self.executable,
+                    max_iterations=self.max_iterations,
+                )
+                return_code = runner.run(
+                    struct_name, struct_content, param_content
+                )
             else:
                 raise ValueError(f"Unknown code: {self.code}")
 
@@ -269,7 +311,12 @@ class AirssRelaxMaker(Maker):
                 RelaxOutcome.FINISHED if return_code == 0 else RelaxOutcome.ERRORED
             )
 
-            task_doc = compose_task_doc(struct_name)
+            if self.code == "abacus":
+                from ..abacustools import compose_abacus_task_doc
+
+                task_doc = compose_abacus_task_doc(struct_name)
+            else:
+                task_doc = compose_task_doc(struct_name)
             result_doc = AirssResultDoc(
                 struct_name=struct_name,
                 seed_name=seed_name,

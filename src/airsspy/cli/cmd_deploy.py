@@ -10,6 +10,7 @@ SUFFIX_MAP = {
     "castep": ".param",
     "gulp": ".lib",
     "pp3": ".pp",
+    "abacus": ".INPUT",
 }
 
 
@@ -75,11 +76,13 @@ def deploy_search(
     seed_content = Path(seed + ".cell").read_text()
     param_content = Path(seed + SUFFIX_MAP[code]).read_text()
 
-    # Override executable for GULP/pp3 if still set to a CASTEP default
+    # Override executable for GULP/pp3/abacus if still set to a CASTEP default
     if code == "gulp" and "castep" in exe:
         exe = "ggulp"
     elif code == "pp3" and "castep" in exe:
         exe = "pp3"
+    elif code == "abacus" and "castep" in exe:
+        exe = "abacus"
 
     if dryrun:
         click.echo(f"Project: {project}, Seed: {seed}")
@@ -185,11 +188,13 @@ def deploy_relax(
 
     from airsspy.jf.jobs import AirssRelaxMaker
 
-    # Override executable for GULP/pp3 if still set to a CASTEP default
+    # Override executable for GULP/pp3/abacus if still set to a CASTEP default
     if code == "gulp" and "castep" in exe:
         exe = "ggulp"
     elif code == "pp3" and "castep" in exe:
         exe = "pp3"
+    elif code == "abacus" and "castep" in exe:
+        exe = "abacus"
 
     param_content = Path(param).read_text()
     paraminput = ParamInput.from_string(param_content)
