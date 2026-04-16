@@ -201,7 +201,7 @@ def test_castep_runner_converged(mock_run, mock_cellinput, tmp_path, monkeypatch
     mock_run.side_effect = write_castep_side_effect
 
     param = ParamInput()
-    runner = AirssCastepRelaxRunner(executable="castep", cycles=3, max_fails=2, max_iterations=200)
+    runner = AirssCastepRelaxRunner(executable="castep", max_fails=2, max_iterations=200)
     result = runner.run("Si-001", "cell content", param)
 
     assert result == 0
@@ -236,7 +236,7 @@ def test_castep_runner_max_iterations(mock_run, mock_cellinput, tmp_path, monkey
     mock_run.side_effect = write_castep_side_effect
 
     param = ParamInput()
-    runner = AirssCastepRelaxRunner(executable="castep", cycles=5, max_iterations=200)
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
     result = runner.run("Si-001", "cell content", param)
 
     assert result == 1
@@ -258,7 +258,7 @@ def test_castep_runner_max_fails(mock_run, mock_cellinput, tmp_path, monkeypatch
     mock_cellinput.from_file.return_value = mock_ci
 
     param = ParamInput()
-    runner = AirssCastepRelaxRunner(executable="castep", cycles=5, max_fails=2)
+    runner = AirssCastepRelaxRunner(executable="castep", max_fails=2)
     result = runner.run("Si-001", "cell content", param)
 
     assert result == 1

@@ -5,6 +5,7 @@ CLI commands for running AIRSS searches locally (non-jobflow, like airss.pl).
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import click
@@ -46,6 +47,40 @@ def _clean_failed(struct_name: str, code: str) -> None:
         shutil.rmtree(abacus_dir, ignore_errors=True)
 
 
+def _emit_diagnostics(struct_name: str, code: str) -> None:
+    """Write diagnostic information for a failed relaxation to stderr."""
+    print(f"\n  --- Diagnostics for {struct_name} ---", file=sys.stderr)
+
+    if code == "abacus":
+        abacus_out = Path(struct_name + ".abacus") / "abacus_out"
+        if abacus_out.is_file():
+            lines = abacus_out.read_text().splitlines()
+            tail = lines[-20:] if len(lines) > 20 else lines
+            for line in tail:
+                print(f"  | {line}", file=sys.stderr)
+
+        warning_log = Path(struct_name + ".abacus") / "warning.log"
+        if warning_log.is_file():
+            content = warning_log.read_text().strip()
+            if content:
+                print("  Warnings:", file=sys.stderr)
+                for line in content.splitlines()[-10:]:
+                    print(f"  ! {line}", file=sys.stderr)
+
+    elif code == "castep":
+        castep_file = Path(struct_name + ".castep")
+        if castep_file.is_file():
+            lines = castep_file.read_text().splitlines()
+            # Find the last error or warning
+            for line in reversed(lines[-30:]):
+                low = line.lower()
+                if "error" in low or "warning" in low or "failed" in low:
+                    print(f"  | {line.strip()}", file=sys.stderr)
+                    break
+
+    print(f"  --- End diagnostics ---\n", file=sys.stderr)
+
+
 def _pack_res_files(workdir: Path, output_name: str = "packed.res") -> Path:
     """Concatenate all ``.res`` files in *workdir* into a single file."""
     res_files = sorted(workdir.glob("*.res"))
@@ -59,7 +94,7 @@ def _pack_res_files(workdir: Path, output_name: str = "packed.res") -> Path:
     return packed
 
 
-def _create_runner(code, exe, cycles, max_iterations, cluster, pressure):
+def _create_runner(code, exe, max_iterations, cluster, pressure):
     """Create the appropriate relaxation runner for the given *code*."""
     from airsspy.jf.runners import (
         AirssAbacusRelaxRunner,
@@ -71,7 +106,6 @@ def _create_runner(code, exe, cycles, max_iterations, cluster, pressure):
     if code == "castep":
         return AirssCastepRelaxRunner(
             executable=exe,
-            cycles=cycles,
             max_iterations=max_iterations,
         )
     elif code == "gulp":
@@ -87,7 +121,6 @@ def _create_runner(code, exe, cycles, max_iterations, cluster, pressure):
     elif code == "abacus":
         return AirssAbacusRelaxRunner(
             executable=exe,
-            cycles=cycles,
             max_iterations=max_iterations,
             pressure=pressure,
         )
@@ -121,6 +154,11 @@ def _collect_result(struct_name: str, code: str) -> None:
 @click.group("run")
 def run():
     """Run AIRSS searches locally (non-jobflow, like airss.pl)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        stream=sys.stderr,
+    )
 
 
 @run.command("search")
@@ -166,9 +204,6 @@ def run():
     help="External pressure (GPa)",
 )
 @click.option(
-    "--cycles", default=4, type=int, show_default=True, help="Relaxation cycles"
-)
-@click.option(
     "--max-iterations",
     default=200,
     type=int,
@@ -200,7 +235,6 @@ def run_search(
     pack,
     build_only,
     pressure,
-    cycles,
     max_iterations,
     build_timeout,
     cluster,
@@ -212,17 +246,20 @@ def run_search(
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
 
-    # Read seed files
+    # Read seed cell content
     seed_cell = Path(seed + ".cell")
     if not seed_cell.exists():
         raise click.ClickException(f"Seed cell file not found: {seed_cell}")
     seed_content = seed_cell.read_text()
 
+    # Copy param file to workdir so runners can find it after chdir
     if not build_only:
         param_suffix = SUFFIX_MAP[code]
         param_file = Path(seed + param_suffix)
         if not param_file.exists():
             raise click.ClickException(f"Param file not found: {param_file}")
+        if Path(workdir).resolve() != Path().resolve():
+            shutil.copy2(param_file, workdir / param_file.name)
 
     if exe is None:
         exe = EXE_DEFAULTS[code]
@@ -280,7 +317,7 @@ def run_search(
 
             # Relax
             runner = _create_runner(
-                code, exe, cycles, max_iterations, cluster, pressure
+                code, exe, max_iterations, cluster, pressure
             )
 
             if code == "castep":
@@ -307,10 +344,15 @@ def run_search(
                 n_relaxed += 1
                 click.echo(f"  [{i}] Relaxed OK: {struct_name}")
             else:
+                try:
+                    _collect_result(struct_name, code)
+                    click.echo(f"  [{i}] Not converged: {struct_name}")
+                except Exception:
+                    click.echo(f"  [{i}] Relax FAILED: {struct_name}")
+                    _emit_diagnostics(struct_name, code)
+                    if not keep:
+                        _clean_failed(struct_name, code)
                 n_failed += 1
-                click.echo(f"  [{i}] Relax FAILED: {struct_name}")
-                if not keep:
-                    _clean_failed(struct_name, code)
 
         # Summary
         click.echo(
@@ -358,9 +400,6 @@ def run_search(
     help="External pressure (GPa)",
 )
 @click.option(
-    "--cycles", default=4, type=int, show_default=True, help="Relaxation cycles"
-)
-@click.option(
     "--max-iterations",
     default=200,
     type=int,
@@ -384,7 +423,6 @@ def run_relax(
     keep,
     pack,
     pressure,
-    cycles,
     max_iterations,
     cluster,
     walltime_buffer,
@@ -414,7 +452,7 @@ def run_relax(
 
         sched = Dummy()
 
-    runner = _create_runner(code, exe, cycles, max_iterations, cluster, pressure)
+    runner = _create_runner(code, exe, max_iterations, cluster, pressure)
 
     orig_dir = os.getcwd()
     os.chdir(workdir)
@@ -459,10 +497,15 @@ def run_relax(
                 n_relaxed += 1
                 click.echo(f"  [{i}/{total}] OK: {struct_name}")
             else:
+                try:
+                    _collect_result(struct_name, code)
+                    click.echo(f"  [{i}/{total}] Not converged: {struct_name}")
+                except Exception:
+                    click.echo(f"  [{i}/{total}] FAILED: {struct_name}")
+                    _emit_diagnostics(struct_name, code)
+                    if not keep:
+                        _clean_failed(struct_name, code)
                 n_failed += 1
-                click.echo(f"  [{i}/{total}] FAILED: {struct_name}")
-                if not keep:
-                    _clean_failed(struct_name, code)
 
         click.echo(
             f"\nRelaxation complete: {n_relaxed}/{total} succeeded, {n_failed} failed"

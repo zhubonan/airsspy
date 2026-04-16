@@ -67,16 +67,16 @@ def parse_abacus_log(logfile: str) -> dict:
             if m:
                 result["energy"] = float(m.group(1))
 
-    # Pressure
+    # Pressure — use the last occurrence (final ionic step value)
     # LTS: #TOTAL-PRESSURE# (EXCLUDE KINETIC PART OF IONS): <val> GPa
-    m = re.search(r"#TOTAL-PRESSURE#.*?([-eE+0-9.]+)\s*GPa", content, re.IGNORECASE)
-    if m:
-        result["pressure"] = float(m.group(1))
+    matches = re.findall(r"#TOTAL-PRESSURE#.*?([-eE+0-9.]+)\s*GPa", content, re.IGNORECASE)
+    if matches:
+        result["pressure"] = float(matches[-1])
     else:
         # develop: TOTAL-PRESSURE: <val> KBAR
-        m = re.search(r"TOTAL-PRESSURE:\s*([-eE+0-9.]+)\s*KBAR", content)
-        if m:
-            result["pressure"] = float(m.group(1)) / 10.0
+        matches = re.findall(r"TOTAL-PRESSURE:\s*([-eE+0-9.]+)\s*KBAR", content)
+        if matches:
+            result["pressure"] = float(matches[-1]) / 10.0
 
     # Volume
     m = re.search(r"Cell volume \(A\^3\)\s*=\s*([-eE+0-9.]+)", content)
@@ -101,6 +101,159 @@ def parse_abacus_log(logfile: str) -> dict:
     result["n_ionic_steps"] = content.count("STEP OF RELAXATION")
 
     return result
+
+
+def cell_to_stru(cell_content: str) -> str:
+    """Convert CASTEP .cell content to ABACUS STRU format.
+
+    Parses the LATTICE_CART, POSITIONS_FRAC, and SPECIES_POT blocks
+    from a .cell file and produces an ABACUS STRU file string.
+
+    Args:
+        cell_content: Content of the .cell file.
+
+    Returns:
+        STRU file content as a string.
+    """
+    lines = cell_content.splitlines()
+
+    # Parse lattice (LATTICE_CART or LATTICE_ABC)
+    lattice = []
+    in_block = None  # 'cart' or 'abc'
+    abc_vals = []
+    for line in lines:
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("%BLOCK LATTICE_CART"):
+            in_block = "cart"
+            continue
+        elif upper.startswith("%BLOCK LATTICE_ABC"):
+            in_block = "abc"
+            continue
+        if upper.startswith("%ENDBLOCK") and in_block:
+            in_block = None
+            continue
+        if in_block == "cart" and stripped:
+            lattice.append([float(x) for x in stripped.split()[:3]])
+        elif in_block == "abc" and stripped:
+            abc_vals.append([float(x) for x in stripped.split()[:3]])
+
+    if abc_vals and not lattice:
+        # Convert ABC (lengths + angles) to Cartesian vectors
+        from ase.cell import Cell
+
+        lattice = Cell.new(abc_vals[0] + abc_vals[1]).array.tolist()
+
+    if len(lattice) != 3:
+        raise ValueError(f"Expected 3 lattice vectors, got {len(lattice)}")
+
+    # Parse POSITIONS_FRAC
+    elements = []
+    positions = []
+    in_block = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper().startswith("%BLOCK POSITIONS_FRAC"):
+            in_block = True
+            continue
+        if stripped.upper().startswith("%ENDBLOCK"):
+            if in_block:
+                break
+            continue
+        if in_block and stripped:
+            parts = stripped.split()
+            elements.append(parts[0])
+            positions.append([float(x) for x in parts[1:4]])
+
+    # Parse SPECIES_POT — pairs of (orbital, pseudopotential) per element
+    # Format: Element orbital_file / Element pseudopotential_file
+    species_pot = {}
+    in_block = False
+    pot_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper().startswith("%BLOCK SPECIES_POT"):
+            in_block = True
+            continue
+        if stripped.upper().startswith("%ENDBLOCK"):
+            if in_block:
+                break
+            continue
+        if in_block and stripped:
+            # Strip the leading element symbol
+            parts = stripped.split(None, 1)
+            pot_lines.append(parts[1] if len(parts) > 1 else stripped)
+
+    # Group by element: consecutive pairs are (orbital, upf) for each element
+    unique_elements = list(dict.fromkeys(elements))  # preserve order
+    for idx, elem in enumerate(unique_elements):
+        orb_idx = idx * 2
+        upf_idx = idx * 2 + 1
+        if orb_idx < len(pot_lines) and upf_idx < len(pot_lines):
+            species_pot[elem] = (pot_lines[orb_idx], pot_lines[upf_idx])
+
+    # Build STRU content
+    out_lines = []
+    out_lines.append("ATOMIC_SPECIES")
+    for elem in unique_elements:
+        if elem in species_pot:
+            orb, upf = species_pot[elem]
+            mass = _ATOMIC_MASSES.get(elem, 1.0)
+            out_lines.append(f"{elem} {mass} {upf}")
+    out_lines.append("")
+
+    out_lines.append("LATTICE_CONSTANT")
+    out_lines.append(f"{1.0 / BOHR_TO_ANG:.10f}")
+    out_lines.append("")
+
+    out_lines.append("LATTICE_VECTORS")
+    for vec in lattice:
+        out_lines.append("  ".join(f"{v:.10f}" for v in vec))
+    out_lines.append("")
+
+    out_lines.append("ATOMIC_POSITIONS")
+    out_lines.append("Direct")
+    for elem in unique_elements:
+        out_lines.append(elem)
+        out_lines.append("0.0")  # magnetization
+        n = elements.count(elem)
+        out_lines.append(str(n))
+        for i, (e, pos) in enumerate(zip(elements, positions)):
+            if e == elem:
+                out_lines.append(f"{pos[0]:.10f} {pos[1]:.10f} {pos[2]:.10f} 1 1 1")
+
+    if species_pot:
+        out_lines.append("")
+        out_lines.append("NUMERICAL_ORBITAL")
+        for elem in unique_elements:
+            if elem in species_pot:
+                out_lines.append(species_pot[elem][0])
+
+    return "\n".join(out_lines) + "\n"
+
+
+# Minimal atomic masses for ABACUS ATOMIC_SPECIES block
+_ATOMIC_MASSES = {
+    "H": 1.008, "He": 4.003, "Li": 6.941, "Be": 9.012, "B": 10.811,
+    "C": 12.011, "N": 14.007, "O": 15.999, "F": 18.998, "Ne": 20.180,
+    "Na": 22.990, "Mg": 24.305, "Al": 26.982, "Si": 28.086, "P": 30.974,
+    "S": 32.065, "Cl": 35.453, "Ar": 39.948, "K": 39.098, "Ca": 40.078,
+    "Sc": 44.956, "Ti": 47.867, "V": 50.942, "Cr": 51.996, "Mn": 54.938,
+    "Fe": 55.845, "Co": 58.933, "Ni": 58.693, "Cu": 63.546, "Zn": 65.380,
+    "Ga": 69.723, "Ge": 72.630, "As": 74.922, "Se": 78.971, "Br": 79.904,
+    "Kr": 83.798, "Rb": 85.468, "Sr": 87.620, "Y": 88.906, "Zr": 91.224,
+    "Nb": 92.906, "Mo": 95.950, "Tc": 98.000, "Ru": 101.070, "Rh": 102.906,
+    "Pd": 106.420, "Ag": 107.868, "Cd": 112.414, "In": 114.818, "Sn": 118.711,
+    "Sb": 121.760, "Te": 127.600, "I": 126.904, "Xe": 131.293, "Cs": 132.905,
+    "Ba": 137.327, "La": 138.905, "Ce": 140.116, "Pr": 140.908, "Nd": 144.242,
+    "Pm": 145.000, "Sm": 150.360, "Eu": 151.964, "Gd": 157.250, "Tb": 158.925,
+    "Dy": 162.500, "Ho": 164.930, "Er": 167.259, "Tm": 168.934, "Yb": 173.045,
+    "Lu": 174.967, "Hf": 178.490, "Ta": 180.948, "W": 183.840, "Re": 186.207,
+    "Os": 190.230, "Ir": 192.217, "Pt": 195.084, "Au": 196.967, "Hg": 200.590,
+    "Tl": 204.383, "Pb": 207.200, "Bi": 208.980, "Po": 209.000, "At": 210.000,
+    "Rn": 222.000, "Fr": 223.000, "Ra": 226.000, "Ac": 227.000, "Th": 232.038,
+    "Pa": 231.036, "U": 238.029, "Np": 237.000, "Pu": 244.000,
+}
 
 
 def parse_abacus_stru(stru_path: str):
@@ -161,7 +314,7 @@ def parse_abacus_stru(stru_path: str):
             # Parse element blocks
             while i < len(lines):
                 line = lines[i].strip()
-                if not line:
+                if not line or line.startswith("#"):
                     i += 1
                     continue
                 # Check if this is a new section header
@@ -173,8 +326,8 @@ def parse_abacus_stru(stru_path: str):
                     "NUMERICAL_ORBITAL",
                 ):
                     break
-                # Element name
-                current_element = line
+                # Element name (strip ABACUS #label suffix)
+                current_element = line.split()[0]
                 i += 1
                 # Magnetization (skip)
                 while i < len(lines) and not lines[i].strip():
@@ -183,7 +336,7 @@ def parse_abacus_stru(stru_path: str):
                 # Number of atoms
                 while i < len(lines) and not lines[i].strip():
                     i += 1
-                n_atoms = int(lines[i].strip())
+                n_atoms = int(lines[i].strip().split()[0])
                 i += 1
                 # Coordinate lines
                 for _ in range(n_atoms):
@@ -295,7 +448,14 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
     if energy is not None and pressure is not None and volume is not None:
         enthalpy = energy + pressure * volume * GPA_KBAR_TO_EV_PER_ANG3
 
-    info = {"uid": struct_name, "H": enthalpy}
+    info = {
+        "uid": struct_name,
+        "P": pressure if pressure is not None else 0.0,
+        "V": atoms.get_volume(),
+        "H": enthalpy if enthalpy is not None else 0.0,
+        "nat": len(atoms),
+        "sym": "(P1)",
+    }
     save_airss_res(atoms, info, fname=struct_name + ".res", force_write=True)
 
     structure = AseAtomsAdaptor.get_structure(atoms)

@@ -97,7 +97,6 @@ class AirssSearchMaker(Maker):
 
                 runner = AirssCastepRelaxRunner(
                     executable=self.executable,
-                    cycles=self.cycles,
                     max_fails=self.max_fails,
                     max_iterations=self.max_iterations,
                 )
@@ -243,7 +242,6 @@ class AirssRelaxMaker(Maker):
             if self.code == "castep":
                 runner = AirssCastepRelaxRunner(
                     executable=self.executable,
-                    cycles=self.cycles,
                     max_fails=self.max_fails,
                     max_iterations=self.max_iterations,
                 )

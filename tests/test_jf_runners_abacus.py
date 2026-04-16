@@ -1,8 +1,7 @@
 """Tests for AirssAbacusRelaxRunner."""
 
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -20,6 +19,9 @@ CELL_CONTENT = """\
 Si   0.000000  0.000000  0.000000
 Si   0.250000  0.250000  0.250000
 %ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Si Si_pbe_gga_6.0au_100Ry.upf
+%ENDBLOCK SPECIES_POT
 """
 
 # Sample INPUT content
@@ -29,35 +31,10 @@ ecutwfc 50
 pseudo_dir ../
 """
 
-# Sample STRU output from cell2stru
-STRU_OUTPUT = """\
-ATOMIC_SPECIES
-Si 28.086 Si.UPF
-
-LATTICE_CONSTANT
-1.8897259886
-
-LATTICE_VECTORS
-5.430000 0.000000 0.000000
-0.000000 5.430000 0.000000
-0.000000 0.000000 5.430000
-
-ATOMIC_POSITIONS
-Direct
-
-Si
-0.0
-2
-0.000000 0.000000 0.000000 1 1 1
-0.250000 0.250000 0.250000 1 1 1
-"""
-
 
 class TestPrepareInputs:
-    @patch("airsspy.jf.runners.subprocess.run")
-    def test_writes_cell_and_input(self, mock_run, tmp_path, monkeypatch):
+    def test_writes_cell_and_input(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        mock_run.return_value = MagicMock(stdout=STRU_OUTPUT, returncode=0)
 
         runner = AirssAbacusRelaxRunner()
         runner.prepare_inputs("Si-001", CELL_CONTENT, INPUT_CONTENT)
@@ -67,16 +44,18 @@ class TestPrepareInputs:
         assert Path("Si-001.abacus/STRU").exists()
         assert Path("Si-001.abacus/INPUT").exists()
 
-    @patch("airsspy.jf.runners.subprocess.run")
-    def test_cell2stru_failure_raises(self, mock_run, tmp_path, monkeypatch):
+        stru = Path("Si-001.abacus/STRU").read_text()
+        assert "ATOMIC_SPECIES" in stru
+        assert "Si" in stru
+        assert "5.430000" in stru
+
+    def test_cell_to_stru_invalid_lattice_raises(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        mock_run.return_value = MagicMock(
-            stdout="", stderr="cell2stru error", returncode=1
-        )
+        bad_cell = "%BLOCK POSITIONS_FRAC\nSi 0 0 0\n%ENDBLOCK POSITIONS_FRAC\n"
 
         runner = AirssAbacusRelaxRunner()
-        with pytest.raises(RuntimeError, match="cell2stru failed"):
-            runner.prepare_inputs("Si-001", CELL_CONTENT, INPUT_CONTENT)
+        with pytest.raises(ValueError, match="Expected 3 lattice vectors"):
+            runner.prepare_inputs("Si-001", bad_cell, INPUT_CONTENT)
 
 
 class TestSetInputParam:
@@ -123,9 +102,10 @@ class TestRunnerConverged:
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._update_cell")
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._run_single")
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner.prepare_inputs")
-    def test_converged_after_two_successes(
+    def test_converged_in_phase1(
         self, mock_prepare, mock_run, mock_update, tmp_path, monkeypatch
     ):
+        """All 3 rough runs converge — no phase 2 needed."""
         monkeypatch.chdir(tmp_path)
         _setup_workdir(tmp_path)
         mock_run.return_value = _make_runner_result(converged=True, n_steps=5)
@@ -134,40 +114,69 @@ class TestRunnerConverged:
         result = runner.run("Si-001", CELL_CONTENT, INPUT_CONTENT)
 
         assert result == 0
-        # Phase 1 (3 rough runs) — all converge so success_counter >= 2
-        assert mock_run.call_count == 3
+        assert mock_run.call_count == 3  # 3 rough runs
 
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._update_cell")
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._run_single")
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner.prepare_inputs")
-    def test_not_converged_alternating(
+    def test_converged_in_phase2(
         self, mock_prepare, mock_run, mock_update, tmp_path, monkeypatch
     ):
+        """Phase 1 not converged, phase 2 converges after 2 runs."""
+        monkeypatch.chdir(tmp_path)
+        _setup_workdir(tmp_path)
+        # Phase 1: not converged; Phase 2: converged
+        mock_run.side_effect = [
+            _make_runner_result(converged=False, n_steps=3),  # rough 1
+            _make_runner_result(converged=False, n_steps=3),  # rough 2
+            _make_runner_result(converged=False, n_steps=3),  # rough 3
+            _make_runner_result(converged=True, n_steps=10),  # phase 2 #1
+            _make_runner_result(converged=True, n_steps=5),   # phase 2 #2
+        ]
+
+        runner = AirssAbacusRelaxRunner(max_iterations=200)
+        result = runner.run("Si-001", CELL_CONTENT, INPUT_CONTENT)
+
+        assert result == 0
+        assert mock_run.call_count == 5  # 3 rough + 2 phase 2
+
+    @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._update_cell")
+    @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._run_single")
+    @patch("airsspy.jf.runners.AirssAbacusRelaxRunner.prepare_inputs")
+    def test_not_converged_max_iterations(
+        self, mock_prepare, mock_run, mock_update, tmp_path, monkeypatch
+    ):
+        """Never converges, stops at max_iterations."""
         monkeypatch.chdir(tmp_path)
         _setup_workdir(tmp_path)
         mock_run.return_value = _make_runner_result(converged=False, n_steps=50)
 
-        runner = AirssAbacusRelaxRunner(cycles=3, max_iterations=200)
+        runner = AirssAbacusRelaxRunner(max_iterations=200)
         result = runner.run("Si-001", CELL_CONTENT, INPUT_CONTENT)
 
         assert result == 1
+        # Phase 1: 3 * 50 = 150 iter. Phase 2: 50 more = 200. Total 4 runs.
+        assert mock_run.call_count == 4
 
 
 class TestRunnerMaxIterations:
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._update_cell")
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._run_single")
     @patch("airsspy.jf.runners.AirssAbacusRelaxRunner.prepare_inputs")
-    def test_max_iterations_exceeded(
+    def test_max_iterations_exceeded_in_phase1(
         self, mock_prepare, mock_run, mock_update, tmp_path, monkeypatch
     ):
+        """Max iterations exceeded during phase 1."""
         monkeypatch.chdir(tmp_path)
         _setup_workdir(tmp_path)
         mock_run.return_value = _make_runner_result(converged=False, n_steps=99)
 
-        runner = AirssAbacusRelaxRunner(cycles=10, max_iterations=200)
+        runner = AirssAbacusRelaxRunner(max_iterations=200)
         result = runner.run("Si-001", CELL_CONTENT, INPUT_CONTENT)
 
         assert result == 1
+        # 99 * 2 = 198 < 200, 3rd run puts it at 297 > 200 → stop after 3
+        assert mock_run.call_count == 3
 
 
 class TestRunnerMaxFails:
@@ -183,22 +192,3 @@ class TestRunnerMaxFails:
 
         assert result == 1
         assert mock_run.call_count == 3  # initial + 2 retries
-
-
-class TestRunnerSinglePoint:
-    @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._update_cell")
-    @patch("airsspy.jf.runners.AirssAbacusRelaxRunner._run_single")
-    @patch("airsspy.jf.runners.AirssAbacusRelaxRunner.prepare_inputs")
-    def test_single_point_negative_maxit(
-        self, mock_prepare, mock_run, mock_update, tmp_path, monkeypatch
-    ):
-        monkeypatch.chdir(tmp_path)
-        _setup_workdir(tmp_path)
-        mock_run.return_value = _make_runner_result(converged=True)
-
-        runner = AirssAbacusRelaxRunner(max_iterations=-1)
-        result = runner.run("Si-001", CELL_CONTENT, INPUT_CONTENT)
-
-        assert result == 0
-        # Should only run once for single-point
-        assert mock_run.call_count == 1

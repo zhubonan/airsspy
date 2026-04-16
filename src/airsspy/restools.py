@@ -118,7 +118,7 @@ def save_airss_res(
     with open(restmp) as resin:
         with open(fname, "w") as fout:
             # Write the title
-            fout.write(title + "\n")
+            fout.write(title)
             for line in rems:
                 fout.write("REM " + line + "\n")
             # Write the data lines
