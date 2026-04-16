@@ -412,3 +412,81 @@ def test_convert_xyz_to_res(tmp_path):
     assert result.exit_code == 0
     assert "Converted 1 structures" in result.output
     assert (out_dir / "Si-test.res").exists()
+
+
+def test_run_help():
+    """Test 'run --help'."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "search" in result.output
+    assert "relax" in result.output
+
+
+def test_run_search_help():
+    """Test 'run search --help'."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "search", "--help"])
+    assert result.exit_code == 0
+    assert "--seed" in result.output
+    assert "--nmax" in result.output
+    assert "--build-only" in result.output
+    assert "--code" in result.output
+
+
+def test_run_relax_help():
+    """Test 'run relax --help'."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "relax", "--help"])
+    assert result.exit_code == 0
+    assert "--cell" in result.output
+
+
+def test_run_search_missing_seed():
+    """Test 'run search' fails without seed files."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            cli, ["run", "search", "--seed", "NonExistent", "--nmax", "1"]
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+
+def test_run_search_missing_param():
+    """Test 'run search' fails when param file is missing."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        from pathlib import Path
+
+        Path("Si.cell").write_text(
+            "%BLOCK LATTICE_CART\n5.43 0 0\n0 5.43 0\n0 0 5.43\n"
+            "%ENDBLOCK LATTICE_CART\n"
+            "%BLOCK POSITIONS_FRAC\nSi 0.0 0.0 0.0\n%ENDBLOCK POSITIONS_FRAC\n"
+        )
+        result = runner.invoke(
+            cli, ["run", "search", "--seed", "Si", "--nmax", "1"]
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+
+def test_run_search_build_only_missing_seed():
+    """Test 'run search --build-only' fails without seed cell file."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            cli,
+            ["run", "search", "--seed", "Missing", "--nmax", "1", "--build-only"],
+        )
+        assert result.exit_code != 0
+        assert "not found" in result.output.lower()
+
+
+def test_run_relax_no_files():
+    """Test 'run relax' fails when no files match pattern."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["run", "relax", "--cell", "*.cell"])
+        assert result.exit_code != 0
+        assert "No files matched" in result.output

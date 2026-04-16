@@ -203,14 +203,17 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
             if iter_counter >= self.max_iterations:
                 break
 
-            out_cell = CellInput.from_file(struct_name + "-out.cell")
-            in_cell = CellInput.from_file(struct_name + ".cell")
-            in_cell.set_cell(out_cell.get_cell())
-            in_cell.set_positions(*out_cell.get_positions())
-            in_cell.save(struct_name + ".cell")
+            # Copy -out.cell to .cell for next cycle, stripping ANG
+            # (like airss.pl: just "sed -e '/ANG/d' out.cell > cell")
+            out_content = Path(struct_name + "-out.cell").read_text()
+            out_content = "\n".join(
+                line for line in out_content.splitlines()
+                if line.strip() != "ANG"
+            )
+            Path(struct_name + ".cell").write_text(out_content)
             cycle += 1
 
-        if success_counter >= 2:
+        if success_counter >= 2 or (result is True and cycle > self.cycles):
             return 0
         return 1
 
@@ -275,14 +278,31 @@ def compose_task_doc(struct_name: str) -> dict:
                     if re.match(r"^ +[A-Za-z]+ ", line):
                         spin_moms.append(float(tokens[-1]))
 
-    if Path(struct_name + "-out.cell").is_file():
-        cell = CellInput.from_file(struct_name + "-out.cell")
+    out_cell_path = Path(struct_name + "-out.cell")
+    if out_cell_path.is_file():
+        # Strip ANG keyword that castepinput can't parse
+        out_content = out_cell_path.read_text()
+        out_content_clean = "\n".join(
+            line for line in out_content.splitlines() if line.strip() != "ANG"
+        )
+        tmp_path = Path(struct_name + "-out-tmp.cell")
+        tmp_path.write_text(out_content_clean)
+        cell = CellInput.from_file(str(tmp_path))
+        tmp_path.unlink(missing_ok=True)
     else:
         cell = CellInput.from_file(struct_name + ".cell")
     elements, positions, _tags = cell.get_positions()
     atoms = Atoms(symbols=elements, positions=positions, cell=cell.get_cell(), pbc=True)
 
-    info = {"uid": struct_name, "H": energy}
+    volume = atoms.get_volume()
+    info = {
+        "uid": struct_name,
+        "H": energy if energy else 0.0,
+        "P": pressure if pressure is not None else 0.0,
+        "V": volume,
+        "nat": len(atoms),
+        "sym": "1",
+    }
     save_airss_res(atoms, info, fname=struct_name + ".res", force_write=True)
     structure = AseAtomsAdaptor.get_structure(atoms)
     if spin_moms:

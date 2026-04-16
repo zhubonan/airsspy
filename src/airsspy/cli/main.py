@@ -12,6 +12,7 @@ from .cmd_convert import convert
 from .cmd_db import db
 from .cmd_deploy import deploy
 from .cmd_rank import rank
+from .cmd_run import run
 from .cmd_tools import tools
 
 
@@ -50,4 +51,5 @@ cli.add_command(db)
 cli.add_command(check)
 cli.add_command(convert)
 cli.add_command(rank)
+cli.add_command(run)
 cli.add_command(tools)

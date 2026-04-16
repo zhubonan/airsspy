@@ -130,7 +130,7 @@ def deploy_search(
         job = maker_i.make(
             seed_name=seed,
             seed_content=seed_content,
-            paraminput=ParamInput.from_string(param_content),
+            paraminput=ParamInput.from_file(seed + SUFFIX_MAP[code]),
             project_name=project,
         )
         jobs.append(job)
@@ -196,8 +196,7 @@ def deploy_relax(
     elif code == "abacus" and "castep" in exe:
         exe = "abacus"
 
-    param_content = Path(param).read_text()
-    paraminput = ParamInput.from_string(param_content)
+    paraminput = ParamInput.from_file(param)
 
     cell_files = list(Path(".").glob(cell))
     if not cell_files:
