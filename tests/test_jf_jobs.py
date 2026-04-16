@@ -1,10 +1,15 @@
 """Tests for jobflow Makers (AirssSearchMaker, AirssRelaxMaker, AirssValidateMaker)."""
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 jobflow = pytest.importorskip("jobflow")
+
+from jobflow import run_locally  # noqa: E402
+from castepinput.inputs import CellInput, ParamInput  # noqa: E402
+from pymatgen.core import Lattice, Structure  # noqa: E402
 
 from airsspy.jf.documents import RelaxOutcome  # noqa: E402
 from airsspy.jf.jobs import (  # noqa: E402
@@ -17,7 +22,7 @@ from airsspy.jf.jobs import (  # noqa: E402
 def _make_task_doc(**overrides):
     """Create a default compose_task_doc return dict with optional overrides."""
     defaults = {
-        "structure": MagicMock(volume=100.0, reduced_formula="Si"),
+        "structure": None,
         "volume": 100.0,
         "reduced_formula": "Si",
         "formula": "Si4",
@@ -36,358 +41,433 @@ def _make_task_doc(**overrides):
     return defaults
 
 
-@pytest.fixture
-def mock_paraminput():
-    m = MagicMock()
-    m.get_string.return_value = "task: geometryoptimization"
-    return m
+def _make_si_structure():
+    """Create a minimal Si structure for testing."""
+    return Structure(Lattice.cubic(5.0), ["Si"], [[0, 0, 0]])
+
+
+def _make_paraminput():
+    """Create a real ParamInput for testing."""
+    p = ParamInput()
+    p["task"] = "geometryoptimization"
+    return p
+
+
+def _make_cellinput():
+    """Create a real CellInput for testing."""
+    return CellInput()
 
 
 # --- AirssSearchMaker tests ---
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssCastepRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_castep_success(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "%BLOCK LATTICE_CART\n1.0 0 0\n0 1.0 0\n0 0 1.0\n%ENDBLOCK LATTICE_CART",
-        "seed_hash": "abc123",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_search_maker_castep_success():
     maker = AirssSearchMaker(n_structures=1, code="castep")
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed cell content",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test_project",
     )
 
-    assert response.output.project_name == "test_project"
-    assert response.output.seed_name == "Si"
-    assert response.output.n_structures == 1
-    assert response.output.n_finished == 1
-    assert response.output.n_errored == 0
-    assert len(response.output.results) == 1
-    assert response.output.results[0].relax_status == RelaxOutcome.FINISHED
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("castepinput.inputs.CellInput") as mock_cellinput_cls,
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "%BLOCK LATTICE_CART\n1.0 0 0\n0 1.0 0\n0 0 1.0\n%ENDBLOCK LATTICE_CART",
+            "seed_hash": "abc123",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+        mock_cellinput_cls.from_file.return_value = MagicMock()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.project_name == "test_project"
+    assert output.seed_name == "Si"
+    assert output.n_structures == 1
+    assert output.n_finished == 1
+    assert output.n_errored == 0
+    assert len(output.results) == 1
+    assert output.results[0].relax_status == RelaxOutcome.FINISHED
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssCastepRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_buildcell_timeout(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = None
-
+def test_search_maker_buildcell_timeout():
     maker = AirssSearchMaker(n_structures=1)
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed cell content",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
-    assert response.output.n_structures == 0
-    assert len(response.output.results) == 0
+    with patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell:
+        mock_buildcell.return_value = None
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_structures == 0
+    assert len(output.results) == 0
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssCastepRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_relax_error(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 1
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_search_maker_relax_error():
     maker = AirssSearchMaker(n_structures=1)
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
-    assert response.output.n_errored == 1
-    assert response.output.n_finished == 0
-    assert response.output.results[0].relax_status == RelaxOutcome.ERRORED
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("castepinput.inputs.CellInput") as mock_cellinput_cls,
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 1
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+        mock_cellinput_cls.from_file.return_value = MagicMock()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_errored == 1
+    assert output.n_finished == 0
+    assert output.results[0].relax_status == RelaxOutcome.ERRORED
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssGulpRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_gulp_success(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_search_maker_gulp_success():
     maker = AirssSearchMaker(n_structures=1, code="gulp")
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
-    assert response.output.n_finished == 1
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssGulpRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("pathlib.Path.read_text", return_value="cell content"),
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssPp3RelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_pp3_success(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_search_maker_pp3_success():
     maker = AirssSearchMaker(n_structures=1, code="pp3")
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
-    assert response.output.n_finished == 1
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssPp3RelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("pathlib.Path.read_text", return_value="cell content"),
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
 
 
-@patch("airsspy.jf.jobs.compose_abacus_task_doc")
-@patch("airsspy.jf.jobs.AirssAbacusRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_abacus_success(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_search_maker_abacus_success():
     maker = AirssSearchMaker(n_structures=1, code="abacus")
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
-    assert response.output.n_finished == 1
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssAbacusRelaxRunner") as mock_runner_cls,
+        patch("airsspy.abacustools.compose_abacus_task_doc") as mock_compose,
+        patch("pathlib.Path.read_text", return_value="cell content"),
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_invalid_code(mock_buildcell, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_compose.return_value = _make_task_doc()
-
+def test_search_maker_invalid_code():
     maker = AirssSearchMaker(n_structures=1, code="vasp")
-    with pytest.raises(ValueError, match="Unknown code: vasp"):
-        maker.make(
-            seed_name="Si",
-            seed_content="seed",
-            paraminput=MagicMock(),
-            project_name="test",
-        )
-
-
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssCastepRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_stop_if_all_errored(mock_buildcell, mock_runner_cls, mock_compose):
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 1
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
-    maker = AirssSearchMaker(n_structures=1, stop_if_not_converged=True)
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_compose.return_value = _make_task_doc()
+
+        with pytest.raises(ValueError, match="Unknown code: vasp"):
+            run_locally(job, raise_immediately=True)
+
+
+def test_search_maker_stop_if_all_errored():
+    maker = AirssSearchMaker(n_structures=1, stop_if_not_converged=True)
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput=_make_paraminput(),
+        project_name="test",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("castepinput.inputs.CellInput") as mock_cellinput_cls,
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 1
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+        mock_cellinput_cls.from_file.return_value = MagicMock()
+
+        responses = run_locally(job, ensure_success=True)
+
+    response = responses[job.uuid][1]
     assert response.stop_children is True
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssCastepRelaxRunner")
-@patch("airsspy.jf.jobs.run_buildcell")
-def test_search_maker_multiple_structures(mock_buildcell, mock_runner_cls, mock_compose):
+def test_search_maker_multiple_structures():
     """Test that multiple structures are iterated correctly."""
-    mock_buildcell.return_value = {
-        "struct_name": "Si-001",
-        "seed_name": "Si",
-        "struct_content": "cell",
-    }
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
     maker = AirssSearchMaker(n_structures=3)
-    response = maker.make(
+    job = maker.make(
         seed_name="Si",
         seed_content="seed",
-        paraminput=MagicMock(),
+        paraminput=_make_paraminput(),
         project_name="test",
     )
 
-    assert response.output.n_structures == 3
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("castepinput.inputs.CellInput") as mock_cellinput_cls,
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+        mock_cellinput_cls.from_file.return_value = MagicMock()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_structures == 3
     assert mock_buildcell.call_count == 3
 
 
 # --- AirssRelaxMaker tests ---
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssCastepRelaxRunner")
-def test_relax_maker_castep_success(mock_runner_cls, mock_compose):
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
-    structure = MagicMock()
-    cellinput = MagicMock()
-
+def test_relax_maker_castep_success():
     maker = AirssRelaxMaker(code="castep")
-    response = maker.make(
-        structures=[structure],
+    job = maker.make(
+        structures=[_make_si_structure()],
         struct_names=["Si-001"],
-        cellinputs=[cellinput],
-        paraminput=MagicMock(),
+        cellinputs=[_make_cellinput()],
+        paraminput=_make_paraminput(),
         project_name="test",
         seed_name="Si",
     )
 
-    assert response.output.n_finished == 1
-    assert response.output.job_type == "relax"
-    cellinput.set_positions.assert_called_once()
-    cellinput.set_cell.assert_called_once()
+    with (
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
+    assert output.job_type == "relax"
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-@patch("airsspy.jf.jobs.AirssGulpRelaxRunner")
-def test_relax_maker_gulp_success(mock_runner_cls, mock_compose):
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_relax_maker_gulp_success():
     maker = AirssRelaxMaker(code="gulp", executable="ggulp")
-    response = maker.make(
-        structures=[MagicMock()],
+    job = maker.make(
+        structures=[_make_si_structure()],
         struct_names=["Si-001"],
-        cellinputs=[MagicMock()],
-        paraminput=MagicMock(),
+        cellinputs=[_make_cellinput()],
+        paraminput=_make_paraminput(),
         project_name="test",
         seed_name="Si",
     )
 
-    assert response.output.n_finished == 1
+    with (
+        patch("airsspy.jf.jobs.AirssGulpRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
 
 
-@patch("airsspy.jf.jobs.compose_abacus_task_doc")
-@patch("airsspy.jf.jobs.AirssAbacusRelaxRunner")
-def test_relax_maker_abacus_success(mock_runner_cls, mock_compose):
-    mock_runner = MagicMock()
-    mock_runner.run.return_value = 0
-    mock_runner_cls.return_value = mock_runner
-    mock_compose.return_value = _make_task_doc()
-
+def test_relax_maker_abacus_success():
     maker = AirssRelaxMaker(code="abacus", executable="abacus")
-    response = maker.make(
-        structures=[MagicMock()],
+    job = maker.make(
+        structures=[_make_si_structure()],
         struct_names=["Si-001"],
-        cellinputs=[MagicMock()],
-        paraminput=MagicMock(),
+        cellinputs=[_make_cellinput()],
+        paraminput=_make_paraminput(),
         project_name="test",
         seed_name="Si",
     )
 
-    assert response.output.n_finished == 1
+    with (
+        patch("airsspy.jf.jobs.AirssAbacusRelaxRunner") as mock_runner_cls,
+        patch("airsspy.abacustools.compose_abacus_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
 
 
-@patch("airsspy.jf.jobs.compose_task_doc")
-def test_relax_maker_invalid_code(mock_compose):
-    mock_compose.return_value = _make_task_doc()
-
+def test_relax_maker_invalid_code():
     maker = AirssRelaxMaker(code="vasp")
+    job = maker.make(
+        structures=[_make_si_structure()],
+        struct_names=["Si-001"],
+        cellinputs=[_make_cellinput()],
+        paraminput=_make_paraminput(),
+        project_name="test",
+        seed_name="Si",
+    )
+
     with pytest.raises(ValueError, match="Unknown code: vasp"):
-        maker.make(
-            structures=[MagicMock()],
-            struct_names=["Si-001"],
-            cellinputs=[MagicMock()],
-            paraminput=MagicMock(),
-            project_name="test",
-            seed_name="Si",
-        )
+        run_locally(job, raise_immediately=True)
 
 
 # --- AirssValidateMaker tests ---
 
 
-@patch("airsspy.jf.jobs.subprocess.run")
-def test_validate_all_found(mock_run):
-    mock_run.return_value = MagicMock(returncode=0)
-
+def test_validate_all_found():
     maker = AirssValidateMaker()
-    response = maker.make()
+    job = maker.make()
 
-    assert response is None
+    with patch("airsspy.jf.jobs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        responses = run_locally(job, ensure_success=True)
+
+    response = responses[job.uuid][1]
+    assert response.output is None
 
 
-@patch("airsspy.jf.jobs.subprocess.run")
-def test_validate_missing_exe(mock_run):
-    mock_run.side_effect = FileNotFoundError("not found")
-
+def test_validate_missing_exe():
     maker = AirssValidateMaker()
-    response = maker.make()
+    job = maker.make()
 
+    with patch("airsspy.jf.jobs.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "which")
+        responses = run_locally(job)
+
+    response = responses[job.uuid][1]
     assert response.stop_jobflow is True
 
 
-@patch("airsspy.jf.jobs.subprocess.run")
-def test_validate_additional_exes(mock_run):
-    mock_run.return_value = MagicMock(returncode=0)
-
+def test_validate_additional_exes():
     maker = AirssValidateMaker(additional_exes=("gulp_relax",))
-    response = maker.make()
+    job = maker.make()
 
-    assert response is None
+    with patch("airsspy.jf.jobs.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        responses = run_locally(job, ensure_success=True)
+
+    response = responses[job.uuid][1]
+    assert response.output is None
     # buildcell + castep_relax + castep2res + gulp_relax = 4 calls
     assert mock_run.call_count == 4

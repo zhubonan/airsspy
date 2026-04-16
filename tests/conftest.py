@@ -20,9 +20,12 @@
 """
 Test configuration
 """
+import shutil
 import sys
 import os
+import tempfile
 from pathlib import Path
+from unittest import mock
 
 # Add src directory to Python path
 src_path = Path(__file__).parent.parent / "src"
@@ -32,6 +35,38 @@ if str(src_path) not in sys.path:
 from ase import Atoms
 from tempfile import mkstemp
 import pytest
+
+
+@pytest.fixture
+def memory_jobstore():
+    """In-memory JobStore for jobflow tests."""
+    from jobflow import JobStore
+    from maggma.stores import MemoryStore
+
+    store = JobStore(MemoryStore(), additional_stores={"data": MemoryStore()})
+    store.connect()
+    return store
+
+
+@pytest.fixture(autouse=True)
+def mock_jobflow_settings(memory_jobstore):
+    """Mock jobflow settings to use an in-memory JobStore."""
+    from jobflow.settings import JobflowSettings
+
+    settings = JobflowSettings(JOB_STORE=memory_jobstore)
+    with mock.patch("jobflow.SETTINGS", settings):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def clean_dir():
+    """Run each test in a fresh temporary working directory."""
+    old_cwd = os.getcwd()
+    new_path = tempfile.mkdtemp()
+    os.chdir(new_path)
+    yield
+    os.chdir(old_cwd)
+    shutil.rmtree(new_path)
 
 
 @pytest.fixture
