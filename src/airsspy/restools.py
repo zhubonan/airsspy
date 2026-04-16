@@ -107,7 +107,7 @@ def save_airss_res(
         + " "
         + str(nat)
         + " "
-        + sg
+        + "(" + sg + ")"
         + " n - 1\n"
     )
     rems = info_dict.get("rem", [])
