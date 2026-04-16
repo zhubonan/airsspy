@@ -7,11 +7,14 @@ distance fingerprint comparison (equivalent to ``cryan -u``).
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import reduce
 from math import gcd
 from typing import TextIO
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -662,7 +665,6 @@ def maxwell_construction(
     Raises:
         ValueError: If fewer than 2 elements in the system.
     """
-    import sys
     import warnings
 
     from pymatgen.analysis.phase_diagram import PDEntry, PhaseDiagram
@@ -683,7 +685,7 @@ def maxwell_construction(
     if len(valid_records) < len(records):
         skipped = len(records) - len(valid_records)
         if verbose:
-            print(f"Warning: skipping {skipped} structures with no atom data", file=sys.stderr)
+            logger.warning("skipping %d structures with no atom data", skipped)
 
     # Convert records to PDEntry
     entries = records_to_pd_entries(valid_records)
@@ -694,7 +696,7 @@ def maxwell_construction(
     if missing:
         msg = f"Warning: no structures for pure elements: {', '.join(missing)}. Using E=0 references."
         if verbose:
-            print(msg, file=sys.stderr)
+            logger.warning(msg)
         for el in missing:
             fake_entry = PDEntry(
                 Composition(el), energy=0.0, name=f"{el} (ref)"

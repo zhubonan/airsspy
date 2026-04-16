@@ -154,11 +154,6 @@ def _collect_result(struct_name: str, code: str) -> None:
 @click.group("run")
 def run():
     """Run AIRSS searches locally (non-jobflow, like airss.pl)."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        stream=sys.stderr,
-    )
 
 
 @run.command("search")
@@ -279,20 +274,22 @@ def run_search(
         n_relaxed = 0
         n_failed = 0
 
-        click.echo(f"Starting AIRSS search: seed={seed}, nmax={nmax}, code={code}")
-        click.echo(f"Working directory: {workdir}")
+        logger.info("Starting AIRSS search: seed=%s, nmax=%d, code=%s", seed, nmax, code)
+        logger.info("Working directory: %s", workdir)
 
         for i in range(1, nmax + 1):
             # Check stop file
             if _check_stop_file(workdir):
-                click.echo("Stop file detected. Gracefully terminating.")
+                logger.info("Stop file detected. Gracefully terminating.")
                 break
 
             # Check walltime
             remaining = sched.get_remaining_seconds()
             if remaining < walltime_buffer:
-                click.echo(
-                    f"Walltime running low ({remaining}s < {walltime_buffer}s buffer). Stopping."
+                logger.info(
+                    "Walltime running low (%ds < %ds buffer). Stopping.",
+                    remaining,
+                    walltime_buffer,
                 )
                 break
 
@@ -304,7 +301,7 @@ def run_search(
                 write_seed=True,
             )
             if build_result is None:
-                click.echo(f"  [{i}] Buildcell timed out, skipping")
+                logger.info("[%d] Buildcell timed out, skipping", i)
                 n_failed += 1
                 continue
 
@@ -312,7 +309,7 @@ def run_search(
             n_built += 1
 
             if build_only:
-                click.echo(f"  [{i}] Built: {struct_name}")
+                logger.info("[%d] Built: %s", i, struct_name)
                 continue
 
             # Relax
@@ -342,26 +339,29 @@ def run_search(
             if rc == 0:
                 _collect_result(struct_name, code)
                 n_relaxed += 1
-                click.echo(f"  [{i}] Relaxed OK: {struct_name}")
+                logger.info("[%d] Relaxed OK: %s", i, struct_name)
             else:
                 try:
                     _collect_result(struct_name, code)
-                    click.echo(f"  [{i}] Not converged: {struct_name}")
+                    logger.info("[%d] Not converged: %s", i, struct_name)
                 except Exception:
-                    click.echo(f"  [{i}] Relax FAILED: {struct_name}")
+                    logger.info("[%d] Relax FAILED: %s", i, struct_name)
                     _emit_diagnostics(struct_name, code)
                     if not keep:
                         _clean_failed(struct_name, code)
                 n_failed += 1
 
         # Summary
-        click.echo(
-            f"\nSearch complete: {n_built} built, {n_relaxed} relaxed, {n_failed} failed"
+        logger.info(
+            "Search complete: %d built, %d relaxed, %d failed",
+            n_built,
+            n_relaxed,
+            n_failed,
         )
 
         if pack and n_relaxed > 0:
             packed = _pack_res_files(workdir)
-            click.echo(f"Packed {n_relaxed} .res files into {packed}")
+            logger.info("Packed %d .res files into %s", n_relaxed, packed)
 
     finally:
         os.chdir(orig_dir)
@@ -462,7 +462,7 @@ def run_relax(
         n_failed = 0
         total = len(cell_files)
 
-        click.echo(f"Relaxing {total} structures with {code}")
+        logger.info("Relaxing %d structures with %s", total, code)
 
         for i, cell_path in enumerate(cell_files, 1):
             struct_name = cell_path.stem
@@ -470,8 +470,10 @@ def run_relax(
             # Check walltime
             remaining = sched.get_remaining_seconds()
             if remaining < walltime_buffer:
-                click.echo(
-                    f"Walltime running low ({remaining}s < {walltime_buffer}s buffer). Stopping."
+                logger.info(
+                    "Walltime running low (%ds < %ds buffer). Stopping.",
+                    remaining,
+                    walltime_buffer,
                 )
                 break
 
@@ -495,25 +497,28 @@ def run_relax(
             if rc == 0:
                 _collect_result(struct_name, code)
                 n_relaxed += 1
-                click.echo(f"  [{i}/{total}] OK: {struct_name}")
+                logger.info("[%d/%d] OK: %s", i, total, struct_name)
             else:
                 try:
                     _collect_result(struct_name, code)
-                    click.echo(f"  [{i}/{total}] Not converged: {struct_name}")
+                    logger.info("[%d/%d] Not converged: %s", i, total, struct_name)
                 except Exception:
-                    click.echo(f"  [{i}/{total}] FAILED: {struct_name}")
+                    logger.info("[%d/%d] FAILED: %s", i, total, struct_name)
                     _emit_diagnostics(struct_name, code)
                     if not keep:
                         _clean_failed(struct_name, code)
                 n_failed += 1
 
-        click.echo(
-            f"\nRelaxation complete: {n_relaxed}/{total} succeeded, {n_failed} failed"
+        logger.info(
+            "Relaxation complete: %d/%d succeeded, %d failed",
+            n_relaxed,
+            total,
+            n_failed,
         )
 
         if pack and n_relaxed > 0:
             packed = _pack_res_files(workdir)
-            click.echo(f"Packed into {packed}")
+            logger.info("Packed into %s", packed)
 
     finally:
         os.chdir(orig_dir)
