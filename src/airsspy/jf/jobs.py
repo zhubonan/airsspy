@@ -74,106 +74,129 @@ class AirssSearchMaker(Maker):
             project_name: Project identifier for grouping results.
         """
         results: list[AirssResultDoc] = []
+        n_failed = 0
 
         for i in range(self.n_structures):
             logger.info("Building structure %d/%d", i + 1, self.n_structures)
 
-            build_output = run_buildcell(
-                seed_name,
-                seed_content,
-                build_timeout=self.build_timeout,
-                write_seed=self.write_seed,
-            )
-            if build_output is None:
-                logger.warning("Buildcell timed out for structure %d", i + 1)
+            try:
+                build_output = run_buildcell(
+                    seed_name,
+                    seed_content,
+                    build_timeout=self.build_timeout,
+                    write_seed=self.write_seed,
+                )
+                if build_output is None:
+                    logger.warning("Buildcell timed out for structure %d", i + 1)
+                    continue
+
+                struct_name = build_output["struct_name"]
+
+                if self.code == "castep":
+                    from castepinput.inputs import CellInput
+
+                    cellinput = CellInput.from_file(struct_name + ".cell")
+
+                    runner = AirssCastepRelaxRunner(
+                        executable=self.executable,
+                        max_fails=self.max_fails,
+                        max_iterations=self.max_iterations,
+                    )
+                    return_code = runner.run(struct_name, cellinput, paraminput)
+                elif self.code == "gulp":
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssGulpRelaxRunner(executable=self.executable)
+                    return_code = runner.run(
+                        struct_name, struct_content, param_content, seed_name=seed_name
+                    )
+                elif self.code == "pp3":
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssPp3RelaxRunner(executable=self.executable)
+                    return_code = runner.run(
+                        struct_name, struct_content, param_content, seed_name=seed_name
+                    )
+                elif self.code == "abacus":
+                    from ..abacustools import compose_abacus_task_doc
+
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssAbacusRelaxRunner(
+                        executable=self.executable,
+                        max_iterations=self.max_iterations,
+                    )
+                    return_code = runner.run(
+                        struct_name, struct_content, param_content
+                    )
+                else:
+                    raise ValueError(f"Unknown code: {self.code}")
+
+                if return_code == 0:
+                    relax_status = RelaxOutcome.FINISHED
+                else:
+                    relax_status = RelaxOutcome.ERRORED
+
+                if self.code == "abacus":
+                    from ..abacustools import compose_abacus_task_doc
+
+                    task_doc = compose_abacus_task_doc(struct_name)
+                else:
+                    task_doc = compose_task_doc(struct_name)
+                result_doc = AirssResultDoc(
+                    struct_name=struct_name,
+                    seed_name=seed_name,
+                    project_name=project_name,
+                    structure=task_doc.get("structure"),
+                    energy=task_doc.get("energy"),
+                    energy_per_atom=task_doc.get("energy_per_atom"),
+                    volume=task_doc.get("volume"),
+                    pressure=task_doc.get("pressure"),
+                    spin=task_doc.get("spin", 0.0),
+                    mod_spin=task_doc.get("mod_spin", 0.0),
+                    symmetry=task_doc.get("symmetry"),
+                    formula=task_doc.get("formula"),
+                    reduced_formula=task_doc.get("reduced_formula"),
+                    natoms=task_doc.get("natoms"),
+                    res_content=task_doc.get("res_content"),
+                    parallel_efficiency=task_doc.get("parallel_efficiency"),
+                    total_time=task_doc.get("total_time"),
+                    relax_status=relax_status,
+                )
+                results.append(result_doc)
+
+            except Exception as e:
+                logger.error(
+                    "Structure %d/%d failed with exception: %s",
+                    i + 1,
+                    self.n_structures,
+                    e,
+                    exc_info=True,
+                )
+                n_failed += 1
+                struct_name = f"unknown-{i}"
+                results.append(
+                    AirssResultDoc(
+                        struct_name=struct_name,
+                        seed_name=seed_name,
+                        project_name=project_name,
+                        relax_status=RelaxOutcome.FAILED,
+                        error_message=str(e),
+                    )
+                )
                 continue
-
-            struct_name = build_output["struct_name"]
-
-            if self.code == "castep":
-                from castepinput.inputs import CellInput
-
-                cellinput = CellInput.from_file(struct_name + ".cell")
-
-                runner = AirssCastepRelaxRunner(
-                    executable=self.executable,
-                    max_fails=self.max_fails,
-                    max_iterations=self.max_iterations,
-                )
-                return_code = runner.run(struct_name, cellinput, paraminput)
-            elif self.code == "gulp":
-                struct_content = Path(struct_name + ".cell").read_text()
-                param_content = (
-                    paraminput.get_string()
-                    if hasattr(paraminput, "get_string")
-                    else str(paraminput)
-                )
-                runner = AirssGulpRelaxRunner(executable=self.executable)
-                return_code = runner.run(
-                    struct_name, struct_content, param_content, seed_name=seed_name
-                )
-            elif self.code == "pp3":
-                struct_content = Path(struct_name + ".cell").read_text()
-                param_content = (
-                    paraminput.get_string()
-                    if hasattr(paraminput, "get_string")
-                    else str(paraminput)
-                )
-                runner = AirssPp3RelaxRunner(executable=self.executable)
-                return_code = runner.run(
-                    struct_name, struct_content, param_content, seed_name=seed_name
-                )
-            elif self.code == "abacus":
-                from ..abacustools import compose_abacus_task_doc
-
-                struct_content = Path(struct_name + ".cell").read_text()
-                param_content = (
-                    paraminput.get_string()
-                    if hasattr(paraminput, "get_string")
-                    else str(paraminput)
-                )
-                runner = AirssAbacusRelaxRunner(
-                    executable=self.executable,
-                    max_iterations=self.max_iterations,
-                )
-                return_code = runner.run(
-                    struct_name, struct_content, param_content
-                )
-            else:
-                raise ValueError(f"Unknown code: {self.code}")
-
-            if return_code == 0:
-                relax_status = RelaxOutcome.FINISHED
-            else:
-                relax_status = RelaxOutcome.ERRORED
-
-            if self.code == "abacus":
-                from ..abacustools import compose_abacus_task_doc
-
-                task_doc = compose_abacus_task_doc(struct_name)
-            else:
-                task_doc = compose_task_doc(struct_name)
-            result_doc = AirssResultDoc(
-                struct_name=struct_name,
-                seed_name=seed_name,
-                project_name=project_name,
-                structure=task_doc.get("structure"),
-                energy=task_doc.get("energy"),
-                energy_per_atom=task_doc.get("energy_per_atom"),
-                volume=task_doc.get("volume"),
-                pressure=task_doc.get("pressure"),
-                spin=task_doc.get("spin", 0.0),
-                mod_spin=task_doc.get("mod_spin", 0.0),
-                symmetry=task_doc.get("symmetry"),
-                formula=task_doc.get("formula"),
-                reduced_formula=task_doc.get("reduced_formula"),
-                natoms=task_doc.get("natoms"),
-                res_content=task_doc.get("res_content"),
-                parallel_efficiency=task_doc.get("parallel_efficiency"),
-                total_time=task_doc.get("total_time"),
-                relax_status=relax_status,
-            )
-            results.append(result_doc)
 
         n_finished = sum(1 for r in results if r.relax_status == RelaxOutcome.FINISHED)
         n_errored = sum(1 for r in results if r.relax_status == RelaxOutcome.ERRORED)
@@ -188,10 +211,11 @@ class AirssSearchMaker(Maker):
             n_structures=len(results),
             n_finished=n_finished,
             n_errored=n_errored,
+            n_failed=n_failed,
         )
 
         stop = False
-        if self.stop_if_not_converged and n_errored == len(results):
+        if self.stop_if_not_converged and len(results) > 0 and n_errored == len(results):
             stop = True
         return Response(stop_children=stop, output=search_doc)
 
@@ -235,107 +259,128 @@ class AirssRelaxMaker(Maker):
             seed_name: Seed name for metadata.
         """
         results: list[AirssResultDoc] = []
+        n_failed = 0
 
         for structure, struct_name, cellinput in zip(
             structures, struct_names, cellinputs
         ):
-            if self.code == "castep":
-                runner = AirssCastepRelaxRunner(
-                    executable=self.executable,
-                    max_fails=self.max_fails,
-                    max_iterations=self.max_iterations,
+            try:
+                if self.code == "castep":
+                    runner = AirssCastepRelaxRunner(
+                        executable=self.executable,
+                        max_fails=self.max_fails,
+                        max_iterations=self.max_iterations,
+                    )
+
+                    cellinput.set_positions(
+                        [str(elem) for elem in structure.species],
+                        structure.cart_coords,
+                    )
+                    cellinput.set_cell(structure.lattice.matrix)
+                    return_code = runner.run(struct_name, cellinput, paraminput)
+                elif self.code == "gulp":
+                    struct_content = (
+                        cellinput.get_string()
+                        if hasattr(cellinput, "get_string")
+                        else str(cellinput)
+                    )
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssGulpRelaxRunner(executable=self.executable)
+                    return_code = runner.run(
+                        struct_name, struct_content, param_content, seed_name=seed_name
+                    )
+                elif self.code == "pp3":
+                    struct_content = (
+                        cellinput.get_string()
+                        if hasattr(cellinput, "get_string")
+                        else str(cellinput)
+                    )
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssPp3RelaxRunner(executable=self.executable)
+                    return_code = runner.run(
+                        struct_name, struct_content, param_content, seed_name=seed_name
+                    )
+                elif self.code == "abacus":
+                    from ..abacustools import compose_abacus_task_doc
+
+                    struct_content = (
+                        cellinput.get_string()
+                        if hasattr(cellinput, "get_string")
+                        else str(cellinput)
+                    )
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssAbacusRelaxRunner(
+                        executable=self.executable,
+                        max_iterations=self.max_iterations,
+                    )
+                    return_code = runner.run(
+                        struct_name, struct_content, param_content
+                    )
+                else:
+                    raise ValueError(f"Unknown code: {self.code}")
+
+                relax_status = (
+                    RelaxOutcome.FINISHED if return_code == 0 else RelaxOutcome.ERRORED
                 )
 
-                cellinput.set_positions(
-                    [str(elem) for elem in structure.species],
-                    structure.cart_coords,
-                )
-                cellinput.set_cell(structure.lattice.matrix)
-                return_code = runner.run(struct_name, cellinput, paraminput)
-            elif self.code == "gulp":
-                struct_content = (
-                    cellinput.get_string()
-                    if hasattr(cellinput, "get_string")
-                    else str(cellinput)
-                )
-                param_content = (
-                    paraminput.get_string()
-                    if hasattr(paraminput, "get_string")
-                    else str(paraminput)
-                )
-                runner = AirssGulpRelaxRunner(executable=self.executable)
-                return_code = runner.run(
-                    struct_name, struct_content, param_content, seed_name=seed_name
-                )
-            elif self.code == "pp3":
-                struct_content = (
-                    cellinput.get_string()
-                    if hasattr(cellinput, "get_string")
-                    else str(cellinput)
-                )
-                param_content = (
-                    paraminput.get_string()
-                    if hasattr(paraminput, "get_string")
-                    else str(paraminput)
-                )
-                runner = AirssPp3RelaxRunner(executable=self.executable)
-                return_code = runner.run(
-                    struct_name, struct_content, param_content, seed_name=seed_name
-                )
-            elif self.code == "abacus":
-                from ..abacustools import compose_abacus_task_doc
+                if self.code == "abacus":
+                    from ..abacustools import compose_abacus_task_doc
 
-                struct_content = (
-                    cellinput.get_string()
-                    if hasattr(cellinput, "get_string")
-                    else str(cellinput)
+                    task_doc = compose_abacus_task_doc(struct_name)
+                else:
+                    task_doc = compose_task_doc(struct_name)
+                result_doc = AirssResultDoc(
+                    struct_name=struct_name,
+                    seed_name=seed_name,
+                    project_name=project_name,
+                    structure=task_doc.get("structure"),
+                    energy=task_doc.get("energy"),
+                    energy_per_atom=task_doc.get("energy_per_atom"),
+                    volume=task_doc.get("volume"),
+                    pressure=task_doc.get("pressure"),
+                    spin=task_doc.get("spin", 0.0),
+                    mod_spin=task_doc.get("mod_spin", 0.0),
+                    symmetry=task_doc.get("symmetry"),
+                    formula=task_doc.get("formula"),
+                    reduced_formula=task_doc.get("reduced_formula"),
+                    natoms=task_doc.get("natoms"),
+                    res_content=task_doc.get("res_content"),
+                    parallel_efficiency=task_doc.get("parallel_efficiency"),
+                    total_time=task_doc.get("total_time"),
+                    relax_status=relax_status,
                 )
-                param_content = (
-                    paraminput.get_string()
-                    if hasattr(paraminput, "get_string")
-                    else str(paraminput)
-                )
-                runner = AirssAbacusRelaxRunner(
-                    executable=self.executable,
-                    max_iterations=self.max_iterations,
-                )
-                return_code = runner.run(
-                    struct_name, struct_content, param_content
-                )
-            else:
-                raise ValueError(f"Unknown code: {self.code}")
+                results.append(result_doc)
 
-            relax_status = (
-                RelaxOutcome.FINISHED if return_code == 0 else RelaxOutcome.ERRORED
-            )
-
-            if self.code == "abacus":
-                from ..abacustools import compose_abacus_task_doc
-
-                task_doc = compose_abacus_task_doc(struct_name)
-            else:
-                task_doc = compose_task_doc(struct_name)
-            result_doc = AirssResultDoc(
-                struct_name=struct_name,
-                seed_name=seed_name,
-                project_name=project_name,
-                structure=task_doc.get("structure"),
-                energy=task_doc.get("energy"),
-                energy_per_atom=task_doc.get("energy_per_atom"),
-                volume=task_doc.get("volume"),
-                pressure=task_doc.get("pressure"),
-                spin=task_doc.get("spin", 0.0),
-                mod_spin=task_doc.get("mod_spin", 0.0),
-                symmetry=task_doc.get("symmetry"),
-                formula=task_doc.get("formula"),
-                reduced_formula=task_doc.get("reduced_formula"),
-                natoms=task_doc.get("natoms"),
-                res_content=task_doc.get("res_content"),
-                parallel_efficiency=task_doc.get("parallel_efficiency"),
-                total_time=task_doc.get("total_time"),
-                relax_status=relax_status,
-            )
-            results.append(result_doc)
+            except Exception as e:
+                logger.error(
+                    "Structure %s failed with exception: %s",
+                    struct_name,
+                    e,
+                    exc_info=True,
+                )
+                n_failed += 1
+                results.append(
+                    AirssResultDoc(
+                        struct_name=struct_name,
+                        seed_name=seed_name,
+                        project_name=project_name,
+                        relax_status=RelaxOutcome.FAILED,
+                        error_message=str(e),
+                    )
+                )
+                continue
 
         n_finished = sum(1 for r in results if r.relax_status == RelaxOutcome.FINISHED)
         n_errored = sum(1 for r in results if r.relax_status == RelaxOutcome.ERRORED)
@@ -348,10 +393,11 @@ class AirssRelaxMaker(Maker):
             n_structures=len(results),
             n_finished=n_finished,
             n_errored=n_errored,
+            n_failed=n_failed,
         )
 
         stop = False
-        if self.stop_if_not_converged and n_errored == len(results):
+        if self.stop_if_not_converged and len(results) > 0 and n_errored == len(results):
             stop = True
         return Response(stop_children=stop, output=relax_doc)
 

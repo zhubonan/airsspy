@@ -20,6 +20,7 @@ class RelaxOutcome(str, Enum):
     FINISHED = "finished"
     TIMEDOUT = "timedout"
     ERRORED = "errored"
+    FAILED = "failed"
     UNDETERMINED = "undetermined"
     CYCLE_EXCEEDED = "cycle_exceeded"
 
@@ -54,6 +55,7 @@ class AirssResultDoc(BaseModel):
     parallel_efficiency: Optional[float] = None
     total_time: Optional[float] = None
     relax_status: RelaxOutcome = RelaxOutcome.FINISHED
+    error_message: Optional[str] = None
 
 
 class AirssJobDoc(BaseModel):
@@ -80,6 +82,7 @@ class AirssJobDoc(BaseModel):
     n_structures: int = 0
     n_finished: int = 0
     n_errored: int = 0
+    n_failed: int = 0
     n_timedout: int = 0
 
     created_on: Optional[datetime] = None

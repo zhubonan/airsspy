@@ -256,17 +256,19 @@ def test_search_maker_invalid_code():
 
     with (
         patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
-        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
     ):
         mock_buildcell.return_value = {
             "struct_name": "Si-001",
             "seed_name": "Si",
             "struct_content": "cell",
         }
-        mock_compose.return_value = _make_task_doc()
 
-        with pytest.raises(ValueError, match="Unknown code: vasp"):
-            run_locally(job, raise_immediately=True)
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_failed == 1
+    assert output.results[0].relax_status == RelaxOutcome.FAILED
+    assert "Unknown code" in output.results[0].error_message
 
 
 def test_search_maker_stop_if_all_errored():
@@ -428,8 +430,12 @@ def test_relax_maker_invalid_code():
         seed_name="Si",
     )
 
-    with pytest.raises(ValueError, match="Unknown code: vasp"):
-        run_locally(job, raise_immediately=True)
+    responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_failed == 1
+    assert output.results[0].relax_status == RelaxOutcome.FAILED
+    assert "Unknown code" in output.results[0].error_message
 
 
 # --- AirssValidateMaker tests ---
@@ -471,3 +477,126 @@ def test_validate_additional_exes():
     assert response.output is None
     # buildcell + castep_relax + castep2res + gulp_relax = 4 calls
     assert mock_run.call_count == 4
+
+
+# --- Crash resilience tests ---
+
+
+def test_search_maker_exception_continues_loop():
+    """Runner crash on one structure should not prevent others from running."""
+    maker = AirssSearchMaker(n_structures=3)
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput=_make_paraminput(),
+        project_name="test",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+        patch("castepinput.inputs.CellInput") as mock_cellinput_cls,
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        # Second call raises, first and third succeed
+        mock_runner.run.side_effect = [0, RuntimeError("segfault"), 0]
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+        mock_cellinput_cls.from_file.return_value = MagicMock()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_structures == 3
+    assert output.n_finished == 2
+    assert output.n_failed == 1
+    assert mock_buildcell.call_count == 3
+    # Second result is the failed one
+    assert output.results[1].relax_status == RelaxOutcome.FAILED
+    assert "segfault" in output.results[1].error_message
+    assert output.results[0].relax_status == RelaxOutcome.FINISHED
+    assert output.results[2].relax_status == RelaxOutcome.FINISHED
+
+
+def test_relax_maker_exception_continues_loop():
+    """Runner crash on one structure should not prevent others from running."""
+    maker = AirssRelaxMaker(code="castep")
+    job = maker.make(
+        structures=[_make_si_structure(), _make_si_structure(), _make_si_structure()],
+        struct_names=["Si-001", "Si-002", "Si-003"],
+        cellinputs=[_make_cellinput(), _make_cellinput(), _make_cellinput()],
+        paraminput=_make_paraminput(),
+        project_name="test",
+        seed_name="Si",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.AirssCastepRelaxRunner") as mock_runner_cls,
+        patch("airsspy.jf.jobs.compose_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.side_effect = [0, RuntimeError("disk full"), 0]
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_structures == 3
+    assert output.n_finished == 2
+    assert output.n_failed == 1
+    assert output.results[1].relax_status == RelaxOutcome.FAILED
+    assert "disk full" in output.results[1].error_message
+
+
+def test_search_maker_buildcell_exception_continues():
+    """Exception from run_buildcell itself should be caught."""
+    maker = AirssSearchMaker(n_structures=2)
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput=_make_paraminput(),
+        project_name="test",
+    )
+
+    with patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell:
+        mock_buildcell.side_effect = [RuntimeError("buildcell not found"), None]
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_failed == 1
+    assert output.n_structures == 1
+    assert output.results[0].relax_status == RelaxOutcome.FAILED
+    assert "buildcell not found" in output.results[0].error_message
+
+
+def test_search_maker_all_exceptions():
+    """All structures failing with exceptions should still produce a valid doc."""
+    maker = AirssSearchMaker(n_structures=2, stop_if_not_converged=True)
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput=_make_paraminput(),
+        project_name="test",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+    ):
+        mock_buildcell.side_effect = RuntimeError("total failure")
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_structures == 2
+    assert output.n_failed == 2
+    assert output.n_finished == 0
+    # stop_if_not_converged should NOT trigger for FAILED (only ERRORED)
+    assert responses[job.uuid][1].stop_children is False

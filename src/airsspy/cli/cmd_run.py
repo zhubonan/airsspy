@@ -317,38 +317,48 @@ def run_search(
                 code, exe, max_iterations, cluster, pressure
             )
 
-            if code == "castep":
-                from castepinput.inputs import ParamInput
+            try:
+                if code == "castep":
+                    from castepinput.inputs import ParamInput
 
-                # Pass raw cell content to avoid castepinput re-serializing
-                # duplicate lattice/position blocks (e.g. both ABC and CART)
-                cellinput = Path(struct_name + ".cell").read_text()
-                paraminput = ParamInput.from_file(seed + param_suffix)
-                rc = runner.run(struct_name, cellinput, paraminput)
-            elif code in ("gulp", "pp3"):
-                struct_content = Path(struct_name + ".cell").read_text()
-                param_content = Path(seed + param_suffix).read_text()
-                rc = runner.run(
-                    struct_name, struct_content, param_content, seed_name=seed
-                )
-            elif code == "abacus":
-                struct_content = Path(struct_name + ".cell").read_text()
-                param_content = Path(seed + param_suffix).read_text()
-                rc = runner.run(struct_name, struct_content, param_content)
+                    # Pass raw cell content to avoid castepinput re-serializing
+                    # duplicate lattice/position blocks (e.g. both ABC and CART)
+                    cellinput = Path(struct_name + ".cell").read_text()
+                    paraminput = ParamInput.from_file(seed + param_suffix)
+                    rc = runner.run(struct_name, cellinput, paraminput)
+                elif code in ("gulp", "pp3"):
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    param_content = Path(seed + param_suffix).read_text()
+                    rc = runner.run(
+                        struct_name, struct_content, param_content, seed_name=seed
+                    )
+                elif code == "abacus":
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    param_content = Path(seed + param_suffix).read_text()
+                    rc = runner.run(struct_name, struct_content, param_content)
 
-            if rc == 0:
-                _collect_result(struct_name, code)
-                n_relaxed += 1
-                logger.info("[%d] Relaxed OK: %s", i, struct_name)
-            else:
-                try:
+                if rc == 0:
                     _collect_result(struct_name, code)
-                    logger.info("[%d] Not converged: %s", i, struct_name)
-                except Exception:
-                    logger.info("[%d] Relax FAILED: %s", i, struct_name)
-                    _emit_diagnostics(struct_name, code)
-                    if not keep:
-                        _clean_failed(struct_name, code)
+                    n_relaxed += 1
+                    logger.info("[%d] Relaxed OK: %s", i, struct_name)
+                else:
+                    try:
+                        _collect_result(struct_name, code)
+                        logger.info("[%d] Not converged: %s", i, struct_name)
+                    except Exception:
+                        logger.info("[%d] Relax FAILED: %s", i, struct_name)
+                        _emit_diagnostics(struct_name, code)
+                        if not keep:
+                            _clean_failed(struct_name, code)
+                    n_failed += 1
+
+            except Exception:
+                logger.error(
+                    "[%d] Relax crashed: %s", i, struct_name, exc_info=True
+                )
+                _emit_diagnostics(struct_name, code)
+                if not keep:
+                    _clean_failed(struct_name, code)
                 n_failed += 1
 
         # Summary
@@ -477,36 +487,50 @@ def run_relax(
                 )
                 break
 
-            if code == "castep":
-                from castepinput.inputs import ParamInput
+            try:
+                if code == "castep":
+                    from castepinput.inputs import ParamInput
 
-                cellinput = cell_path.read_text()
-                paraminput = ParamInput.from_file(param_file_name + param_suffix)
-                rc = runner.run(struct_name, cellinput, paraminput)
-            elif code in ("gulp", "pp3"):
-                struct_content = cell_path.read_text()
-                param_content = Path(param_file_name + param_suffix).read_text()
-                rc = runner.run(
-                    struct_name, struct_content, param_content, seed_name=seed
-                )
-            elif code == "abacus":
-                struct_content = cell_path.read_text()
-                param_content = Path(param_file_name + param_suffix).read_text()
-                rc = runner.run(struct_name, struct_content, param_content)
+                    cellinput = cell_path.read_text()
+                    paraminput = ParamInput.from_file(param_file_name + param_suffix)
+                    rc = runner.run(struct_name, cellinput, paraminput)
+                elif code in ("gulp", "pp3"):
+                    struct_content = cell_path.read_text()
+                    param_content = Path(param_file_name + param_suffix).read_text()
+                    rc = runner.run(
+                        struct_name, struct_content, param_content, seed_name=seed
+                    )
+                elif code == "abacus":
+                    struct_content = cell_path.read_text()
+                    param_content = Path(param_file_name + param_suffix).read_text()
+                    rc = runner.run(struct_name, struct_content, param_content)
 
-            if rc == 0:
-                _collect_result(struct_name, code)
-                n_relaxed += 1
-                logger.info("[%d/%d] OK: %s", i, total, struct_name)
-            else:
-                try:
+                if rc == 0:
                     _collect_result(struct_name, code)
-                    logger.info("[%d/%d] Not converged: %s", i, total, struct_name)
-                except Exception:
-                    logger.info("[%d/%d] FAILED: %s", i, total, struct_name)
-                    _emit_diagnostics(struct_name, code)
-                    if not keep:
-                        _clean_failed(struct_name, code)
+                    n_relaxed += 1
+                    logger.info("[%d/%d] OK: %s", i, total, struct_name)
+                else:
+                    try:
+                        _collect_result(struct_name, code)
+                        logger.info("[%d/%d] Not converged: %s", i, total, struct_name)
+                    except Exception:
+                        logger.info("[%d/%d] FAILED: %s", i, total, struct_name)
+                        _emit_diagnostics(struct_name, code)
+                        if not keep:
+                            _clean_failed(struct_name, code)
+                    n_failed += 1
+
+            except Exception:
+                logger.error(
+                    "[%d/%d] Relax crashed: %s",
+                    i,
+                    total,
+                    struct_name,
+                    exc_info=True,
+                )
+                _emit_diagnostics(struct_name, code)
+                if not keep:
+                    _clean_failed(struct_name, code)
                 n_failed += 1
 
         logger.info(
