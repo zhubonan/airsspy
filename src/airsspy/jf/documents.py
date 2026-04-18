@@ -57,6 +57,9 @@ class AirssResultDoc(BaseModel):
     relax_status: RelaxOutcome = RelaxOutcome.FINISHED
     error_message: Optional[str] = None
 
+    # REM block content (raw lines for .res reconstruction)
+    rem_lines: Optional[list[str]] = None
+
 
 class AirssJobDoc(BaseModel):
     """Output document from any AIRSS job (search or relax).

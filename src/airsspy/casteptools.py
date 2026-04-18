@@ -293,6 +293,188 @@ def extract_result(seed: str) -> dict:
     return {"P": P, "H": H, "V": V, "sym": sg, "nat": nat, "chem_formula": chem_formula}
 
 
+def extract_REM_from_castep(seed: str) -> dict:
+    """Extract quality-affecting computational parameters from a .castep file.
+
+    Reads the .castep output file (not .history) to extract metadata for
+    the REM block of a .res file. Uses tail-1 semantics (last match) for
+    fields that repeat across cyclic CASTEP runs.
+
+    Args:
+        seed: Name of the seed (without extension).
+
+    Returns:
+        Dictionary with keys: functional, relativity, dispersion, cutoff,
+        gridscale, gmax, fbsc, mpgrid, offset, nkpts, psps.
+    """
+    rem = {}
+    castep_file = seed + ".castep"
+
+    if not os.path.isfile(castep_file):
+        return rem
+
+    with open(castep_file) as fh:
+        get_pspot = False
+        pspot_lines: list[str] = []
+        for line in fh:
+            if " using functional " in line:
+                rem["functional"] = "Functional " + line.split(":")[-1].strip()
+            if " relativistic treatment " in line:
+                rem["relativity"] = "Relativity " + line.split(":")[-1].strip()
+            if " DFT+D: Semi-empirical dispersion correction " in line:
+                disp = line.split(":")[-1].strip()
+                if disp == "on":
+                    rem["dispersion"] = "Dispersion on"
+                else:
+                    rem["dispersion"] = "Dispersion " + disp
+            if " SEDC with " in line:
+                rem["dispersion"] = "Dispersion " + line.strip().split()[-1]
+            if " plane wave basis set cut-off " in line:
+                tokens = line.strip().split()
+                # e.g. "plane wave basis set cut-off : 500.0000 eV"
+                rem["cutoff"] = "Cut-off " + " ".join(tokens[6:])
+            if " size of standard grid " in line:
+                rem["gridscale"] = "Grid scale " + line.split(":")[-1].strip()
+            if " size of   fine   gmax " in line:
+                rem["gmax"] = "Gmax " + " ".join(line.strip().split()[5:])
+            if " finite basis set correction  " in line:
+                rem["fbsc"] = "FBSC" + line.split(":")[-1].strip()
+            if " MP grid size for SCF calculation is " in line:
+                rem["mpgrid"] = "MP grid " + " ".join(line.strip().split()[-3:])
+            if " with an offset of  " in line:
+                rem["offset"] = "Offset " + " ".join(line.strip().split()[-3:])
+            if " Number of kpoints used = " in line:
+                rem["nkpts"] = "No. kpts " + line.split("=")[-1].strip()
+            # Pseudopotentials section
+            if "Files used for pseudopotentials" in line:
+                get_pspot = True
+            if get_pspot and "----" in line:
+                get_pspot = False
+            if get_pspot and line.strip():
+                pspot_lines.append(line.strip())
+
+    if pspot_lines:
+        # Sort in reverse to match castep2res, deduplicate
+        seen = set()
+        unique_pspot = []
+        for p in sorted(pspot_lines, reverse=True):
+            if p not in seen:
+                seen.add(p)
+                unique_pspot.append(p)
+        rem["psps"] = "\n".join("REM " + p for p in unique_pspot)
+
+    return rem
+
+
+def extract_cell_rem_metadata(seed: str) -> dict:
+    """Extract REM-relevant metadata from a .cell file.
+
+    Args:
+        seed: Name of the seed (without extension).
+
+    Returns:
+        Dictionary with keys: spacing, hubbard, md5.
+    """
+    rem = {}
+
+    # Try seed.cell first, then root.cell
+    root = seed.split("-")[0] if "-" in seed else seed
+
+    for cell_path in [seed + ".cell", root + ".cell"]:
+        if not os.path.isfile(cell_path):
+            continue
+        with open(cell_path) as fh:
+            for line in fh:
+                if "KPOINTS_MP_SPACING" in line and "spacing" not in rem:
+                    rem["spacing"] = "Spacing " + re.split(r"[:=\s]+", line.strip())[-1]
+                # Hubbard U parameters
+                if re.match(r"[hH][uU][bB][bB][aA][rR][dD]", line.strip()):
+                    hubbard_lines = [line.strip()]
+                    for hline in fh:
+                        hubbard_lines.append(hline.strip())
+                        if re.match(r"[hH][uU][bB][bB][aA][rR][dD]", hline.strip()):
+                            break
+                    # Collapse to single line
+                    text = " ".join(h for h in hubbard_lines if h)
+                    rem["hubbard"] = re.sub(r"\s+", " ", text)
+                    break
+            break  # only read first matching file
+
+    # MD5 of root.cell
+    root_cell = root + ".cell"
+    if os.path.isfile(root_cell):
+        import hashlib
+
+        with open(root_cell, "rb") as fh:
+            md5 = hashlib.md5(fh.read()).hexdigest()
+        rem["md5"] = f"{root}.cell ({md5})"
+
+    return rem
+
+
+def build_rem_lines(seed: str) -> list[str]:
+    """Build REM block lines for a .res file from CASTEP output.
+
+    Combines metadata from .castep and .cell files into a list of
+    REM strings (without the "REM " prefix), matching the format
+    produced by the castep2res script.
+
+    Args:
+        seed: Name of the seed (without extension).
+
+    Returns:
+        List of REM line strings.
+    """
+    castep_rem = extract_REM_from_castep(seed)
+    cell_rem = extract_cell_rem_metadata(seed)
+
+    lines: list[str] = []
+    lines.append("")
+
+    # Line: functional relativity dispersion
+    parts = []
+    for key in ["functional", "relativity", "dispersion"]:
+        if key in castep_rem:
+            parts.append(castep_rem[key])
+    if parts:
+        lines.append(" ".join(parts))
+
+    # Line: cutoff gridscale gmax fbsc
+    parts = []
+    for key in ["cutoff", "gridscale", "gmax", "fbsc"]:
+        if key in castep_rem:
+            parts.append(castep_rem[key])
+    if parts:
+        lines.append(" ".join(parts))
+
+    # Line: mpgrid offset nkpts spacing
+    parts = []
+    for key in ["mpgrid", "offset", "nkpts"]:
+        if key in castep_rem:
+            parts.append(castep_rem[key])
+    if "spacing" in cell_rem:
+        parts.append(cell_rem["spacing"])
+    if parts:
+        lines.append(" ".join(parts))
+
+    lines.append("")
+
+    # MD5
+    if "md5" in cell_rem:
+        lines.append(cell_rem["md5"])
+
+    # Pseudopotentials
+    if "psps" in castep_rem:
+        lines.append(castep_rem["psps"])
+
+    # Hubbard
+    if "hubbard" in cell_rem:
+        lines.append("")
+
+    lines.append("")
+    return lines
+
+
 def write_converge(seed: str, suffix: str = "castep") -> None:
     """
     Write convergence information to a .gconv file.

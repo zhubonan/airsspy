@@ -80,6 +80,7 @@ def save_airss_res(
     info_dict: dict[str, Any],
     fname: Optional[str] = None,
     force_write: bool = False,
+    atom_annotations: Optional[list[str]] = None,
 ) -> None:
     """
     Save the relaxed structure in res format which is compatible with the
@@ -107,7 +108,7 @@ def save_airss_res(
         + " "
         + str(nat)
         + " "
-        + "(" + sg + ")"
+        + "(" + sg.strip("()") + ")"
         + " n - 1\n"
     )
     rems = info_dict.get("rem", [])
@@ -122,9 +123,18 @@ def save_airss_res(
             for line in rems:
                 fout.write("REM " + line + "\n")
             # Write the data lines
+            atom_idx = 0
             for n, line in enumerate(resin):
                 if n > 0:
+                    # Append atom annotation if provided
+                    if (
+                        atom_annotations
+                        and atom_idx < len(atom_annotations)
+                        and atom_annotations[atom_idx]
+                    ):
+                        line = line.rstrip("\n") + " " + atom_annotations[atom_idx] + "\n"
                     fout.write(line)
+                    atom_idx += 1
 
     os.remove(restmp)
     return
@@ -263,6 +273,7 @@ def _get_res_lines(
     cellpar: list[float],
     rem_lines: Optional[list[str]] = None,
     spins: Optional[list[float]] = None,
+    atom_annotations: Optional[list[str]] = None,
 ) -> list[str]:
     """
     Write RES format lines using given data
@@ -274,6 +285,8 @@ def _get_res_lines(
         cellpar: Cell parameters in a, b, c, alpha, beta, gamma
         rem_lines: Lines for the REM information
         spins: A list of spins to be added to each site if given
+        atom_annotations: Optional list of per-atom annotation strings
+            to append to each atom line (e.g. forces, charges).
 
     Returns:
         A list of lines for the RES file
@@ -328,6 +341,8 @@ def _get_res_lines(
         )
         if spins:
             line = line + f" {spins[i]:>8.3f}"
+        if atom_annotations and i < len(atom_annotations) and atom_annotations[i]:
+            line = line + " " + atom_annotations[i]
         lines.append(line)
 
     lines.append("END")

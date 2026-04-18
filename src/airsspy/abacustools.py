@@ -166,7 +166,8 @@ def cell_to_stru(cell_content: str) -> str:
             positions.append([float(x) for x in parts[1:4]])
 
     # Parse SPECIES_POT — pairs of (orbital, pseudopotential) per element
-    # Format: Element orbital_file / Element pseudopotential_file
+    # Format (LCAO): Element orbital_file / Element pseudopotential_file
+    # Format (PW):   Element pseudopotential_file
     species_pot = {}
     in_block = False
     pot_lines = []
@@ -184,13 +185,23 @@ def cell_to_stru(cell_content: str) -> str:
             parts = stripped.split(None, 1)
             pot_lines.append(parts[1] if len(parts) > 1 else stripped)
 
-    # Group by element: consecutive pairs are (orbital, upf) for each element
+    # Group by element:
+    # If entries come in pairs (orbital + upf per element), use (orb, upf)
+    # If one entry per element, use (None, upf) — PW mode, no orbital file
     unique_elements = list(dict.fromkeys(elements))  # preserve order
-    for idx, elem in enumerate(unique_elements):
-        orb_idx = idx * 2
-        upf_idx = idx * 2 + 1
-        if orb_idx < len(pot_lines) and upf_idx < len(pot_lines):
-            species_pot[elem] = (pot_lines[orb_idx], pot_lines[upf_idx])
+    n_elem = len(unique_elements)
+    if len(pot_lines) >= n_elem * 2:
+        # Pairs: (orbital, upf) for each element
+        for idx, elem in enumerate(unique_elements):
+            orb_idx = idx * 2
+            upf_idx = idx * 2 + 1
+            if orb_idx < len(pot_lines) and upf_idx < len(pot_lines):
+                species_pot[elem] = (pot_lines[orb_idx], pot_lines[upf_idx])
+    elif len(pot_lines) >= n_elem:
+        # Single: just upf for each element (PW mode)
+        for idx, elem in enumerate(unique_elements):
+            if idx < len(pot_lines):
+                species_pot[elem] = (None, pot_lines[idx])
 
     # Build STRU content
     out_lines = []
@@ -222,12 +233,17 @@ def cell_to_stru(cell_content: str) -> str:
             if e == elem:
                 out_lines.append(f"{pos[0]:.10f} {pos[1]:.10f} {pos[2]:.10f} 1 1 1")
 
-    if species_pot:
+    # Only add NUMERICAL_ORBITAL for LCAO basis (where orbital files exist)
+    orbital_entries = [
+        species_pot[elem][0]
+        for elem in unique_elements
+        if elem in species_pot and species_pot[elem][0] is not None
+    ]
+    if orbital_entries:
         out_lines.append("")
         out_lines.append("NUMERICAL_ORBITAL")
-        for elem in unique_elements:
-            if elem in species_pot:
-                out_lines.append(species_pot[elem][0])
+        for orb in orbital_entries:
+            out_lines.append(orb)
 
     return "\n".join(out_lines) + "\n"
 
@@ -398,6 +414,143 @@ def detect_logfile(workdir: str, input_path: str) -> Optional[str]:
     return None
 
 
+def extract_abacus_rem(struct_name: str) -> dict:
+    """Extract quality-affecting computational parameters from ABACUS output.
+
+    Reads the ABACUS INPUT file and log file to extract metadata for
+    the REM block of a .res file.
+
+    Args:
+        struct_name: Structure name (without extension).
+
+    Returns:
+        Dictionary with keys: functional, cutoff, basis_type, kspacing,
+        nkpts, psps, orbital_info.
+    """
+    rem: dict = {}
+    workdir = f"{struct_name}.abacus"
+
+    # Parse INPUT file
+    input_path = struct_name + ".INPUT"
+    if Path(input_path).is_file():
+        with open(input_path) as fh:
+            for line in fh:
+                m = re.match(r"^\s*ecutwfc\s+(\S+)", line)
+                if m:
+                    rem["cutoff"] = float(m.group(1))
+                m = re.match(r"^\s*basis_type\s+(\S+)", line)
+                if m:
+                    rem["basis_type"] = m.group(1).strip()
+                m = re.match(r"^\s*kspacing\s+(\S+)", line)
+                if m:
+                    rem["kspacing"] = float(m.group(1))
+                m = re.match(r"^\s*dft_functional\s+(\S+)", line)
+                if m:
+                    rem["functional"] = "Functional " + m.group(1).strip()
+
+    # Parse log file
+    logfile = detect_logfile(workdir, input_path)
+    if logfile and Path(logfile).is_file():
+        with open(logfile) as fh:
+            in_atom_type = False
+            atom_type_orbital: list[str] = []
+            for line in fh:
+                # Functional from pseudopotential section
+                if "exchange-correlation functional" in line and "functional" not in rem:
+                    m = re.search(r"=\s*(\S+)", line)
+                    if m:
+                        rem["functional"] = "Functional " + m.group(1)
+                # Number of k-points (last occurrence)
+                if "nkstot" in line:
+                    m = re.search(r"nkstot\s*=\s*(\d+)", line)
+                    if m:
+                        rem["nkpts"] = int(m.group(1))
+                # Pseudopotential file names
+                if "Read in pseudopotential file is" in line:
+                    m = re.search(r"is\s+(\S+)", line)
+                    if m:
+                        if "psps" not in rem:
+                            rem["psps"] = []
+                        rem["psps"].append(m.group(1))
+                # Orbital zeta info for LCAO basis
+                if re.match(r"\s*READING ATOM TYPE", line):
+                    in_atom_type = True
+                    atom_type_orbital = []
+                if in_atom_type:
+                    if re.match(r"\s*atom label", line):
+                        label = line.split("=")[-1].strip()
+                        atom_type_orbital.append(label)
+                    if "number of zeta" in line:
+                        m = re.search(r"L=(\d+),\s*number of zeta\s*=\s*(\d+)", line)
+                        if m and atom_type_orbital:
+                            atom_type_orbital.append(
+                                f"L{m.group(1)}-dz{m.group(2)}"
+                            )
+                    if re.match(r"\s+number of atom", line) or (
+                        "TOTAL ATOM NUMBER" in line
+                    ):
+                        if atom_type_orbital and len(atom_type_orbital) >= 2:
+                            elem = atom_type_orbital[0]
+                            zetas = " ".join(atom_type_orbital[1:])
+                            if "orbital_info" not in rem:
+                                rem["orbital_info"] = []
+                            rem["orbital_info"].append(f"{elem}: {zetas}")
+                        in_atom_type = False
+                        atom_type_orbital = []
+
+    return rem
+
+
+def build_abacus_rem_lines(struct_name: str) -> list[str]:
+    """Build REM block lines for a .res file from ABACUS output.
+
+    Args:
+        struct_name: Structure name (without extension).
+
+    Returns:
+        List of REM line strings (without "REM " prefix).
+    """
+    rem = extract_abacus_rem(struct_name)
+
+    lines: list[str] = []
+    lines.append("")
+
+    # Functional
+    if "functional" in rem:
+        lines.append(rem["functional"])
+
+    # Basis type + cutoff + kspacing
+    parts = []
+    if "basis_type" in rem:
+        parts.append("Basis " + rem["basis_type"])
+    if "cutoff" in rem:
+        parts.append(f"Cut-off {rem['cutoff']} Ry")
+    if "kspacing" in rem:
+        parts.append(f"Spacing {rem['kspacing']}")
+    if parts:
+        lines.append(" ".join(parts))
+
+    # Number of k-points
+    if "nkpts" in rem:
+        lines.append(f"No. kpts {rem['nkpts']}")
+
+    lines.append("")
+
+    # Pseudopotentials
+    if "psps" in rem:
+        for psp in rem["psps"]:
+            lines.append(psp)
+
+    # Orbital info (LCAO basis)
+    if "orbital_info" in rem:
+        lines.append("")
+        for orb in rem["orbital_info"]:
+            lines.append(orb)
+
+    lines.append("")
+    return lines
+
+
 def compose_abacus_task_doc(struct_name: str) -> dict:
     """Extract results from a completed ABACUS calculation.
 
@@ -443,10 +596,25 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
 
     atoms = Atoms(symbols=elements, positions=positions @ cell, cell=cell, pbc=True)
 
+    # Compute symmetry via spglib
+    try:
+        import spglib
+
+        sg = spglib.get_spacegroup(
+            (atoms.get_cell().array, atoms.get_scaled_positions(), atoms.get_atomic_numbers()),
+            symprec=0.1,
+        )
+        sym = sg.split()[0] if sg else "P1"
+    except (ImportError, Exception):
+        sym = "P1"
+
     # Compute enthalpy for pressure results
     enthalpy = energy
     if energy is not None and pressure is not None and volume is not None:
         enthalpy = energy + pressure * volume * GPA_KBAR_TO_EV_PER_ANG3
+
+    # Build REM lines from ABACUS metadata
+    rem_lines = build_abacus_rem_lines(struct_name)
 
     info = {
         "uid": struct_name,
@@ -454,7 +622,8 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
         "V": atoms.get_volume(),
         "H": enthalpy if enthalpy is not None else 0.0,
         "nat": len(atoms),
-        "sym": "(P1)",
+        "sym": sym,
+        "rem": rem_lines,
     }
     save_airss_res(atoms, info, fname=struct_name + ".res", force_write=True)
 
@@ -484,4 +653,5 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
         "res_content": Path(struct_name + ".res").read_text()
         if Path(struct_name + ".res").is_file()
         else None,
+        "rem_lines": rem_lines,
     }

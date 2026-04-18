@@ -291,13 +291,32 @@ def compose_task_doc(struct_name: str) -> dict:
     atoms = Atoms(symbols=elements, positions=positions, cell=cell.get_cell(), pbc=True)
 
     volume = atoms.get_volume()
+
+    # Compute symmetry via spglib
+    try:
+        import spglib
+
+        sg = spglib.get_spacegroup(
+            (atoms.get_cell().array, atoms.get_scaled_positions(), atoms.get_atomic_numbers()),
+            symprec=0.1,
+        )
+        sym = sg.split()[0] if sg else "P1"
+    except (ImportError, Exception):
+        sym = "P1"
+
+    # Build REM lines from .castep and .cell metadata
+    from ..casteptools import build_rem_lines
+
+    rem_lines = build_rem_lines(struct_name)
+
     info = {
         "uid": struct_name,
         "H": energy if energy else 0.0,
         "P": pressure if pressure is not None else 0.0,
         "V": volume,
         "nat": len(atoms),
-        "sym": "1",
+        "sym": sym,
+        "rem": rem_lines,
     }
     save_airss_res(atoms, info, fname=struct_name + ".res", force_write=True)
     structure = AseAtomsAdaptor.get_structure(atoms)
@@ -321,6 +340,7 @@ def compose_task_doc(struct_name: str) -> dict:
         "res_content": Path(struct_name + ".res").read_text()
         if Path(struct_name + ".res").is_file()
         else None,
+        "rem_lines": rem_lines,
     }
 
 

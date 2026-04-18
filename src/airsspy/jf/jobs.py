@@ -174,6 +174,7 @@ class AirssSearchMaker(Maker):
                     parallel_efficiency=task_doc.get("parallel_efficiency"),
                     total_time=task_doc.get("total_time"),
                     relax_status=relax_status,
+                    rem_lines=task_doc.get("rem_lines"),
                 )
                 results.append(result_doc)
 
@@ -360,6 +361,7 @@ class AirssRelaxMaker(Maker):
                     parallel_efficiency=task_doc.get("parallel_efficiency"),
                     total_time=task_doc.get("total_time"),
                     relax_status=relax_status,
+                    rem_lines=task_doc.get("rem_lines"),
                 )
                 results.append(result_doc)
 
