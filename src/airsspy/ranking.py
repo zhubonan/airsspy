@@ -12,7 +12,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from functools import reduce
 from math import gcd
+from pathlib import Path
 from typing import TextIO
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +37,8 @@ class StructureRecord:
     source: str = ""
     # Raw lines kept for lazy full-structure loading (needed by eliminate_similar)
     _raw_lines: list[str] = field(default_factory=list, repr=False)
+    _atoms: object | None = field(default=None, repr=False)
+    _merged_peers: list = field(default_factory=list, repr=False)
 
     @property
     def reduced_formula(self) -> str:
@@ -232,6 +237,232 @@ def _reduce_formula(species_counts: dict[str, int]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Label truncation
+# ---------------------------------------------------------------------------
+
+
+def _truncate_label(label: str, width: int = 20) -> str:
+    """Truncate *label* to *width* chars, appending ``...`` if truncated."""
+    if len(label) <= width:
+        return label
+    return label[: width - 3] + "..."
+
+
+# ---------------------------------------------------------------------------
+# Extxyz field extraction helpers
+# ---------------------------------------------------------------------------
+
+_EV_A3_TO_GPA = 160.21766208
+
+
+def apply_external_pressure(
+    records: list[StructureRecord], pressure_gpa: float
+) -> None:
+    """Apply external pressure correction in-place.
+
+    Adds ``P * V / _EV_A3_TO_GPA`` to each record's enthalpy, where
+    *P* is in GPa and *V* in Å³.  Positive *pressure_gpa* favours
+    denser (smaller-volume) structures.
+    """
+    for rec in records:
+        pv_eV = pressure_gpa * rec.volume / _EV_A3_TO_GPA
+        rec.enthalpy += pv_eV
+        rec.pressure += pressure_gpa
+
+
+def filter_by_name(
+    records: list[StructureRecord], pattern: str
+) -> list[StructureRecord]:
+    """Filter records by label using a glob pattern.
+
+    Supports ``*``, ``?``, and ``[seq]`` wildcards (fnmatch).
+    """
+    from fnmatch import fnmatch
+
+    return [r for r in records if fnmatch(r.label, pattern)]
+
+
+def filter_by_formula(
+    records: list[StructureRecord], formula: str
+) -> list[StructureRecord]:
+    """Filter records by chemical formula.
+
+    Three modes:
+
+    * Exact reduced formula: ``-f SiO2``
+    * Comma-separated elements: ``-f Si,O`` — matches any composition
+      containing *all* listed elements
+    * Glob on reduced formula: ``-f "Si*"`` — fnmatch on the reduced formula
+    """
+    if "," in formula:
+        elements = {el.strip() for el in formula.split(",")}
+        return [
+            r for r in records if elements.issubset(r.species_counts.keys())
+        ]
+
+    from fnmatch import fnmatch
+
+    return [r for r in records if fnmatch(r.reduced_formula, formula)]
+
+
+def _extract_energy(atoms, field: str | None = None) -> float:
+    """Extract energy from an ASE Atoms object.
+
+    If *field* is given, read only ``atoms.info[field]``.
+    Otherwise try common keys in order, then the attached calculator.
+    Falls back to 0.0 with a warning.
+    """
+    if field is not None:
+        val = atoms.info.get(field)
+        if val is None:
+            logger.warning("energy field %r not found in atoms.info", field)
+            return 0.0
+        return float(val)
+
+    for key in ("energy", "enthalpy", "free_energy"):
+        if key in atoms.info:
+            return float(atoms.info[key])
+
+    if atoms.calc is not None:
+        try:
+            return float(atoms.get_potential_energy())
+        except Exception:
+            pass
+
+    logger.warning("no energy field found, defaulting to 0.0")
+    return 0.0
+
+
+def _extract_label(atoms, path: str, index: int, field: str | None = None) -> str:
+    """Extract a structure label from an ASE Atoms object.
+
+    If *field* is given, read only ``atoms.info[field]``.
+    Otherwise try common keys in order.
+    Falls back to ``"<basename>:<index>"``.
+    """
+    if field is not None:
+        val = atoms.info.get(field)
+        if val is not None:
+            return str(val)
+        logger.warning("label field %r not found in atoms.info", field)
+
+    for key in ("label", "name", "structure_id", "source_label"):
+        val = atoms.info.get(key)
+        if val is not None and str(val).strip():
+            return str(val)
+
+    return f"{Path(path).name}:{index}"
+
+
+def _stress_to_pressure_gpa(atoms) -> float:
+    """Compute pressure (GPa) from the stress tensor on *atoms*.
+
+    Pressure = -trace(stress) / 3, converted from eV/Å³ to GPa.
+    Tries the calculator first, then ``atoms.info["stress"]``.
+    """
+    stress = None
+    if atoms.calc is not None:
+        try:
+            stress = atoms.get_stress()
+        except Exception:
+            pass
+    if stress is None:
+        raw = atoms.info.get("stress")
+        if raw is not None:
+            stress = np.asarray(raw, dtype=float).ravel()
+
+    if stress is None:
+        return 0.0
+
+    stress = np.asarray(stress, dtype=float).ravel()
+    if stress.shape == (6,):
+        trace = stress[0] + stress[1] + stress[2]
+    elif stress.shape == (9,):
+        trace = stress[0] + stress[4] + stress[8]
+    elif stress.shape == (3, 3):
+        trace = float(stress[0, 0] + stress[1, 1] + stress[2, 2])
+    else:
+        return 0.0
+
+    return float(-trace / 3.0 * _EV_A3_TO_GPA)
+
+
+def _extract_pressure(atoms, field: str | None = None) -> float:
+    """Extract pressure (GPa) from an ASE Atoms object.
+
+    If *field* is given, read only ``atoms.info[field]`` as a scalar.
+    Otherwise try scalar keys in order, then the stress tensor.
+    Falls back to 0.0.
+    """
+    if field is not None:
+        val = atoms.info.get(field)
+        if val is None:
+            logger.warning("pressure field %r not found in atoms.info", field)
+            return 0.0
+        return float(val)
+
+    for key in ("pressure", "extern_pressure"):
+        if key in atoms.info:
+            return float(atoms.info[key])
+
+    return _stress_to_pressure_gpa(atoms)
+
+
+def _extract_symm(atoms) -> str:
+    """Extract spacegroup symbol from ``atoms.info`` only (no spglib)."""
+    for key in ("symm", "spacegroup"):
+        val = atoms.info.get(key)
+        if val is not None and str(val).strip():
+            return str(val)
+    return ""
+
+
+def fill_missing_spacegroups(
+    records: list[StructureRecord], symprec: float = 0.01
+) -> None:
+    """Detect spacegroups via spglib for records with empty ``symm``.
+
+    Only processes records that have an ``_atoms`` reference (extxyz).
+    Modifies records in place.
+    """
+    for rec in records:
+        if rec.symm:
+            continue
+        if rec._atoms is None:
+            continue
+        try:
+            import spglib
+
+            atoms = rec._atoms
+            dataset = spglib.get_symmetry_dataset(
+                (
+                    atoms.cell,
+                    atoms.get_scaled_positions(),
+                    atoms.get_atomic_numbers(),
+                ),
+                symprec=symprec,
+            )
+            if dataset is not None and dataset.international:
+                rec.symm = f"({dataset.international})"
+        except Exception:
+            pass
+
+
+def fill_dict_symm(dicts: list[dict], symprec: float = 0.01) -> None:
+    """Fill missing ``symm`` in ranking output dicts via spglib.
+
+    Each dict must have a ``_record`` key referencing the source
+    :class:`StructureRecord`.  Modifies dicts in place.
+    """
+    recs = [d["_record"] for d in dicts if not d.get("symm") and d.get("_record")]
+    fill_missing_spacegroups(recs, symprec=symprec)
+    for d in dicts:
+        rec = d.get("_record")
+        if rec is not None and not d.get("symm"):
+            d["symm"] = rec.symm
+
+
+# ---------------------------------------------------------------------------
 # Fast RES parsing (no full structure construction)
 # ---------------------------------------------------------------------------
 
@@ -386,10 +617,21 @@ def read_res_file(path: str) -> list[StructureRecord]:
     return records
 
 
-def read_extxyz_file(path: str) -> list[StructureRecord]:
+def read_extxyz_file(
+    path: str,
+    energy_field: str | None = None,
+    label_field: str | None = None,
+    pressure_field: str | None = None,
+) -> list[StructureRecord]:
     """Read structures from an extxyz file using ASE.
 
-    Energy is expected in ``atoms.info["energy"]``.
+    Field names for energy, label and pressure are auto-detected from
+    ``atoms.info`` / the attached calculator.  Override detection by
+    passing *energy_field*, *label_field*, or *pressure_field*.
+
+    Spacegroup is read from ``atoms.info`` if present; otherwise it
+    is left empty and can be filled later via
+    :func:`fill_missing_spacegroups`.
     """
     from ase.io import read as ase_read
 
@@ -401,27 +643,28 @@ def read_extxyz_file(path: str) -> list[StructureRecord]:
 
     for i, atoms in enumerate(atoms_list):
         species_counts = dict(Counter(atoms.get_chemical_symbols()))
-        energy = atoms.info.get("energy", 0.0)
-        label = atoms.info.get("label", atoms.info.get("name", f"{path}:{i}"))
-        pressure = atoms.info.get("pressure", atoms.info.get("extern_pressure", 0.0))
+        energy = _extract_energy(atoms, field=energy_field)
+        label = _extract_label(atoms, path, i, field=label_field)
+        pressure = _extract_pressure(atoms, field=pressure_field)
         volume = atoms.get_volume()
         natoms = len(atoms)
-        spin = atoms.info.get("spin", 0.0)
-        spin_abs = atoms.info.get("spin_abs", 0.0)
-        symm = atoms.info.get("symm", atoms.info.get("spacegroup", ""))
+        spin = float(atoms.info.get("spin", 0.0))
+        spin_abs = float(atoms.info.get("spin_abs", 0.0))
+        symm = _extract_symm(atoms)
 
         records.append(
             StructureRecord(
-                label=str(label),
-                pressure=float(pressure),
+                label=label,
+                pressure=pressure,
                 volume=volume,
-                enthalpy=float(energy),
-                spin=float(spin),
-                spin_abs=float(spin_abs),
+                enthalpy=energy,
+                spin=spin,
+                spin_abs=spin_abs,
                 natoms=natoms,
-                symm=str(symm),
+                symm=symm,
                 species_counts=species_counts,
                 source=path,
+                _atoms=atoms,
             )
         )
     return records
@@ -435,56 +678,69 @@ def read_extxyz_file(path: str) -> list[StructureRecord]:
 def _compute_distance_fingerprint(
     record: StructureRecord,
     cutoff: float = 4.0,
-    zweight: bool = True,
-) -> list[float] | None:
+    zweight: bool = False,
+) -> np.ndarray | None:
     """Compute a sorted distance fingerprint for a structure.
 
     Uses pymatgen's ``get_all_neighbors(cutoff)`` to find all distances
     to periodic images within *cutoff*, matching cryan's distance
     fingerprint algorithm.  When *zweight* is True, each distance *d* is
-    weighted as ``d * zmax**2 / (Z_i * Z_j)`` to distinguish different
+    weighted as ``d * (1 + log10(zmax² / (Z_i * Z_j)))`` to distinguish different
     atom-type pairs.
 
-    Returns None if the structure cannot be loaded.
+    Works for records loaded from either RES (via ``_raw_lines``) or
+    extxyz (via ``_atoms``).  Returns None if the structure cannot be
+    loaded.
     """
-    from .restools import RESFile
+    structure = None
 
     if record._raw_lines:
+        from .restools import RESFile
+
         try:
             res = RESFile.from_lines(record._raw_lines, include_structure=True)
             if res.structure is None:
                 return None
+            structure = res.structure
+        except Exception:
+            return None
+    elif record._atoms is not None:
+        try:
+            from pymatgen.io.ase import AseAtomsAdaptor
+
+            structure = AseAtomsAdaptor.get_structure(record._atoms)
         except Exception:
             return None
     else:
         return None
 
-    structure = res.structure
     neighbors = structure.get_all_neighbors(cutoff)
 
     if not zweight:
-        all_dists: list[float] = []
-        for nlist in neighbors:
-            for n in nlist:
-                all_dists.append(float(n.nn_distance))
+        all_dists = [
+            float(n.nn_distance)
+            for nlist in neighbors
+            for n in nlist
+        ]
     else:
         zmax = max(site.specie.Z for site in structure)
-        zmax2 = zmax * zmax
-        all_dists = []
-        for i, nlist in enumerate(neighbors):
-            zi = structure[i].specie.Z
-            for n in nlist:
-                zj = n.specie.Z
-                all_dists.append(float(n.nn_distance * zmax2 / (zi * zj)))
+        all_dists = [
+            float(n.nn_distance * (1.0 + np.log10(zmax * zmax / (structure[i].specie.Z * n.specie.Z))))
+            for i, nlist in enumerate(neighbors)
+            for n in nlist
+        ]
 
-    all_dists.sort()
-    return all_dists
+    if not all_dists:
+        return None
+
+    return np.sort(np.array(all_dists, dtype=np.float64))
 
 
 def eliminate_similar(
     records: list[StructureRecord],
     threshold: float,
     cutoff: float = 4.0,
+    zweight: bool = False,
 ) -> list[StructureRecord]:
     """Merge similar structures by comparing distance fingerprints.
 
@@ -496,97 +752,104 @@ def eliminate_similar(
     *cutoff* controls the neighbour search radius (Å) for fingerprint
     computation (default 4.0, matching cryan's ``rmax / 1.75``).
 
+    When *zweight* is True, distances are weighted by ``d * zmax² / (Z_i·Z_j)``
+    to distinguish different atom-type pairs.
+
+    Merged peers are tracked in each surviving record's ``_merged_peers``
+    list for later output.
+
     Returns the deduplicated list with accumulated copies.
     """
-    # Group by formula
+    from tqdm import tqdm
+
     groups: dict[str, list[StructureRecord]] = {}
     for rec in records:
         key = rec.reduced_formula
         groups.setdefault(key, []).append(rec)
 
+    all_fps: dict[int, np.ndarray | None] = {}
+    for rec in tqdm(records, desc="Computing fingerprints", unit="struct"):
+        all_fps[id(rec)] = _compute_distance_fingerprint(
+            rec, cutoff=cutoff, zweight=zweight
+        )
+
     result: list[StructureRecord] = []
+    total = len(records)
 
-    for _formula, group in groups.items():
-        # Sort by energy (most stable first)
-        group.sort(key=lambda r: r.enthalpy_per_fu)
+    with tqdm(total=total, desc="Comparing", unit="struct") as pbar:
+        for _formula, group in groups.items():
+            group.sort(key=lambda r: r.enthalpy_per_fu)
 
-        # Compute fingerprints
-        fingerprints: list[list[float] | None] = []
-        for rec in group:
-            fp = _compute_distance_fingerprint(rec, cutoff=cutoff)
-            fingerprints.append(fp)
+            n = len(group)
+            fps = [all_fps[id(rec)] for rec in group]
+            vpf = np.array([rec.volume_per_fu for rec in group])
+            nfu = np.array([rec.n_formula_units for rec in group])
 
-        # Track which records are merged into another
-        merged_into: list[int] = [-1] * len(group)
+            merged_into = [-1] * n
 
-        for i in range(len(group)):
-            if merged_into[i] >= 0:
-                continue
-            if fingerprints[i] is None:
-                continue
-
-            fi = fingerprints[i]
-            nfi = len(fi)
-            # Mean minimum distance (smallest non-zero distance)
-            min_dist_i = fi[0] if fi else 1.0
-
-            for j in range(i + 1, len(group)):
-                if merged_into[j] >= 0:
+            for i in range(n):
+                pbar.update(1)
+                if merged_into[i] >= 0:
                     continue
-                if fingerprints[j] is None:
+                if fps[i] is None:
                     continue
 
-                fj = fingerprints[j]
+                fi = fps[i]
+                nfi = len(fi)
+                min_dist_i = fi[0] if nfi > 0 else 1.0
+                vpf_i = vpf[i]
+                nfi_rec = nfu[i]
+                inv_vpf_i = 1.0 / vpf_i
 
-                # Scale factors to account for volume differences
-                vol_i = group[i].volume_per_fu
-                vol_j = group[j].volume_per_fu
-                scale_a = ((vol_j + vol_i) / (2.0 * vol_i)) ** (1.0 / 3.0)
-                scale_b = ((vol_j + vol_i) / (2.0 * vol_j)) ** (1.0 / 3.0)
-
-                # Compare fingerprints up to min(nfi*form_j, nfj*form_i) entries
-                # (matches cryan's cross-formula-unit comparison)
-                nfi_rec = group[i].n_formula_units
-                nfj_rec = group[j].n_formula_units
-                n_compare = min(nfi * nfj_rec, len(fj) * nfi_rec)
-
-                min_dist_j = fj[0] if fj else 1.0
-                mean_min = (min_dist_i * scale_a + min_dist_j * scale_b) / 2.0
-
-                # Compute max absolute difference
-                max_diff = 0.0
-                too_different = False
-                for k in range(n_compare):
-                    # Map k to indices in fi and fj with formula-unit scaling
-                    ii = k // nfj_rec
-                    jj = k // nfi_rec
-                    if ii >= nfi or jj >= len(fj):
-                        break
-                    if fi[ii] < 1e-10:
+                for j in range(i + 1, n):
+                    if merged_into[j] >= 0:
                         continue
-                    diff = abs(fi[ii] * scale_a - fj[jj] * scale_b)
-                    if diff > threshold * mean_min:
-                        too_different = True
-                        break
-                    if diff > max_diff:
-                        max_diff = diff
+                    if fps[j] is None:
+                        continue
 
-                if not too_different:
+                    fj = fps[j]
+                    vpf_j = vpf[j]
+
+                    if vpf_i <= 0 or vpf_j <= 0:
+                        continue
+
+                    rel_diff = abs(vpf_i - vpf_j) / max(vpf_i, vpf_j)
+                    if rel_diff > 0.5:
+                        continue
+
+                    scale_a = ((vpf_j * inv_vpf_i + 1.0) * 0.5) ** (1.0 / 3.0)
+                    scale_b = ((vpf_j + vpf_i) / (2.0 * vpf_j)) ** (1.0 / 3.0)
+
+                    nfj_rec = nfu[j]
+                    n_compare = min(nfi * nfj_rec, len(fj) * nfi_rec)
+
+                    min_dist_j = fj[0] if len(fj) > 0 else 1.0
+                    mean_min = (min_dist_i * scale_a + min_dist_j * scale_b) * 0.5
+                    thresh = threshold * mean_min
+
+                    ks = np.arange(n_compare)
+                    iis = np.minimum(ks // nfj_rec, nfi - 1)
+                    jjs = np.minimum(ks // nfi_rec, len(fj) - 1)
+
+                    diffs = np.abs(fi[iis] * scale_a - fj[jjs] * scale_b)
+                    nonzero = fi[iis] > 1e-10
+
+                    if nonzero.any() and (diffs[nonzero] > thresh).any():
+                        continue
+
                     merged_into[j] = i
 
-        # Accumulate copies
-        for i in range(len(group)):
-            if merged_into[i] >= 0:
-                target = merged_into[i]
-                # Walk to root
-                while merged_into[target] >= 0:
-                    target = merged_into[target]
-                group[target].copies += group[i].copies
+            for i in range(n):
+                if merged_into[i] >= 0:
+                    target = merged_into[i]
+                    while merged_into[target] >= 0:
+                        target = merged_into[target]
+                    group[target].copies += group[i].copies
+                    group[target]._merged_peers.append(group[i])
 
-        # Keep only unmerged records
-        for i in range(len(group)):
-            if merged_into[i] < 0:
-                result.append(group[i])
+            for i in range(n):
+                if merged_into[i] < 0:
+                    result.append(group[i])
 
     return result
 
@@ -668,8 +931,8 @@ def maxwell_construction(
     import warnings
 
     from pymatgen.analysis.phase_diagram import PDEntry, PhaseDiagram
-    from pymatgen.core.composition import Composition
     from pymatgen.core import Element
+    from pymatgen.core.composition import Composition
 
     if elements is None:
         elements = infer_elements(records)
@@ -764,6 +1027,7 @@ def maxwell_construction(
                 "copies": rec.copies,
                 "source": rec.source,
                 "species_counts": rec.species_counts,
+                "_record": rec,
             }
         )
 
@@ -778,10 +1042,44 @@ def maxwell_construction(
 # ---------------------------------------------------------------------------
 
 
+def prefilter_records(
+    records: list[StructureRecord],
+    ethresh: float = 0.1,
+) -> list[StructureRecord]:
+    """Filter records by energy threshold per atom relative to the minimum.
+
+    Groups by formula, computes relative enthalpy per atom within each
+    group, removes structures above *ethresh* eV/atom.  Used to reduce
+    the candidate set before merging.  Returns surviving
+    ``StructureRecord`` objects.
+    """
+    groups: dict[str, list[StructureRecord]] = {}
+    for rec in records:
+        groups.setdefault(rec.reduced_formula, []).append(rec)
+
+    surviving: list[StructureRecord] = []
+    for group in groups.values():
+        min_h_per_fu = min(r.enthalpy_per_fu for r in group)
+
+        for rec in group:
+            rel_h = rec.enthalpy_per_fu - min_h_per_fu
+            rel_h_per_atom = (
+                rel_h * rec.n_formula_units / rec.natoms
+                if rec.natoms > 0
+                else 0.0
+            )
+            if rel_h_per_atom > ethresh:
+                continue
+            surviving.append(rec)
+
+    surviving.sort(key=lambda r: r.enthalpy_per_fu)
+
+    return surviving
+
+
 def rank_structures(
     records: list[StructureRecord],
     delta_e: float | None = None,
-    formula_filter: str | None = None,
     top_n: int | None = None,
     absolute: bool = False,
 ) -> list[dict]:
@@ -789,8 +1087,6 @@ def rank_structures(
 
     Returns a list of output dicts with keys needed for formatting.
     """
-    if formula_filter:
-        records = [r for r in records if r.reduced_formula == formula_filter]
 
     # Group by composition
     groups: dict[str, list[StructureRecord]] = {}
@@ -831,6 +1127,7 @@ def rank_structures(
                     "symm": rec.symm,
                     "copies": rec.copies,
                     "source": rec.source,
+                    "_record": rec,
                 }
             )
 
@@ -898,6 +1195,7 @@ def summary_structures(
                 "group_copies": group_copies,
                 "n_structures": n_structures,
                 "source": best.source,
+                "_record": best,
             }
         )
 
@@ -937,9 +1235,9 @@ def format_header(
             parts.append(f"{'|S|':>6s}")
         parts.extend(
             [
-                f"{'nfu':>7s}",
+                f"{'nfu':>4s}",
                 f"{'formula':>18s}",
-                f"{'space group':>11s}",
+                f"{'space_group':>11s}",
                 f"{'#':>6s}",
                 f"{'tot#':>6s}",
             ]
@@ -957,9 +1255,9 @@ def format_header(
         parts.append(f"{'|S|':>6s}")
     parts.extend(
         [
-            f"{'nfu':>7s}",
+            f"{'nfu':>4s}",
             f"{'formula':>18s}",
-            f"{'space group':>11s}",
+            f"{'space_group':>11s}",
             f"{'#':>5s}",
         ]
     )
@@ -973,7 +1271,7 @@ def format_rank_line(
     summary_mode: bool = False,
 ) -> str:
     """Format a single ranked record as a cryan-compatible output line."""
-    label = rec["label"] if long_labels else rec["label"][:20]
+    label = rec["label"] if long_labels else _truncate_label(rec["label"])
 
     parts = [
         f"{label:>40s}" if long_labels else f"{label:<20s}",
@@ -986,7 +1284,7 @@ def format_rank_line(
         parts.append(f"{rec.get('spin_abs_per_fu', 0.0):>6.2f}")
     parts.extend(
         [
-            f"{rec['nfu']:>7d}",
+            f"{rec['nfu']:>4d}",
             f"{rec['formula']:>18s}",
             f"{rec['symm'].strip('()'):>11s}",
             f"{rec['copies']:>5d}",
@@ -1167,9 +1465,9 @@ def format_maxwell_header(
         parts.append(f"{'|S|':>6s}")
     parts.extend(
         [
-            f"{'nfu':>7s}",
+            f"{'nfu':>4s}",
             f"{'formula':>18s}",
-            f"{'space group':>11s}",
+            f"{'space_group':>11s}",
             f"{'#':>5s}",
         ]
     )
@@ -1182,7 +1480,7 @@ def format_maxwell_line(
     show_spin: bool = False,
 ) -> str:
     """Format a single Maxwell construction record as a cryan-compatible output line."""
-    label = rec["label"] if long_labels else rec["label"][:20]
+    label = rec["label"] if long_labels else _truncate_label(rec["label"])
     status = "+" if rec["on_hull"] else "-"
 
     parts = [
@@ -1199,7 +1497,7 @@ def format_maxwell_line(
         parts.append(f"{rec.get('spin_abs_per_fu', 0.0):>6.2f}")
     parts.extend(
         [
-            f"{rec['nfu']:>7d}",
+            f"{rec['nfu']:>4d}",
             f"{rec['formula']:>18s}",
             f"{rec['symm'].strip('()'):>11s}",
             f"{rec['copies']:>5d}",

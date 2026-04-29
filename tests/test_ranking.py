@@ -2,15 +2,20 @@
 
 import io
 import os
-import tempfile
 
+import numpy as np
 import pytest
 
 from airsspy.ranking import (
     StructureRecord,
     _compute_distance_fingerprint,
+    _extract_energy,
+    _extract_label,
+    _extract_pressure,
     _parse_res_fast,
     _reduce_formula,
+    _stress_to_pressure_gpa,
+    _truncate_label,
     check_elemental_references,
     eliminate_similar,
     format_header,
@@ -25,7 +30,6 @@ from airsspy.ranking import (
     records_to_pd_entries,
     summary_structures,
 )
-
 
 # ---------------------------------------------------------------------------
 # Sample RES data
@@ -303,7 +307,8 @@ class TestRanking:
             natoms=6,
             species_counts={"Si": 2, "O": 4},
         )
-        ranked = rank_structures([rec_si, rec_sio2], formula_filter="SiO2")
+        filtered = [r for r in [rec_si, rec_sio2] if r.reduced_formula == "SiO2"]
+        ranked = rank_structures(filtered)
         assert len(ranked) == 1
         assert ranked[0]["formula"] == "SiO2"
 
@@ -654,7 +659,7 @@ class TestFingerprint:
         assert fp_weighted is not None
         assert len(fp_unweighted) == len(fp_weighted)
         # Z-weighted distances should differ from unweighted
-        assert fp_weighted != fp_unweighted
+        assert not np.array_equal(fp_weighted, fp_unweighted)
         # For SiO2: zmax=14 (Si). Si-Si weight = 14²/(14·14) = 1.0,
         # Si-O weight = 14²/(14·8) = 1.75, O-O weight = 14²/(8·8) = 3.0625.
         # All weighted distances should be >= corresponding unweighted distances.
@@ -1102,3 +1107,365 @@ class TestMaxwellFormatting:
         line_short = format_maxwell_line(rec, long_labels=False)
         line_long = format_maxwell_line(rec, long_labels=True)
         assert len(line_long) > len(line_short)
+
+
+# ---------------------------------------------------------------------------
+# Truncation tests
+# ---------------------------------------------------------------------------
+
+
+class TestTruncateLabel:
+    def test_short_label_unchanged(self):
+        assert _truncate_label("Si-001") == "Si-001"
+
+    def test_exact_width_unchanged(self):
+        assert _truncate_label("x" * 20) == "x" * 20
+
+    def test_long_label_truncated_with_ellipsis(self):
+        label = "very-long-structure-name-exceeding"
+        truncated = _truncate_label(label)
+        assert len(truncated) == 20
+        assert truncated.endswith("...")
+        assert truncated == "very-long-structu..."
+
+    def test_custom_width(self):
+        truncated = _truncate_label("abcdefghij", width=8)
+        assert truncated == "abcde..."
+
+    def test_format_rank_line_ellipsis(self):
+        rec = {
+            "label": "very-long-structure-name-exceeding-twenty-chars",
+            "pressure": 0.0,
+            "volume_per_fu": 10.0,
+            "display_enthalpy": -10.0,
+            "nfu": 1,
+            "formula": "Si",
+            "symm": "(P1)",
+            "copies": 1,
+        }
+        line = format_rank_line(rec, long_labels=False)
+        assert "..." in line
+
+    def test_format_rank_line_no_ellipsis_for_short(self):
+        rec = {
+            "label": "Si-001",
+            "pressure": 0.0,
+            "volume_per_fu": 10.0,
+            "display_enthalpy": -10.0,
+            "nfu": 1,
+            "formula": "Si",
+            "symm": "(P1)",
+            "copies": 1,
+        }
+        line = format_rank_line(rec, long_labels=False)
+        assert "..." not in line
+        assert "Si-001" in line
+
+    def test_format_maxwell_line_ellipsis(self):
+        rec = {
+            "label": "very-long-structure-name-exceeding-twenty-chars",
+            "pressure": 0.0,
+            "volume_per_fu": 10.0,
+            "enthalpy_per_atom": -10.0,
+            "hull_energy_per_atom": -10.0,
+            "e_above_hull": 0.0,
+            "on_hull": True,
+            "spin_per_fu": 0.0,
+            "spin_abs_per_fu": 0.0,
+            "nfu": 1,
+            "formula": "Si",
+            "symm": "(P1)",
+            "copies": 1,
+        }
+        line = format_maxwell_line(rec, long_labels=False)
+        assert "..." in line
+
+
+# ---------------------------------------------------------------------------
+# Field extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEnergy:
+    def test_info_energy(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["energy"] = -10.5
+        assert _extract_energy(atoms) == pytest.approx(-10.5)
+
+    def test_info_enthalpy(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["enthalpy"] = -42.0
+        assert _extract_energy(atoms) == pytest.approx(-42.0)
+
+    def test_info_free_energy(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["free_energy"] = -11.3
+        assert _extract_energy(atoms) == pytest.approx(-11.3)
+
+    def test_calculator_energy(self):
+        from ase import Atoms
+        from ase.calculators.singlepoint import SinglePointCalculator
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        calc = SinglePointCalculator(atoms, energy=-27.2)
+        atoms.calc = calc
+        assert _extract_energy(atoms) == pytest.approx(-27.2)
+
+    def test_fallback_zero(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        assert _extract_energy(atoms) == 0.0
+
+    def test_custom_field(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["my_energy"] = -99.0
+        assert _extract_energy(atoms, field="my_energy") == pytest.approx(-99.0)
+
+    def test_custom_field_missing(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["energy"] = -10.0
+        assert _extract_energy(atoms, field="nonexistent") == 0.0
+
+
+class TestExtractLabel:
+    def test_info_label(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["label"] = "Si-001"
+        assert _extract_label(atoms, "test.xyz", 0) == "Si-001"
+
+    def test_info_name(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["name"] = "my-struct"
+        assert _extract_label(atoms, "test.xyz", 0) == "my-struct"
+
+    def test_info_structure_id(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["structure_id"] = "BiSI-0001"
+        assert _extract_label(atoms, "test.xyz", 0) == "BiSI-0001"
+
+    def test_info_source_label(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["source_label"] = "BiSI"
+        assert _extract_label(atoms, "test.xyz", 0) == "BiSI"
+
+    def test_fallback_filename_index(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        assert _extract_label(atoms, "/path/to/test.xyz", 3) == "test.xyz:3"
+
+    def test_custom_field(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["my_label"] = "custom-001"
+        assert _extract_label(atoms, "test.xyz", 0, field="my_label") == "custom-001"
+
+    def test_custom_field_missing_falls_back(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["label"] = "fallback"
+        result = _extract_label(atoms, "test.xyz", 0, field="nonexistent")
+        assert result == "fallback"
+
+    def test_priority_label_over_structure_id(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["label"] = "first"
+        atoms.info["structure_id"] = "second"
+        assert _extract_label(atoms, "test.xyz", 0) == "first"
+
+
+class TestExtractPressure:
+    def test_info_pressure(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["pressure"] = 5.0
+        assert _extract_pressure(atoms) == pytest.approx(5.0)
+
+    def test_info_extern_pressure(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["extern_pressure"] = 10.0
+        assert _extract_pressure(atoms) == pytest.approx(10.0)
+
+    def test_stress_voigt(self):
+        import numpy as np
+        from ase import Atoms
+        from ase.calculators.singlepoint import SinglePointCalculator
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        stress = np.array([-0.1, -0.1, -0.1, 0.0, 0.0, 0.0])
+        calc = SinglePointCalculator(atoms, energy=-10.0, stress=stress)
+        atoms.calc = calc
+        pressure = _extract_pressure(atoms)
+        expected = -(-0.1 - 0.1 - 0.1) / 3.0 * 160.21766208
+        assert pressure == pytest.approx(expected, rel=1e-6)
+
+    def test_no_pressure_returns_zero(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        assert _extract_pressure(atoms) == 0.0
+
+    def test_custom_field(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        atoms.info["my_pressure"] = 42.0
+        assert _extract_pressure(atoms, field="my_pressure") == pytest.approx(42.0)
+
+    def test_custom_field_missing(self):
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]])
+        assert _extract_pressure(atoms, field="nonexistent") == 0.0
+
+
+class TestStressToPressure:
+    def test_identity_voigt(self):
+        import numpy as np
+        from ase import Atoms
+        from ase.calculators.singlepoint import SinglePointCalculator
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        stress = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        calc = SinglePointCalculator(atoms, energy=0.0, stress=stress)
+        atoms.calc = calc
+        assert _stress_to_pressure_gpa(atoms) == pytest.approx(0.0)
+
+    def test_compressive_stress(self):
+        import numpy as np
+        from ase import Atoms
+        from ase.calculators.singlepoint import SinglePointCalculator
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        stress = np.array([-0.003, -0.003, -0.003, 0.0, 0.0, 0.0])
+        calc = SinglePointCalculator(atoms, energy=0.0, stress=stress)
+        atoms.calc = calc
+        pressure = _stress_to_pressure_gpa(atoms)
+        expected = 0.009 / 3.0 * 160.21766208
+        assert pressure == pytest.approx(expected, rel=1e-6)
+
+    def test_info_stress_3x3(self):
+        import numpy as np
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        stress_3x3 = np.array(
+            [[-0.001, 0.0, 0.0], [0.0, -0.001, 0.0], [0.0, 0.0, -0.001]]
+        )
+        atoms.info["stress"] = stress_3x3
+        pressure = _stress_to_pressure_gpa(atoms)
+        expected = 0.003 / 3.0 * 160.21766208
+        assert pressure == pytest.approx(expected, rel=1e-6)
+
+    def test_info_stress_9_flat(self):
+        import numpy as np
+        from ase import Atoms
+
+        atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+        stress_flat = np.array(
+            [-0.001, 0.0, 0.0, 0.0, -0.001, 0.0, 0.0, 0.0, -0.001]
+        )
+        atoms.info["stress"] = stress_flat
+        pressure = _stress_to_pressure_gpa(atoms)
+        expected = 0.003 / 3.0 * 160.21766208
+        assert pressure == pytest.approx(expected, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# read_extxyz_file integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestReadExtxyzFile:
+    def test_real_bisi_file(self):
+        from airsspy.ranking import read_extxyz_file
+
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "BiSI_mace_medium-mpa-0_final.extxyz"
+        )
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            pytest.skip("BiSI test file not available")
+        records = read_extxyz_file(path)
+        assert len(records) > 0
+        rec = records[0]
+        assert rec.enthalpy != 0.0
+        assert rec.label == "BiSI-0001"
+        assert rec.natoms == 9
+        assert rec.species_counts == {"Bi": 3, "S": 3, "I": 3}
+        assert rec.pressure != 0.0
+
+    def test_custom_label_field(self, tmp_path):
+        from ase import Atoms
+        from ase.calculators.singlepoint import SinglePointCalculator
+        from ase.io import write as ase_write
+
+        from airsspy.ranking import read_extxyz_file
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[5, 5, 5], pbc=True)
+        calc = SinglePointCalculator(atoms, energy=-10.0)
+        atoms.calc = calc
+        atoms.info["my_id"] = "custom-label-001"
+        atoms.info["structure_id"] = "default-001"
+
+        xyz_path = tmp_path / "test.xyz"
+        ase_write(str(xyz_path), atoms, format="extxyz")
+
+        records = read_extxyz_file(str(xyz_path), label_field="my_id")
+        assert records[0].label == "custom-label-001"
+
+    def test_fallback_filename_index(self, tmp_path):
+        from ase import Atoms
+        from ase.io import write as ase_write
+
+        from airsspy.ranking import read_extxyz_file
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[5, 5, 5], pbc=True)
+        atoms.info["energy"] = -5.0
+
+        xyz_path = tmp_path / "my_structures.extxyz"
+        ase_write(str(xyz_path), atoms, format="extxyz")
+
+        records = read_extxyz_file(str(xyz_path))
+        assert records[0].label == "my_structures.extxyz:0"
+
+    def test_energy_from_enthalpy_field(self, tmp_path):
+        from ase import Atoms
+        from ase.io import write as ase_write
+
+        from airsspy.ranking import read_extxyz_file
+
+        atoms = Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[5, 5, 5], pbc=True)
+        atoms.info["enthalpy"] = -42.5
+
+        xyz_path = tmp_path / "test.xyz"
+        ase_write(str(xyz_path), atoms, format="extxyz")
+
+        records = read_extxyz_file(str(xyz_path))
+        assert records[0].enthalpy == pytest.approx(-42.5)
