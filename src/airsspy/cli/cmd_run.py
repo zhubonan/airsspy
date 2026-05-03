@@ -94,7 +94,16 @@ def _pack_res_files(workdir: Path, output_name: str = "packed.res") -> Path:
     return packed
 
 
-def _create_runner(code, exe, max_iterations, cluster, pressure):
+def _apply_mpinp(exe: str, code: str, mpinp: int | None) -> str:
+    """Prepend ``mpirun`` to *exe* when *mpinp* is set and *code* supports it."""
+    if mpinp is None or code not in ("castep", "abacus"):
+        return exe
+    if mpinp == 0:
+        return f"mpirun {exe}"
+    return f"mpirun -np {mpinp} {exe}"
+
+
+def _create_runner(code, exe, max_iterations, cluster, pressure, mpinp=None):
     """Create the appropriate relaxation runner for the given *code*."""
     from airsspy.jf.runners import (
         AirssAbacusRelaxRunner,
@@ -102,6 +111,8 @@ def _create_runner(code, exe, max_iterations, cluster, pressure):
         AirssGulpRelaxRunner,
         AirssPp3RelaxRunner,
     )
+
+    exe = _apply_mpinp(exe, code, mpinp)
 
     if code == "castep":
         return AirssCastepRelaxRunner(
@@ -214,6 +225,12 @@ def run():
 )
 @click.option("--cluster", is_flag=True, help="Use cluster boundary conditions (GULP)")
 @click.option(
+    "--mpinp",
+    default=None,
+    type=int,
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus only)",
+)
+@click.option(
     "--walltime-buffer",
     default=300,
     type=int,
@@ -233,6 +250,7 @@ def run_search(
     max_iterations,
     build_timeout,
     cluster,
+    mpinp,
     walltime_buffer,
 ):
     """Run an AIRSS random structure search locally."""
@@ -314,7 +332,7 @@ def run_search(
 
             # Relax
             runner = _create_runner(
-                code, exe, max_iterations, cluster, pressure
+                code, exe, max_iterations, cluster, pressure, mpinp
             )
 
             try:
@@ -418,6 +436,12 @@ def run_search(
 )
 @click.option("--cluster", is_flag=True, help="Use cluster boundary conditions (GULP)")
 @click.option(
+    "--mpinp",
+    default=None,
+    type=int,
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus only)",
+)
+@click.option(
     "--walltime-buffer",
     default=300,
     type=int,
@@ -435,6 +459,7 @@ def run_relax(
     pressure,
     max_iterations,
     cluster,
+    mpinp,
     walltime_buffer,
 ):
     """Relax existing cell files locally."""
@@ -462,7 +487,7 @@ def run_relax(
 
         sched = Dummy()
 
-    runner = _create_runner(code, exe, max_iterations, cluster, pressure)
+    runner = _create_runner(code, exe, max_iterations, cluster, pressure, mpinp)
 
     orig_dir = os.getcwd()
     os.chdir(workdir)
