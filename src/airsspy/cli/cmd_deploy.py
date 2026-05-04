@@ -11,6 +11,7 @@ SUFFIX_MAP = {
     "gulp": ".lib",
     "pp3": ".pp",
     "abacus": ".INPUT",
+    "ml": None,
 }
 
 

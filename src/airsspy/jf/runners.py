@@ -200,16 +200,54 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
             if success_counter >= 2:
                 break
 
-            # Copy -out.cell to .cell for next cycle, stripping ANG
-            # (like airss.pl: just "sed -e '/ANG/d' out.cell > cell")
+            # Update .cell with structure from -out.cell, preserving
+            # all non-structural content (kpoints, species, symmetry,
+            # etc.) from the original .cell.
             out_cell = Path(struct_name + "-out.cell")
             if out_cell.is_file():
-                out_content = out_cell.read_text()
-                out_content = "\n".join(
-                    line for line in out_content.splitlines()
-                    if line.strip() != "ANG"
+                from castepinput import CellInput
+
+                out = CellInput.from_file(str(out_cell))
+                cell_path = Path(struct_name + ".cell")
+                cell_in = CellInput.from_file(str(cell_path))
+
+                # Replace lattice block: copy whichever format the
+                # output uses, delete the other from the input.
+                lattice_key = (
+                    "lattice_cart"
+                    if "lattice_cart" in out
+                    else "lattice_abc"
+                    if "lattice_abc" in out
+                    else None
                 )
-                Path(struct_name + ".cell").write_text(out_content)
+                if lattice_key is None:
+                    raise RuntimeError(
+                        f"No lattice block in {out_cell}"
+                    )
+                for k in ("lattice_cart", "lattice_abc"):
+                    if k in cell_in and k != lattice_key:
+                        del cell_in[k]
+                cell_in[lattice_key] = out[lattice_key]
+
+                # Replace positions block: copy whichever format the
+                # output uses, delete the other from the input.
+                positions_key = (
+                    "positions_abs"
+                    if "positions_abs" in out
+                    else "positions_frac"
+                    if "positions_frac" in out
+                    else None
+                )
+                if positions_key is None:
+                    raise RuntimeError(
+                        f"No positions block in {out_cell}"
+                    )
+                for k in ("positions_abs", "positions_frac"):
+                    if k in cell_in and k != positions_key:
+                        del cell_in[k]
+                cell_in[positions_key] = out[positions_key]
+
+                cell_in.save(str(cell_path))
 
         return 0 if success_counter >= 2 else 1
 
@@ -832,3 +870,97 @@ class AirssAbacusRelaxRunner:
 
         stru_content = cell_to_stru(cell_content)
         Path(f"{workdir}/STRU").write_text(stru_content)
+
+
+class AirssAbacusSinglePointRunner:
+    """
+    Execute a single ABACUS single-point (SCF) calculation.
+
+    Runs ABACUS once with ``calculation scf`` in the INPUT file. No cyclic
+    relaxation loop. Checks for ``TOTAL  Time`` in the output to determine
+    success.
+    """
+
+    def __init__(self, executable: str = "abacus") -> None:
+        self.executable = executable
+
+    def prepare_inputs(
+        self,
+        struct_name: str,
+        cell_content: str,
+        input_content: str,
+    ) -> None:
+        """Write .cell, .INPUT files and convert to STRU.
+
+        Forces ``calculation scf`` in the INPUT file regardless of what
+        the user specified.
+        """
+        from ..abacustools import cell_to_stru
+
+        workdir = f"{struct_name}.abacus"
+        Path(workdir).mkdir(parents=True, exist_ok=True)
+
+        # Write .cell file
+        Path(struct_name + ".cell").write_text(cell_content)
+
+        # Force calculation to scf (single-point)
+        lines = input_content.splitlines()
+        new_lines = []
+        found = False
+        for line in lines:
+            if re.match(r"^\s*calculation\s+", line):
+                new_lines.append("calculation scf")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append("calculation scf")
+        input_content = "\n".join(new_lines)
+
+        # Write INPUT file (both in cwd and in workdir)
+        Path(struct_name + ".INPUT").write_text(input_content)
+        Path(f"{workdir}/INPUT").write_text(input_content)
+
+        # Convert .cell to STRU
+        stru_content = cell_to_stru(cell_content)
+        Path(f"{workdir}/STRU").write_text(stru_content)
+
+    def run(
+        self,
+        struct_name: str,
+        cell_content: str,
+        input_content: str,
+    ) -> int:
+        """
+        Run a single-point ABACUS calculation.
+
+        Args:
+            struct_name: Structure name (without extension).
+            cell_content: Content of the .cell file.
+            input_content: Content of the ABACUS INPUT file.
+
+        Returns:
+            0 on success, 1 on failure.
+        """
+        self.prepare_inputs(struct_name, cell_content, input_content)
+        workdir = f"{struct_name}.abacus"
+
+        out_path = Path(f"{workdir}/abacus_out")
+        with open(out_path, "w") as outf:
+            subprocess.run(
+                self.executable.split(),
+                stdout=outf,
+                stderr=subprocess.STDOUT,
+                cwd=workdir,
+                check=False,
+            )
+
+        output = out_path.read_text()
+        if "TOTAL  Time" not in output:
+            logger.warning("ABACUS single-point crashed for %s", struct_name)
+            for line in output.splitlines()[-5:]:
+                logger.info("  | %s", line)
+            return 1
+
+        logger.info("ABACUS single-point completed for %s", struct_name)
+        return 0

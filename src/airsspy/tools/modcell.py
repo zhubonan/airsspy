@@ -33,10 +33,17 @@ def replace_block(
     """
     in_block = False
     out_from_block = False
+    matches_found = 0
     new_lines: list[str] = []
     for line in lines:
         if re.search(r"%BLOCK " + f"{block_pattern.upper()}", line.upper()):
             in_block = True
+            matches_found += 1
+            if matches_found > 1:
+                raise RuntimeError(
+                    f"Found multiple blocks matching '{block_pattern}'. "
+                    f"Cell file may have duplicate lattice or positions blocks."
+                )
             new_lines.append("%BLOCK " + block_name.upper())
             new_lines.extend(new_value)
             new_lines.append("%ENDBLOCK " + block_name.upper())
@@ -47,7 +54,7 @@ def replace_block(
             continue
         if not in_block:
             new_lines.append(line)
-    if out_from_block is False and in_block is False and check:
+    if matches_found == 0 and check:
         raise RuntimeError(f"Did not find start of the block {block_name}")
     if out_from_block is False and in_block is True:
         raise RuntimeError(f"Did not find end of the block {block_name}")

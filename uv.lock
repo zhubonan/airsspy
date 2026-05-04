@@ -44,30 +44,30 @@ dependencies = [
     { name = "castepinput" },
     { name = "click", version = "8.1.8", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
     { name = "click", version = "8.3.2", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
+    { name = "jobflow", version = "0.1.19", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
+    { name = "jobflow", version = "0.3.1", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
+    { name = "maggma" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version == '3.10.*'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.11'" },
+    { name = "pandas" },
     { name = "plotly" },
     { name = "pymatgen", version = "2024.8.9", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
     { name = "pymatgen", version = "2025.10.7", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
+    { name = "spglib" },
     { name = "tabulate" },
     { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
-analysis = [
-    { name = "pandas" },
-]
-database = [
-    { name = "mongomock" },
-    { name = "pymongo" },
-]
 dev = [
-    { name = "build" },
     { name = "mypy", version = "1.19.1", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
     { name = "mypy", version = "1.20.0", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
     { name = "pre-commit", version = "4.3.0", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
     { name = "pre-commit", version = "4.4.0", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest", version = "8.4.2", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.1", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
+    { name = "pytest-cov" },
     { name = "ruff" },
     { name = "twine" },
 ]
@@ -87,47 +87,27 @@ docs = [
     { name = "sphinx-design", version = "0.7.0", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.11'" },
     { name = "sphinx-togglebutton" },
 ]
-full = [
-    { name = "pandas" },
-    { name = "spglib" },
-]
-jobflow = [
-    { name = "castepinput" },
-    { name = "jobflow", version = "0.1.19", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
-    { name = "jobflow", version = "0.3.1", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
-    { name = "maggma" },
-]
-test = [
-    { name = "pytest", version = "8.4.2", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version < '3.10'" },
-    { name = "pytest", version = "9.0.1", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }, marker = "python_full_version >= '3.10'" },
-    { name = "pytest-cov" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "ase", specifier = ">=3.17" },
-    { name = "build", marker = "extra == 'dev'" },
     { name = "castepinput", specifier = ">=0.1" },
-    { name = "castepinput", marker = "extra == 'jobflow'", specifier = ">=0.1" },
     { name = "click", specifier = ">=8.0" },
     { name = "ipykernel", marker = "extra == 'docs'" },
-    { name = "jobflow", marker = "extra == 'jobflow'", specifier = ">=0.1" },
-    { name = "maggma", marker = "extra == 'jobflow'", specifier = ">=0.50" },
-    { name = "mongomock", marker = "extra == 'database'" },
+    { name = "jobflow", specifier = ">=0.1" },
+    { name = "maggma", specifier = ">=0.50" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "myst-nb", marker = "extra == 'docs'", specifier = ">=1.0" },
     { name = "numpy", specifier = ">=1.20" },
-    { name = "pandas", marker = "extra == 'analysis'", specifier = ">=1.3.0" },
-    { name = "pandas", marker = "extra == 'full'", specifier = ">=1.3.0" },
+    { name = "pandas", specifier = ">=1.3.0" },
     { name = "plotly" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pydata-sphinx-theme", marker = "extra == 'docs'", specifier = ">=0.15" },
     { name = "pymatgen", specifier = ">=2022.0.0" },
-    { name = "pymongo", marker = "extra == 'database'" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=6.0" },
-    { name = "pytest-cov", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
-    { name = "spglib", marker = "extra == 'full'", specifier = ">=1.16" },
+    { name = "spglib", specifier = ">=1.16" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
     { name = "sphinx-autodoc2", marker = "extra == 'docs'", specifier = ">=0.5" },
     { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5" },
@@ -137,7 +117,7 @@ requires-dist = [
     { name = "tqdm" },
     { name = "twine", marker = "extra == 'dev'" },
 ]
-provides-extras = ["analysis", "full", "jobflow", "database", "test", "dev", "docs"]
+provides-extras = ["dev", "docs"]
 
 [[package]]
 name = "alabaster"
@@ -372,22 +352,6 @@ dependencies = [
 sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/0f/cc/e6be943efa9051bd15c2ee14077c2b10d6e27c9e9385fc43a03a5c4ed8b5/botocore-1.42.89.tar.gz", hash = "sha256:95ac52f472dad29942f3088b278ab493044516c16dbf9133c975af16527baa99", size = 15206290, upload-time = "2026-04-13T19:36:02.321Z" }
 wheels = [
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/91/f1/90a7b8eda38b7c3a65ca7ee0075bdf310b6b471cb1b95fab6e8994323a50/botocore-1.42.89-py3-none-any.whl", hash = "sha256:d9b786c8d9db6473063b4cc5be0ba7e6a381082307bd6afb69d4216f9fa95f35", size = 14887287, upload-time = "2026-04-13T19:35:56.677Z" },
-]
-
-[[package]]
-name = "build"
-version = "1.3.0"
-source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }
-dependencies = [
-    { name = "colorama", marker = "os_name == 'nt'" },
-    { name = "importlib-metadata", marker = "python_full_version < '3.10.2'" },
-    { name = "packaging" },
-    { name = "pyproject-hooks" },
-    { name = "tomli", marker = "python_full_version < '3.11'" },
-]
-sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/25/1c/23e33405a7c9eac261dff640926b8b5adaed6a6eb3e1767d441ed611d0c0/build-1.3.0.tar.gz", hash = "sha256:698edd0ea270bde950f53aed21f3a0135672206f3911e0176261a31e0e07b397", size = 48544, upload-time = "2025-08-01T21:27:09.268Z" }
-wheels = [
-    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/cb/8c/2b30c12155ad8de0cf641d76a8b396a16d2c36bc6d50b621a62b7c4567c1/build-1.3.0-py3-none-any.whl", hash = "sha256:7145f0b5061ba90a1500d60bd1b13ca0a8a4cebdd0cc16ed8adf1c0e739f43b4", size = 23382, upload-time = "2025-08-01T21:27:07.844Z" },
 ]
 
 [[package]]
@@ -4622,15 +4586,6 @@ source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }
 sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/f2/a5/181488fc2b9d093e3972d2a472855aae8a03f000592dbfce716a512b3359/pyparsing-3.2.5.tar.gz", hash = "sha256:2df8d5b7b2802ef88e8d016a2eb9c7aeaa923529cd251ed0fe4608275d4105b6", size = 1099274, upload-time = "2025-09-21T04:11:06.277Z" }
 wheels = [
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/10/5e/1aa9a93198c6b64513c9d7752de7422c06402de6600a8767da1524f9570b/pyparsing-3.2.5-py3-none-any.whl", hash = "sha256:e38a4f02064cf41fe6593d328d0512495ad1f3d8a91c4f73fc401b3079a59a5e", size = 113890, upload-time = "2025-09-21T04:11:04.117Z" },
-]
-
-[[package]]
-name = "pyproject-hooks"
-version = "1.2.0"
-source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }
-sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/e7/82/28175b2414effca1cdac8dc99f76d660e7a4fb0ceefa4b4ab8f5f6742925/pyproject_hooks-1.2.0.tar.gz", hash = "sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8", size = 19228, upload-time = "2024-09-29T09:24:13.293Z" }
-wheels = [
-    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/bd/24/12818598c362d7f300f18e74db45963dbcb85150324092410c8b49405e42/pyproject_hooks-1.2.0-py3-none-any.whl", hash = "sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913", size = 10216, upload-time = "2024-09-29T09:24:11.978Z" },
 ]
 
 [[package]]

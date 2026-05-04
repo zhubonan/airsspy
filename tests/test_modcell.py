@@ -79,3 +79,60 @@ def test_modify_cell(tmp_path):
     assert "Ge" in result_str
     # Check other content preserved
     assert any("kpoints_mp_grid" in line for line in result)
+
+
+def test_replace_block_duplicate_blocks():
+    """Test that duplicate matching blocks raise RuntimeError."""
+    cell_with_dupes = """\
+%BLOCK LATTICE_CART
+1.0 0.0 0.0
+0.0 1.0 0.0
+0.0 0.0 1.0
+%ENDBLOCK LATTICE_CART
+
+%BLOCK LATTICE_ABC
+1.0 0.0 0.0
+0.0 1.0 0.0
+0.0 0.0 1.0
+%ENDBLOCK LATTICE_ABC
+
+kpoints_mp_grid : 4 4 4
+"""
+    lines = cell_with_dupes.splitlines()
+    new_lattice = ["2.0 0.0 0.0", "0.0 2.0 0.0", "0.0 0.0 2.0"]
+    with pytest.raises(RuntimeError, match="Found multiple blocks"):
+        replace_block(lines, "LATTICE_CART", "LATTICE_(CART|ABC)", new_lattice)
+
+
+def test_modify_cell_duplicate_lattice(tmp_path):
+    """Test modify_cell raises on input with both LATTICE_CART and LATTICE_ABC."""
+    from ase import Atoms
+
+    cell_with_dupes = """\
+%BLOCK LATTICE_CART
+1.0 0.0 0.0
+0.0 1.0 0.0
+0.0 0.0 1.0
+%ENDBLOCK LATTICE_CART
+
+%BLOCK LATTICE_ABC
+2.0 2.0 2.0
+90.0 90.0 90.0
+%ENDBLOCK LATTICE_ABC
+
+%BLOCK POSITIONS_ABS
+Si 0.0 0.0 0.0
+%ENDBLOCK POSITIONS_ABS
+"""
+    cell_file = tmp_path / "dupe.cell"
+    cell_file.write_text(cell_with_dupes)
+
+    atoms = Atoms(
+        "Ge2",
+        positions=[[0.0, 0.0, 0.0], [2.0, 2.0, 2.0]],
+        cell=[[4.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0, 0.0, 4.0]],
+        pbc=True,
+    )
+
+    with pytest.raises(RuntimeError, match="Found multiple blocks"):
+        modify_cell(str(cell_file), atoms)

@@ -53,6 +53,9 @@ dev = [
     "ruff",
     "twine",
 ]
+ml = [
+    "torch-sim",
+]
 docs = [
     "sphinx>=7.0",
     "pydata-sphinx-theme>=0.15",

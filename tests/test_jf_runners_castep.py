@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # --- compose_task_doc tests ---
 
 
@@ -263,3 +265,261 @@ def test_castep_runner_max_fails(mock_run, mock_cellinput, tmp_path, monkeypatch
 
     assert result == 1
     assert mock_run.call_count == 3  # initial + 2 retries
+
+
+# --- Restart copy tests: -out.cell -> .cell block update ---
+
+INITIAL_CELL = """\
+%BLOCK LATTICE_CART
+1.0 0.0 0.0
+0.0 1.0 0.0
+0.0 0.0 1.0
+%ENDBLOCK LATTICE_CART
+
+%BLOCK POSITIONS_ABS
+Si 0.0 0.0 0.0
+%ENDBLOCK POSITIONS_ABS
+
+kpoints_mp_grid : 4 4 4
+"""
+
+UPDATED_OUT_CELL = """\
+%BLOCK LATTICE_CART
+5.0 0.0 0.0
+0.0 5.0 0.0
+0.0 0.0 5.0
+%ENDBLOCK LATTICE_CART
+
+%BLOCK POSITIONS_ABS
+Si 0.0 0.0 0.0
+Si 2.5 2.5 2.5
+%ENDBLOCK POSITIONS_ABS
+"""
+
+OUT_CELL_WITH_LATTICE_ABC = """\
+%BLOCK LATTICE_ABC
+5.0 5.0 5.0
+90.0 90.0 90.0
+%ENDBLOCK LATTICE_ABC
+
+%BLOCK POSITIONS_ABS
+Si 0.0 0.0 0.0
+Si 2.5 2.5 2.5
+%ENDBLOCK POSITIONS_ABS
+"""
+
+OUT_CELL_WITH_POSITIONS_FRAC = """\
+%BLOCK LATTICE_CART
+5.0 0.0 0.0
+0.0 5.0 0.0
+0.0 0.0 5.0
+%ENDBLOCK LATTICE_CART
+
+%BLOCK POSITIONS_FRAC
+Si 0.0 0.0 0.0
+Si 0.5 0.5 0.5
+%ENDBLOCK POSITIONS_FRAC
+"""
+
+OUT_CELL_MISSING_LATTICE = """\
+%BLOCK POSITIONS_ABS
+Si 0.0 0.0 0.0
+%ENDBLOCK POSITIONS_ABS
+"""
+
+OUT_CELL_MISSING_POSITIONS = """\
+%BLOCK LATTICE_CART
+5.0 0.0 0.0
+0.0 5.0 0.0
+0.0 0.0 5.0
+%ENDBLOCK LATTICE_CART
+"""
+
+CASTEP_CONVERGED = (
+    "Geometry optimization completed\nFinished iteration 50\nTotal time 10.0 s\n"
+)
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_copy_basic(mock_run, tmp_path, monkeypatch):
+    """Restart copy updates lattice and positions from -out.cell."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(INITIAL_CELL)
+    Path("Si-001-out.cell").write_text(UPDATED_OUT_CELL)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    runner.run("Si-001", INITIAL_CELL, ParamInput())
+
+    result = Path("Si-001.cell").read_text()
+    assert "5.0 0.0 0.0" in result
+    assert "Si 2.5 2.5 2.5" in result
+    assert "kpoints_mp_grid" in result
+    assert result.count("%BLOCK lattice") == 1
+    assert result.count("%BLOCK positions") == 1
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_preserves_other_content(mock_run, tmp_path, monkeypatch):
+    """Non-structural content from original .cell is preserved."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    cell_with_extra = INITIAL_CELL + "\nspecies_pot : Si POT\nsymmetry_tol : 0.01\n"
+    extra_out = UPDATED_OUT_CELL + "\nsymmetry_tol : 0.001\n"
+
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(cell_with_extra)
+    Path("Si-001-out.cell").write_text(extra_out)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    runner.run("Si-001", cell_with_extra, ParamInput())
+
+    result = Path("Si-001.cell").read_text()
+    assert "species_pot" in result
+    assert "Si POT" in result
+    assert "kpoints_mp_grid" in result
+    # lattice/positions from -out.cell are present
+    assert "5.0 0.0 0.0" in result
+    assert "Si 2.5 2.5 2.5" in result
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_lattice_abc_replaces_cart(mock_run, tmp_path, monkeypatch):
+    """Output LATTICE_ABC replaces input LATTICE_CART."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(INITIAL_CELL)
+    Path("Si-001-out.cell").write_text(OUT_CELL_WITH_LATTICE_ABC)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    runner.run("Si-001", INITIAL_CELL, ParamInput())
+
+    result = Path("Si-001.cell").read_text()
+    assert "%BLOCK lattice_abc" in result
+    assert "lattice_cart" not in result
+    assert "5.0 5.0 5.0" in result
+    assert "kpoints_mp_grid" in result
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_lattice_cart_replaces_abc(mock_run, tmp_path, monkeypatch):
+    """Output LATTICE_CART replaces input LATTICE_ABC."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    cell_with_abc = """\
+%BLOCK LATTICE_ABC
+1.0 1.0 1.0
+90.0 90.0 90.0
+%ENDBLOCK LATTICE_ABC
+%BLOCK POSITIONS_ABS
+Si 0.0 0.0 0.0
+%ENDBLOCK POSITIONS_ABS
+"""
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(cell_with_abc)
+    Path("Si-001-out.cell").write_text(UPDATED_OUT_CELL)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    runner.run("Si-001", cell_with_abc, ParamInput())
+
+    result = Path("Si-001.cell").read_text()
+    assert "%BLOCK lattice_cart" in result
+    assert "lattice_abc" not in result
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_positions_frac_replaces_abs(mock_run, tmp_path, monkeypatch):
+    """Output POSITIONS_FRAC replaces input POSITIONS_ABS."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(INITIAL_CELL)
+    Path("Si-001-out.cell").write_text(OUT_CELL_WITH_POSITIONS_FRAC)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    runner.run("Si-001", INITIAL_CELL, ParamInput())
+
+    result = Path("Si-001.cell").read_text()
+    assert "%BLOCK positions_frac" in result
+    assert "positions_abs" not in result
+    assert "Si 0.5 0.5 0.5" in result
+    assert "kpoints_mp_grid" in result
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_missing_lattice_raises(mock_run, tmp_path, monkeypatch):
+    """Restart raises RuntimeError when -out.cell has no lattice block."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(INITIAL_CELL)
+    Path("Si-001-out.cell").write_text(OUT_CELL_MISSING_LATTICE)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    with pytest.raises(RuntimeError, match="No lattice block"):
+        runner.run("Si-001", INITIAL_CELL, ParamInput())
+
+
+@patch("airsspy.jf.runners.subprocess.run")
+def test_restart_missing_positions_raises(mock_run, tmp_path, monkeypatch):
+    """Restart raises RuntimeError when -out.cell has no positions block."""
+    from castepinput.inputs import ParamInput
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.cell").write_text(INITIAL_CELL)
+    Path("Si-001-out.cell").write_text(OUT_CELL_MISSING_POSITIONS)
+
+    def side_effect(*args, **kwargs):
+        Path("Si-001.castep").write_text(CASTEP_CONVERGED)
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = side_effect
+
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=200)
+    with pytest.raises(RuntimeError, match="No positions block"):
+        runner.run("Si-001", INITIAL_CELL, ParamInput())
