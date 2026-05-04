@@ -44,9 +44,9 @@ def replace_block(
                     f"Found multiple blocks matching '{block_pattern}'. "
                     f"Cell file may have duplicate lattice or positions blocks."
                 )
-            new_lines.append("%BLOCK " + block_name.upper())
+            new_lines.append("%BLOCK " + block_name.lower())
             new_lines.extend(new_value)
-            new_lines.append("%ENDBLOCK " + block_name.upper())
+            new_lines.append("%ENDBLOCK " + block_name.lower())
             continue
         if re.search(r"%ENDBLOCK " + f"{block_pattern.upper()}", line.upper()) and in_block:
             out_from_block = True

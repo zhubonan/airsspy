@@ -27,8 +27,8 @@ def test_replace_block_basic():
     result = replace_block(lines, "LATTICE_CART", "LATTICE_CART", new_lattice)
 
     assert any("2.0 0.0 0.0" in line for line in result)
-    assert "%BLOCK LATTICE_CART" in result
-    assert "%ENDBLOCK LATTICE_CART" in result
+    assert "%BLOCK lattice_cart" in result
+    assert "%ENDBLOCK lattice_cart" in result
     # Other content should remain
     assert any("kpoints_mp_grid" in line for line in result)
 
