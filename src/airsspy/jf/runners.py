@@ -16,11 +16,37 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def clean_files(
+    struct_name: str,
+    extensions: list[str],
+    extra_paths: list[str] | None = None,
+) -> None:
+    """Remove files associated with a failed calculation.
+
+    Args:
+        struct_name: Structure name (without extension).
+        extensions: File extensions to remove (e.g. ``[".castep", ".cell"]``).
+        extra_paths: Additional paths to remove (files or directories).
+    """
+    for ext in extensions:
+        p = Path(struct_name + ext)
+        if p.is_file():
+            p.unlink()
+    for ep in extra_paths or []:
+        p = Path(ep)
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.is_file():
+            p.unlink()
+
+
 def run_buildcell(
     seed_name: str,
     seed_content: str,
     build_timeout: int = 30,
     write_seed: bool = True,
+    seed_text_transform=None,
+    max_attempts: int = 3,
 ) -> Optional[dict[str, str]]:
     """
     Run the buildcell executable to generate a random structure.
@@ -30,6 +56,9 @@ def run_buildcell(
         seed_content: Content of the seed .cell file.
         build_timeout: Timeout in seconds for each buildcell attempt.
         write_seed: Whether to write the seed .cell file to disk.
+        seed_text_transform: Optional callable that rewrites seed content before
+            each buildcell attempt.
+        max_attempts: Maximum number of buildcell attempts.
 
     Returns:
         Dictionary with ``struct_name``, ``seed_name``, ``seed_hash``,
@@ -38,10 +67,16 @@ def run_buildcell(
     from ..casteptools import get_rand_cell_name
 
     logger.info("Starting random structure generation...")
-    attempt = 3
+    attempt = max_attempts
     stdout: Optional[str] = None
+    input_content = seed_content
     while attempt > 0:
         try:
+            input_content = (
+                seed_text_transform(seed_content)
+                if seed_text_transform is not None
+                else seed_content
+            )
             proc = subprocess.Popen(
                 "buildcell",
                 stdin=subprocess.PIPE,
@@ -49,7 +84,7 @@ def run_buildcell(
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
             )
-            out, _ = proc.communicate(seed_content, timeout=build_timeout)
+            out, _ = proc.communicate(input_content, timeout=build_timeout)
         except subprocess.TimeoutExpired:
             attempt -= 1
             proc.kill()
@@ -81,8 +116,21 @@ def run_buildcell(
 class AirssCastepSinglePointRunner:
     """Execute a CASTEP single-point calculation."""
 
+    _cleanup_extensions = [
+        ".castep",
+        ".cell",
+        ".param",
+        "-out.cell",
+        "-orig.cell",
+        ".res",
+        ".err",
+    ]
+
     def __init__(self, executable: str = "castep.mpi") -> None:
         self.executable = executable
+
+    def clean_failed(self, struct_name: str) -> None:
+        clean_files(struct_name, self._cleanup_extensions)
 
     def prepare_inputs(self, struct_name: str, cellinput, paraminput) -> None:
         """Write .cell and .param files to disk.
@@ -221,9 +269,7 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
                     else None
                 )
                 if lattice_key is None:
-                    raise RuntimeError(
-                        f"No lattice block in {out_cell}"
-                    )
+                    raise RuntimeError(f"No lattice block in {out_cell}")
                 for k in ("lattice_cart", "lattice_abc"):
                     if k in cell_in and k != lattice_key:
                         del cell_in[k]
@@ -239,9 +285,7 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
                     else None
                 )
                 if positions_key is None:
-                    raise RuntimeError(
-                        f"No positions block in {out_cell}"
-                    )
+                    raise RuntimeError(f"No positions block in {out_cell}")
                 for k in ("positions_abs", "positions_frac"):
                     if k in cell_in and k != positions_key:
                         del cell_in[k]
@@ -335,7 +379,11 @@ def compose_task_doc(struct_name: str) -> dict:
         import spglib
 
         sg = spglib.get_spacegroup(
-            (atoms.get_cell().array, atoms.get_scaled_positions(), atoms.get_atomic_numbers()),
+            (
+                atoms.get_cell().array,
+                atoms.get_scaled_positions(),
+                atoms.get_atomic_numbers(),
+            ),
             symprec=0.1,
         )
         sym = sg.split()[0] if sg else "P1"
@@ -391,6 +439,7 @@ class AirssScriptRelaxRunner:
     """
 
     _param_suffix: str = ".param"
+    _cleanup_extensions: list[str] = []
 
     def __init__(
         self,
@@ -401,6 +450,9 @@ class AirssScriptRelaxRunner:
         self.executable = executable
         self.timeout = timeout
         self.max_attempts = max_attempts
+
+    def clean_failed(self, struct_name: str) -> None:
+        clean_files(struct_name, self._cleanup_extensions)
 
     def _get_cmd(self, struct_name: str) -> list[str]:
         """Construct the shell command. Must be overridden by subclasses."""
@@ -487,6 +539,15 @@ class AirssGulpRelaxRunner(AirssScriptRelaxRunner):
     """
 
     _param_suffix: str = ".lib"
+    _cleanup_extensions = [
+        ".cell",
+        ".lib",
+        ".castep",
+        ".gout",
+        "-orig.cell",
+        ".res",
+        ".err",
+    ]
 
     def __init__(
         self,
@@ -538,6 +599,14 @@ class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
     """
 
     _param_suffix: str = ".pp"
+    _cleanup_extensions = [
+        ".cell",
+        ".pp",
+        ".castep",
+        "-orig.cell",
+        ".res",
+        ".err",
+    ]
 
     def __init__(
         self,
@@ -568,6 +637,8 @@ class AirssAbacusRelaxRunner:
     next iteration.
     """
 
+    _cleanup_extensions = [".cell", ".INPUT", "-orig.cell", ".res", ".err"]
+
     def __init__(
         self,
         executable: str = "abacus",
@@ -579,6 +650,13 @@ class AirssAbacusRelaxRunner:
         self.max_fails = max_fails
         self.max_iterations = max_iterations
         self.pressure = pressure
+
+    def clean_failed(self, struct_name: str) -> None:
+        clean_files(
+            struct_name,
+            self._cleanup_extensions,
+            extra_paths=[f"{struct_name}.abacus"],
+        )
 
     def _set_input_param(self, input_path: str, key: str, value: str) -> None:
         """Set or add a parameter in an ABACUS INPUT file."""
@@ -648,7 +726,7 @@ class AirssAbacusRelaxRunner:
         """
         out_path = Path(f"{workdir}/abacus_out")
         with open(out_path, "w") as outf:
-            proc = subprocess.run(
+            subprocess.run(
                 self.executable.split(),
                 stdout=outf,
                 stderr=subprocess.STDOUT,
@@ -736,7 +814,10 @@ class AirssAbacusRelaxRunner:
 
             logger.info(
                 "%s: rough run %d/3 (iter=%d/%d)",
-                struct_name, rough_i + 1, iter_counter, self.max_iterations,
+                struct_name,
+                rough_i + 1,
+                iter_counter,
+                self.max_iterations,
             )
             result = self._run_single(struct_name, workdir, input_path)
             if result is None:
@@ -771,14 +852,20 @@ class AirssAbacusRelaxRunner:
             while iter_counter < self.max_iterations:
                 if fail_counter > self.max_fails:
                     logger.error(
-                        "%s: too many failures (%d), aborting", struct_name, fail_counter
+                        "%s: too many failures (%d), aborting",
+                        struct_name,
+                        fail_counter,
                     )
                     return 1
 
                 cycle += 1
                 logger.info(
                     "%s: phase 2 cycle %d (iter=%d/%d, consecutive_ok=%d)",
-                    struct_name, cycle, iter_counter, self.max_iterations, success_counter,
+                    struct_name,
+                    cycle,
+                    iter_counter,
+                    self.max_iterations,
+                    success_counter,
                 )
                 result = self._run_single(struct_name, workdir, input_path)
                 if result is None:
@@ -881,8 +968,17 @@ class AirssAbacusSinglePointRunner:
     success.
     """
 
+    _cleanup_extensions = [".cell", ".INPUT", "-orig.cell", ".res", ".err"]
+
     def __init__(self, executable: str = "abacus") -> None:
         self.executable = executable
+
+    def clean_failed(self, struct_name: str) -> None:
+        clean_files(
+            struct_name,
+            self._cleanup_extensions,
+            extra_paths=[f"{struct_name}.abacus"],
+        )
 
     def prepare_inputs(
         self,

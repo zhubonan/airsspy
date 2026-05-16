@@ -1,7 +1,11 @@
 """Tests for CLI commands."""
 
+from pathlib import Path
+from unittest.mock import patch
+
 from click.testing import CliRunner
 
+from airsspy.cli import cmd_run
 from airsspy.cli.main import cli
 
 
@@ -45,7 +49,9 @@ def test_deploy_search_dryrun(tmp_path, monkeypatch):
     with runner.isolated_filesystem(temp_dir=tmp_path):
         # Create dummy seed files
         with open("Si.cell", "w") as f:
-            f.write("%BLOCK LATTICE_CART\n5.43 0 0\n0 5.43 0\n0 0 5.43\n%ENDBLOCK LATTICE_CART\n")
+            f.write(
+                "%BLOCK LATTICE_CART\n5.43 0 0\n0 5.43 0\n0 0 5.43\n%ENDBLOCK LATTICE_CART\n"
+            )
         with open("Si.param", "w") as f:
             f.write("task: geometryoptimization\ncut_off_energy: 300\n")
 
@@ -54,9 +60,12 @@ def test_deploy_search_dryrun(tmp_path, monkeypatch):
             [
                 "deploy",
                 "search",
-                "--seed", "Si",
-                "--project", "test",
-                "--num", "10",
+                "--seed",
+                "Si",
+                "--project",
+                "test",
+                "--num",
+                "10",
                 "--dryrun",
             ],
         )
@@ -69,7 +78,13 @@ def test_deploy_search_dryrun(tmp_path, monkeypatch):
 def test_db_commands_help():
     """Test all db subcommands have valid help."""
     runner = CliRunner()
-    for cmd in ["list-projects", "list-seeds", "summary", "throughput", "retrieve-project"]:
+    for cmd in [
+        "list-projects",
+        "list-seeds",
+        "summary",
+        "throughput",
+        "retrieve-project",
+    ]:
         result = runner.invoke(cli, ["db", cmd, "--help"])
         assert result.exit_code == 0, f"db {cmd} --help failed"
 
@@ -236,7 +251,7 @@ def test_rank_delta_e_filter():
     assert result.exit_code == 0
     assert "Si-001" in result.output
     # Si-002 should be filtered out
-    lines = [l for l in result.output.split("\n") if "Si-002" in l]
+    lines = [line for line in result.output.split("\n") if "Si-002" in line]
     assert len(lines) == 0
 
 
@@ -245,11 +260,11 @@ def test_rank_extxyz_file(tmp_path):
     runner = CliRunner()
     xyz_file = tmp_path / "test.xyz"
     xyz_content = (
-        '2\n'
+        "2\n"
         'Lattice="5.43 0.0 0.0 0.0 5.43 0.0 0.0 0.0 5.43" '
-        'Properties=species:S:1:pos:R:3 energy=-10.625 label=Si-001\n'
-        'Si 0.0 0.0 0.0\n'
-        'Si 0.25 0.25 0.25\n'
+        "Properties=species:S:1:pos:R:3 energy=-10.625 label=Si-001\n"
+        "Si 0.0 0.0 0.0\n"
+        "Si 0.25 0.25 0.25\n"
     )
     xyz_file.write_text(xyz_content)
     result = runner.invoke(cli, ["rank", str(xyz_file)])
@@ -395,7 +410,9 @@ def test_convert_xyz_to_res(tmp_path):
 
     xyz_in = tmp_path / "in.xyz"
     out_dir = tmp_path / "res_output"
-    atoms = Atoms("Si2", positions=[[0, 0, 0], [1.3, 1.3, 1.3]], cell=[5.43] * 3, pbc=True)
+    atoms = Atoms(
+        "Si2", positions=[[0, 0, 0], [1.3, 1.3, 1.3]], cell=[5.43] * 3, pbc=True
+    )
     atoms.info["label"] = "Si-test"
     atoms.info["pressure"] = 0.0
     atoms.info["spin"] = 0.0
@@ -432,6 +449,242 @@ def test_run_search_help():
     assert "--nmax" in result.output
     assert "--build-only" in result.output
     assert "--code" in result.output
+    assert "--formula" in result.output
+    assert "--elements" in result.output
+    assert "--max-coeff" in result.output
+    assert "--oxidation-state" in result.output
+    assert "--formula-elements" not in result.output
+    assert "--prune" in result.output
+
+
+def test_run_search_formula_diagnose():
+    """Test formula diagnosis prints rewritten seed text and exits."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n#NATOM=2\n#SLACK=0.25\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "Si",
+                "--nmax",
+                "1",
+                "--build-only",
+                "--formula",
+                "Si2",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Sample 1" in result.output
+    assert "User settings" in result.output
+    assert "buildcell input" in result.output
+    assert "seedfile = Si.cell" in result.output
+    assert "#FORMULA=Si" in result.output
+    assert "#SPECIES=Si" not in result.output
+    assert "#SLACK=0.25" in result.output
+
+
+def test_run_search_formula_accepts_comma_separated_values():
+    """Test --formula accepts one comma-separated formula list."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text("#SPECIES=Si,O\n#NFORM=1\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "SiO",
+                "--build-only",
+                "--formula",
+                "SiO2,SiO",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "#FORMULA=" in result.output
+
+
+def test_run_search_formula_repeated_use_rejected():
+    """Test --formula is not repeatable."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text("#SPECIES=Si,O\n#NFORM=1\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "SiO",
+                "--build-only",
+                "--formula",
+                "SiO2",
+                "--formula",
+                "SiO",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "may be specified only once" in result.output
+
+
+def test_run_search_formula_diagnose_combined_oxidation_states():
+    """Test oxidation states can be supplied as one comma-separated option."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LTO.cell").write_text("#SPECIES=Li,Ti,O\n#NATOM=4-24\n#NFORM=1-2\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LTO",
+                "--nmax",
+                "1",
+                "--build-only",
+                "--elements",
+                "Li,Ti,O",
+                "--max-coeff",
+                "3",
+                "--oxidation-state",
+                "Li=1,Ti=4,O=-2",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "#FORMULA=" in result.output
+
+
+def test_run_search_formula_oxidation_state_invalid_assignment():
+    """Test invalid combined oxidation-state assignments fail clearly."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LTO.cell").write_text("#SPECIES=Li,Ti,O\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LTO",
+                "--build-only",
+                "--elements",
+                "Li,Ti,O",
+                "--oxidation-state",
+                "Li=1,Ti",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "Invalid --oxidation-state" in result.output
+
+
+def test_run_search_old_formula_prefixed_alias_rejected():
+    """Test old formula-prefixed aliases are not accepted."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LTO.cell").write_text("#SPECIES=Li,Ti,O\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LTO",
+                "--build-only",
+                "--formula-elements",
+                "Li,Ti,O",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+
+
+def test_run_search_formula_transform_passed_to_buildcell():
+    """Test formula sampling passes a seed transform into run_buildcell."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n#NATOM=2\n")
+        with patch("airsspy.jf.runners.run_buildcell") as mock_buildcell:
+            mock_buildcell.return_value = {
+                "struct_name": "Si-001",
+                "seed_name": "Si",
+                "struct_content": "",
+            }
+            result = runner.invoke(
+                cli,
+                [
+                    "run",
+                    "search",
+                    "--seed",
+                    "Si",
+                    "--nmax",
+                    "1",
+                    "--build-only",
+                    "--formula",
+                    "Si2",
+                ],
+            )
+
+    assert result.exit_code == 0
+    transform = mock_buildcell.call_args.kwargs["seed_text_transform"]
+    assert transform is not None
+    transformed = transform("#SPECIES=Si\n#NATOM=2\n")
+    assert "#FORMULA=Si" in transformed
+    assert "#SPECIES=Si" not in transformed
+
+
+def test_run_search_prune_rejects_build_only():
+    """Test pruning is rejected for build-only searches."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n")
+        result = runner.invoke(
+            cli,
+            ["run", "search", "--seed", "Si", "--build-only", "--prune"],
+        )
+
+    assert result.exit_code != 0
+    assert "--prune cannot be used with --build-only" in result.output
+
+
+def test_walltime_check_ignores_scheduler_parse_errors(caplog):
+    """Malformed scheduler walltime data should not abort a run loop."""
+
+    class BrokenScheduler:
+        def get_remaining_seconds(self):
+            raise ValueError("bad scheduler time")
+
+    with caplog.at_level("WARNING"):
+        assert cmd_run._walltime_remaining_ok(BrokenScheduler(), 300)
+    assert "Could not determine remaining walltime" in caplog.text
+
+
+def test_walltime_check_stops_when_buffer_exceeded():
+    """Low remaining walltime should still stop the run loop."""
+
+    class LowTimeScheduler:
+        def get_remaining_seconds(self):
+            return 10
+
+    assert not cmd_run._walltime_remaining_ok(LowTimeScheduler(), 300)
 
 
 def test_run_relax_help():
@@ -464,9 +717,7 @@ def test_run_search_missing_param():
             "%ENDBLOCK LATTICE_CART\n"
             "%BLOCK POSITIONS_FRAC\nSi 0.0 0.0 0.0\n%ENDBLOCK POSITIONS_FRAC\n"
         )
-        result = runner.invoke(
-            cli, ["run", "search", "--seed", "Si", "--nmax", "1"]
-        )
+        result = runner.invoke(cli, ["run", "search", "--seed", "Si", "--nmax", "1"])
         assert result.exit_code != 0
         assert "not found" in result.output.lower()
 

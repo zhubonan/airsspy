@@ -67,6 +67,30 @@ Si   2.715000  2.715000  2.715000
 """
 
 
+def test_run_buildcell_writes_original_seed_when_transformed(tmp_path, monkeypatch):
+    """Formula sampling should not mutate the source seed file."""
+    from airsspy.jf.runners import run_buildcell
+
+    monkeypatch.chdir(tmp_path)
+    proc = MagicMock()
+    proc.communicate.return_value = ("generated cell", "")
+
+    with (
+        patch("airsspy.jf.runners.subprocess.Popen", return_value=proc),
+        patch("airsspy.casteptools.get_rand_cell_name", return_value="Si-001.cell"),
+    ):
+        result = run_buildcell(
+            "Si",
+            "original seed",
+            seed_text_transform=lambda text: text.replace("original", "sampled"),
+        )
+
+    assert result["struct_name"] == "Si-001"
+    assert Path("Si.cell").read_text() == "original seed"
+    assert Path("Si-001.cell").read_text() == "generated cell"
+    proc.communicate.assert_called_once_with("sampled seed", timeout=30)
+
+
 @patch("airsspy.restools.save_airss_res")
 @patch("castepinput.inputs.CellInput")
 def test_compose_task_doc_basic(mock_cellinput, mock_save):
@@ -75,7 +99,11 @@ def test_compose_task_doc_basic(mock_cellinput, mock_save):
 
     # Setup mock for CellInput
     mock_ci = MagicMock()
-    mock_ci.get_positions.return_value = (["Si", "Si"], [[0, 0, 0], [2.715, 2.715, 2.715]], [None, None])
+    mock_ci.get_positions.return_value = (
+        ["Si", "Si"],
+        [[0, 0, 0], [2.715, 2.715, 2.715]],
+        [None, None],
+    )
     mock_ci.get_cell.return_value = [[5.43, 0, 0], [0, 5.43, 0], [0, 0, 5.43]]
     mock_cellinput.from_file.return_value = mock_ci
 
@@ -90,7 +118,9 @@ def test_compose_task_doc_basic(mock_cellinput, mock_save):
 
 @patch("airsspy.restools.save_airss_res")
 @patch("castepinput.inputs.CellInput")
-def test_compose_task_doc_with_real_files(mock_cellinput, mock_save, tmp_path, monkeypatch):
+def test_compose_task_doc_with_real_files(
+    mock_cellinput, mock_save, tmp_path, monkeypatch
+):
     """Test compose_task_doc reads real files from disk."""
     from airsspy.jf.runners import compose_task_doc
 
@@ -99,7 +129,11 @@ def test_compose_task_doc_with_real_files(mock_cellinput, mock_save, tmp_path, m
     Path("Si-001-out.cell").write_text(CELL_OUT_CONTENT)
 
     mock_ci = MagicMock()
-    mock_ci.get_positions.return_value = (["Si", "Si"], [[0, 0, 0], [2.715, 2.715, 2.715]], [None, None])
+    mock_ci.get_positions.return_value = (
+        ["Si", "Si"],
+        [[0, 0, 0], [2.715, 2.715, 2.715]],
+        [None, None],
+    )
     mock_ci.get_cell.return_value = [[5.43, 0, 0], [0, 5.43, 0], [0, 0, 5.43]]
     mock_cellinput.from_file.return_value = mock_ci
 
@@ -115,7 +149,9 @@ def test_compose_task_doc_with_real_files(mock_cellinput, mock_save, tmp_path, m
 
 @patch("airsspy.restools.save_airss_res")
 @patch("castepinput.inputs.CellInput")
-def test_compose_task_doc_fallback_cell(mock_cellinput, mock_save, tmp_path, monkeypatch):
+def test_compose_task_doc_fallback_cell(
+    mock_cellinput, mock_save, tmp_path, monkeypatch
+):
     """Test compose_task_doc falls back to .cell when -out.cell is missing."""
     from airsspy.jf.runners import compose_task_doc
 
@@ -124,7 +160,11 @@ def test_compose_task_doc_fallback_cell(mock_cellinput, mock_save, tmp_path, mon
     Path("Si-001.cell").write_text(CELL_OUT_CONTENT)
 
     mock_ci = MagicMock()
-    mock_ci.get_positions.return_value = (["Si", "Si"], [[0, 0, 0], [2.715, 2.715, 2.715]], [None, None])
+    mock_ci.get_positions.return_value = (
+        ["Si", "Si"],
+        [[0, 0, 0], [2.715, 2.715, 2.715]],
+        [None, None],
+    )
     mock_ci.get_cell.return_value = [[5.43, 0, 0], [0, 5.43, 0], [0, 0, 5.43]]
     mock_cellinput.from_file.return_value = mock_ci
 
@@ -137,7 +177,9 @@ def test_compose_task_doc_fallback_cell(mock_cellinput, mock_save, tmp_path, mon
 
 @patch("airsspy.restools.save_airss_res")
 @patch("castepinput.inputs.CellInput")
-def test_compose_task_doc_missing_castep(mock_cellinput, mock_save, tmp_path, monkeypatch):
+def test_compose_task_doc_missing_castep(
+    mock_cellinput, mock_save, tmp_path, monkeypatch
+):
     """Test compose_task_doc handles missing .castep file."""
     from airsspy.jf.runners import compose_task_doc
 
@@ -145,7 +187,11 @@ def test_compose_task_doc_missing_castep(mock_cellinput, mock_save, tmp_path, mo
     Path("Si-001-out.cell").write_text(CELL_OUT_CONTENT)
 
     mock_ci = MagicMock()
-    mock_ci.get_positions.return_value = (["Si", "Si"], [[0, 0, 0], [2.715, 2.715, 2.715]], [None, None])
+    mock_ci.get_positions.return_value = (
+        ["Si", "Si"],
+        [[0, 0, 0], [2.715, 2.715, 2.715]],
+        [None, None],
+    )
     mock_ci.get_cell.return_value = [[5.43, 0, 0], [0, 5.43, 0], [0, 0, 5.43]]
     mock_cellinput.from_file.return_value = mock_ci
 
@@ -166,7 +212,11 @@ def test_compose_task_doc_with_spin(mock_cellinput, mock_save, tmp_path, monkeyp
     Path("Si-001-out.cell").write_text(CELL_OUT_CONTENT)
 
     mock_ci = MagicMock()
-    mock_ci.get_positions.return_value = (["Si", "Si"], [[0, 0, 0], [2.715, 2.715, 2.715]], [None, None])
+    mock_ci.get_positions.return_value = (
+        ["Si", "Si"],
+        [[0, 0, 0], [2.715, 2.715, 2.715]],
+        [None, None],
+    )
     mock_ci.get_cell.return_value = [[5.43, 0, 0], [0, 5.43, 0], [0, 0, 5.43]]
     mock_cellinput.from_file.return_value = mock_ci
 
@@ -187,7 +237,9 @@ def test_castep_runner_converged(mock_run, mock_cellinput, tmp_path, monkeypatch
 
     monkeypatch.chdir(tmp_path)
 
-    castep_completed = "Geometry optimization completed\nFinished iteration 50\nTotal time 10.0 s\n"
+    castep_completed = (
+        "Geometry optimization completed\nFinished iteration 50\nTotal time 10.0 s\n"
+    )
 
     mock_run.return_value = MagicMock(returncode=0)
     mock_ci = MagicMock()
@@ -203,7 +255,9 @@ def test_castep_runner_converged(mock_run, mock_cellinput, tmp_path, monkeypatch
     mock_run.side_effect = write_castep_side_effect
 
     param = ParamInput()
-    runner = AirssCastepRelaxRunner(executable="castep", max_fails=2, max_iterations=200)
+    runner = AirssCastepRelaxRunner(
+        executable="castep", max_fails=2, max_iterations=200
+    )
     result = runner.run("Si-001", "cell content", param)
 
     assert result == 0
@@ -232,7 +286,9 @@ def test_castep_runner_max_iterations(mock_run, mock_cellinput, tmp_path, monkey
             if call_count[0] < 3:
                 f.write("Geometry optimization\nFinished iteration 99\n")
             else:
-                f.write("Geometry optimization completed\nFinished iteration 150\nTotal time 10.0 s\n")
+                f.write(
+                    "Geometry optimization completed\nFinished iteration 150\nTotal time 10.0 s\n"
+                )
         return MagicMock(returncode=0)
 
     mock_run.side_effect = write_castep_side_effect
@@ -344,6 +400,7 @@ CASTEP_CONVERGED = (
 def test_restart_copy_basic(mock_run, tmp_path, monkeypatch):
     """Restart copy updates lattice and positions from -out.cell."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     monkeypatch.chdir(tmp_path)
@@ -371,6 +428,7 @@ def test_restart_copy_basic(mock_run, tmp_path, monkeypatch):
 def test_restart_preserves_other_content(mock_run, tmp_path, monkeypatch):
     """Non-structural content from original .cell is preserved."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     cell_with_extra = INITIAL_CELL + "\nspecies_pot : Si POT\nsymmetry_tol : 0.01\n"
@@ -402,6 +460,7 @@ def test_restart_preserves_other_content(mock_run, tmp_path, monkeypatch):
 def test_restart_lattice_abc_replaces_cart(mock_run, tmp_path, monkeypatch):
     """Output LATTICE_ABC replaces input LATTICE_CART."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     monkeypatch.chdir(tmp_path)
@@ -428,6 +487,7 @@ def test_restart_lattice_abc_replaces_cart(mock_run, tmp_path, monkeypatch):
 def test_restart_lattice_cart_replaces_abc(mock_run, tmp_path, monkeypatch):
     """Output LATTICE_CART replaces input LATTICE_ABC."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     cell_with_abc = """\
@@ -461,6 +521,7 @@ Si 0.0 0.0 0.0
 def test_restart_positions_frac_replaces_abs(mock_run, tmp_path, monkeypatch):
     """Output POSITIONS_FRAC replaces input POSITIONS_ABS."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     monkeypatch.chdir(tmp_path)
@@ -487,6 +548,7 @@ def test_restart_positions_frac_replaces_abs(mock_run, tmp_path, monkeypatch):
 def test_restart_missing_lattice_raises(mock_run, tmp_path, monkeypatch):
     """Restart raises RuntimeError when -out.cell has no lattice block."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     monkeypatch.chdir(tmp_path)
@@ -508,6 +570,7 @@ def test_restart_missing_lattice_raises(mock_run, tmp_path, monkeypatch):
 def test_restart_missing_positions_raises(mock_run, tmp_path, monkeypatch):
     """Restart raises RuntimeError when -out.cell has no positions block."""
     from castepinput.inputs import ParamInput
+
     from airsspy.jf.runners import AirssCastepRelaxRunner
 
     monkeypatch.chdir(tmp_path)

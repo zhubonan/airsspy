@@ -79,6 +79,9 @@ class AirssSearchMaker(Maker):
         for i in range(self.n_structures):
             logger.info("Building structure %d/%d", i + 1, self.n_structures)
 
+            struct_name = None
+            runner = None
+
             try:
                 build_output = run_buildcell(
                     seed_name,
@@ -138,9 +141,7 @@ class AirssSearchMaker(Maker):
                         executable=self.executable,
                         max_iterations=self.max_iterations,
                     )
-                    return_code = runner.run(
-                        struct_name, struct_content, param_content
-                    )
+                    return_code = runner.run(struct_name, struct_content, param_content)
                 else:
                     raise ValueError(f"Unknown code: {self.code}")
 
@@ -186,11 +187,15 @@ class AirssSearchMaker(Maker):
                     e,
                     exc_info=True,
                 )
+                if struct_name and runner:
+                    try:
+                        runner.clean_failed(struct_name)
+                    except Exception:
+                        pass
                 n_failed += 1
-                struct_name = f"unknown-{i}"
                 results.append(
                     AirssResultDoc(
-                        struct_name=struct_name,
+                        struct_name=struct_name or f"unknown-{i}",
                         seed_name=seed_name,
                         project_name=project_name,
                         relax_status=RelaxOutcome.FAILED,
@@ -216,7 +221,11 @@ class AirssSearchMaker(Maker):
         )
 
         stop = False
-        if self.stop_if_not_converged and len(results) > 0 and n_errored == len(results):
+        if (
+            self.stop_if_not_converged
+            and len(results) > 0
+            and n_errored == len(results)
+        ):
             stop = True
         return Response(stop_children=stop, output=search_doc)
 
@@ -265,6 +274,7 @@ class AirssRelaxMaker(Maker):
         for structure, struct_name, cellinput in zip(
             structures, struct_names, cellinputs
         ):
+            runner = None
             try:
                 if self.code == "castep":
                     runner = AirssCastepRelaxRunner(
@@ -326,9 +336,7 @@ class AirssRelaxMaker(Maker):
                         executable=self.executable,
                         max_iterations=self.max_iterations,
                     )
-                    return_code = runner.run(
-                        struct_name, struct_content, param_content
-                    )
+                    return_code = runner.run(struct_name, struct_content, param_content)
                 else:
                     raise ValueError(f"Unknown code: {self.code}")
 
@@ -372,6 +380,11 @@ class AirssRelaxMaker(Maker):
                     e,
                     exc_info=True,
                 )
+                if runner:
+                    try:
+                        runner.clean_failed(struct_name)
+                    except Exception:
+                        pass
                 n_failed += 1
                 results.append(
                     AirssResultDoc(
@@ -399,7 +412,11 @@ class AirssRelaxMaker(Maker):
         )
 
         stop = False
-        if self.stop_if_not_converged and len(results) > 0 and n_errored == len(results):
+        if (
+            self.stop_if_not_converged
+            and len(results) > 0
+            and n_errored == len(results)
+        ):
             stop = True
         return Response(stop_children=stop, output=relax_doc)
 
