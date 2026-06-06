@@ -26,9 +26,11 @@ For example ``mace.calculators:MACECalculator@medium``.
 
 import importlib
 import logging
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
+from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import read as ase_read
 from ase.io import write as ase_write
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 # 1 eV/Ang^3 = 160.21766208 GPa
 EV_PER_ANG3_TO_GPA = 160.21766208
+StructureInput = Union[str, Atoms]
 
 
 def _resolve_calculator(calculator_spec: str, **kwargs):
@@ -88,6 +91,30 @@ def _cell_to_atoms(cell_path: str):
     return atoms
 
 
+def _cell_content_to_atoms(cell_content: str):
+    """Read CASTEP cell content into ASE Atoms without leaving a .cell file."""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".cell", prefix="airsspy-ml-", delete=False
+        ) as handle:
+            handle.write(cell_content)
+            tmp_path = handle.name
+        return _cell_to_atoms(tmp_path)
+    finally:
+        if tmp_path is not None:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+def _structure_input_to_atoms(structure_input: StructureInput):
+    """Return ASE Atoms from either cell text or an existing Atoms object."""
+    if isinstance(structure_input, Atoms):
+        atoms = structure_input.copy()
+        atoms.pbc = True
+        return atoms
+    return _cell_content_to_atoms(structure_input)
+
+
 def _get_pressure_gpa(atoms) -> float:
     """Extract scalar pressure in GPa from an ASE Atoms with stress.
 
@@ -127,22 +154,18 @@ class AirssMlSinglePointRunner:
 
         clean_files(struct_name, self._cleanup_extensions)
 
-    def run(self, struct_name: str, cell_content: str) -> int:
+    def run(self, struct_name: str, structure_input: StructureInput) -> int:
         """Attach calculator, compute energy/forces/stress, save results.
 
         Args:
             struct_name: Structure name (without extension).
-            cell_content: Content of the .cell file (will be written to disk).
+            structure_input: Content of a .cell file or an ASE Atoms object.
 
         Returns:
             0 on success, 1 on failure.
         """
-        cell_path = struct_name + ".cell"
-        if not Path(cell_path).is_file():
-            Path(cell_path).write_text(cell_content)
-
         try:
-            atoms = _cell_to_atoms(cell_path)
+            atoms = _structure_input_to_atoms(structure_input)
             calc = _resolve_calculator(self.calculator_spec, **self.calculator_kwargs)
             atoms.calc = calc
 
@@ -204,24 +227,20 @@ class AirssMlRelaxRunner:
 
         clean_files(struct_name, self._cleanup_extensions)
 
-    def run(self, struct_name: str, cell_content: str) -> int:
+    def run(self, struct_name: str, structure_input: StructureInput) -> int:
         """Attach calculator, run ASE optimizer, save results.
 
         Args:
             struct_name: Structure name (without extension).
-            cell_content: Content of the .cell file.
+            structure_input: Content of a .cell file or an ASE Atoms object.
 
         Returns:
             0 if converged, 1 if not converged or failed.
         """
         from ase.optimize import BFGS, FIRE
 
-        cell_path = struct_name + ".cell"
-        if not Path(cell_path).is_file():
-            Path(cell_path).write_text(cell_content)
-
         try:
-            atoms = _cell_to_atoms(cell_path)
+            atoms = _structure_input_to_atoms(structure_input)
             calc = _resolve_calculator(self.calculator_spec, **self.calculator_kwargs)
             atoms.calc = calc
 
@@ -411,14 +430,169 @@ def has_torchsim() -> bool:
         import torch_sim  # noqa: F401
 
         return True
-    except ImportError:
+    except Exception as exc:
+        logger.debug("torch_sim is unavailable: %s", exc)
         return False
+
+
+class TorchSimRunner:
+    """Reusable torch-sim model context for chunked ML runs."""
+
+    def __init__(self, model_spec: str, *, device: Optional[str] = None) -> None:
+        import torch
+
+        self.model_spec = model_spec
+        self.device = (
+            torch.device(device)
+            if device
+            else (
+                torch.device("cuda")
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
+        )
+        self.dtype = torch.float32 if self.device.type == "cuda" else torch.float64
+        self.model = _load_torchsim_model(
+            model_spec,
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+    def relax_batch(
+        self,
+        struct_names: list[str],
+        structures: list[StructureInput],
+        *,
+        max_steps: int = 300,
+        force_tol: float = 0.05,
+        optimizer: str = "fire",
+        cell_filter: str = "frechet",
+        convergence_mode: str = "force_stress",
+        scalar_pressure: float = 0.0,
+    ) -> dict[str, int]:
+        """Relax one batch of structures using the loaded model."""
+        import torch_sim as ts
+
+        results: dict[str, int] = {}
+
+        opt_map = {
+            "fire": ts.Optimizer.fire,
+            "lbfgs": ts.Optimizer.lbfgs,
+            "bfgs": ts.Optimizer.bfgs,
+            "gradient_descent": ts.Optimizer.gradient_descent,
+        }
+        opt = opt_map[optimizer.lower()]
+
+        cf_map = {
+            "frechet": ts.CellFilter.frechet,
+            "unit": ts.CellFilter.unit,
+        }
+        cf = cf_map[cell_filter.lower()]
+
+        conv_fn = _resolve_torchsim_convergence(
+            convergence_mode,
+            force_tol=force_tol,
+        )
+
+        atoms_list = [_structure_input_to_atoms(structure) for structure in structures]
+
+        state = ts.io.atoms_to_state(
+            atoms_list,
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+        converged_state = ts.optimize(
+            system=state,
+            model=self.model,
+            optimizer=opt,
+            convergence_fn=conv_fn,
+            max_steps=max_steps,
+            init_kwargs={
+                "cell_filter": cf,
+                "scalar_pressure": scalar_pressure / EV_PER_ANG3_TO_GPA,
+            },
+        )
+
+        final_atoms_list = ts.io.state_to_atoms(converged_state)
+        outputs = self.model.forward(converged_state)
+
+        energy_values = outputs["energy"].detach().cpu().reshape(-1).tolist()
+        force_values = outputs["forces"].detach().cpu().numpy()
+        stress_tensor = outputs.get("stress")
+        stress_values = (
+            stress_tensor.detach().cpu().numpy() if stress_tensor is not None else None
+        )
+
+        force_offset = 0
+        for index, (name, atoms) in enumerate(zip(struct_names, final_atoms_list)):
+            natoms = len(atoms)
+            calc_kwargs: dict = {
+                "energy": float(energy_values[index]),
+                "forces": force_values[force_offset : force_offset + natoms],
+            }
+            force_offset += natoms
+            if stress_values is not None and index < len(stress_values):
+                calc_kwargs["stress"] = stress_values[index]
+            atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+
+            ase_write(name + ".extxyz", atoms, format="extxyz")
+            results[name] = 0
+
+        return results
+
+    def static_batch(
+        self,
+        struct_names: list[str],
+        structures: list[StructureInput],
+    ) -> dict[str, int]:
+        """Run one static batch using the loaded model."""
+        import torch_sim as ts
+
+        results: dict[str, int] = {}
+        atoms_list = [_structure_input_to_atoms(structure) for structure in structures]
+        state = ts.io.atoms_to_state(
+            atoms_list,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        props_list = ts.static(system=state, model=self.model)
+
+        final_atoms_list = ts.io.state_to_atoms(state)
+        force_offset = 0
+        for index, (name, atoms) in enumerate(zip(struct_names, final_atoms_list)):
+            natoms = len(atoms)
+            props = props_list[index]
+            energy = float(props["energy"].reshape(-1)[0])
+            forces = (
+                props["forces"].detach().cpu().numpy()
+                if "forces" in props
+                else None
+            )
+            stress = (
+                props["stress"].detach().cpu().numpy()
+                if "stress" in props
+                else None
+            )
+
+            calc_kwargs: dict = {"energy": energy}
+            if forces is not None:
+                calc_kwargs["forces"] = forces[force_offset : force_offset + natoms]
+            if stress is not None and index < len(stress):
+                calc_kwargs["stress"] = stress[index]
+            force_offset += natoms
+
+            atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+            ase_write(name + ".extxyz", atoms, format="extxyz")
+            results[name] = 0
+
+        return results
 
 
 def _torchsim_relax_batch(
     model_spec: str,
     struct_names: list[str],
-    cell_contents: list[str],
+    structures: list[StructureInput],
     *,
     device: Optional[str] = None,
     max_steps: int = 300,
@@ -428,179 +602,31 @@ def _torchsim_relax_batch(
     convergence_mode: str = "force_stress",
     scalar_pressure: float = 0.0,
 ) -> dict[str, int]:
-    """Relax a batch of structures using torchsim.
-
-    All structures are processed in a single GPU batch for maximum throughput.
-
-    Args:
-        model_spec: TorchSim model spec (e.g. ``mace:medium``).
-        struct_names: Structure names (without extension).
-        cell_contents: Corresponding .cell file contents.
-        device: Torch device string (e.g. ``cuda``, ``cpu``).
-        max_steps: Max optimisation steps.
-        force_tol: Force convergence threshold (eV/Ang).
-        optimizer: Optimizer name (fire, lbfgs, bfgs, gradient_descent).
-        cell_filter: Cell filter type (frechet, unit).
-        convergence_mode: Convergence mode (force, force_stress, energy).
-        scalar_pressure: External pressure in GPa.
-
-    Returns:
-        Dict mapping struct_name to return code (0=converged, 1=failed).
-    """
-    import torch
-    import torch_sim as ts
-
-    results: dict[str, int] = {}
-
-    # Load model
-    resolved_device = (
-        torch.device(device)
-        if device
-        else (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        )
-    )
-    dtype = torch.float32 if resolved_device.type == "cuda" else torch.float64
-    model = _load_torchsim_model(model_spec, device=resolved_device, dtype=dtype)
-
-    # Resolve optimizer and convergence
-    opt_map = {
-        "fire": ts.Optimizer.fire,
-        "lbfgs": ts.Optimizer.lbfgs,
-        "bfgs": ts.Optimizer.bfgs,
-        "gradient_descent": ts.Optimizer.gradient_descent,
-    }
-    opt = opt_map[optimizer.lower()]
-
-    cf_map = {
-        "frechet": ts.CellFilter.frechet,
-        "unit": ts.CellFilter.unit,
-    }
-    cf = cf_map[cell_filter.lower()]
-
-    conv_fn = _resolve_torchsim_convergence(convergence_mode, force_tol=force_tol)
-
-    # Write cell files and load as Atoms
-    atoms_list = []
-    for name, content in zip(struct_names, cell_contents):
-        cell_path = name + ".cell"
-        if not Path(cell_path).is_file():
-            Path(cell_path).write_text(content)
-        atoms = _cell_to_atoms(cell_path)
-        atoms_list.append(atoms)
-
-    # Convert to SimState batch
-    state = ts.io.atoms_to_state(atoms_list, device=resolved_device, dtype=dtype)
-
-    # Run optimization
-    converged_state = ts.optimize(
-        system=state,
-        model=model,
-        optimizer=opt,
-        convergence_fn=conv_fn,
+    """Relax a batch of structures using torchsim."""
+    return TorchSimRunner(model_spec, device=device).relax_batch(
+        struct_names,
+        structures,
         max_steps=max_steps,
-        init_kwargs={
-            "cell_filter": cf,
-            "scalar_pressure": scalar_pressure,
-        },
+        force_tol=force_tol,
+        optimizer=optimizer,
+        cell_filter=cell_filter,
+        convergence_mode=convergence_mode,
+        scalar_pressure=scalar_pressure,
     )
-
-    # Extract final structures and properties
-    final_atoms_list = ts.io.state_to_atoms(converged_state)
-    outputs = model.forward(converged_state)
-
-    energy_values = outputs["energy"].detach().cpu().reshape(-1).tolist()
-    force_values = outputs["forces"].detach().cpu().numpy()
-    stress_tensor = outputs.get("stress")
-    stress_values = (
-        stress_tensor.detach().cpu().numpy() if stress_tensor is not None else None
-    )
-
-    force_offset = 0
-    for index, (name, atoms) in enumerate(zip(struct_names, final_atoms_list)):
-        natoms = len(atoms)
-        calc_kwargs: dict = {
-            "energy": float(energy_values[index]),
-            "forces": force_values[force_offset : force_offset + natoms],
-        }
-        force_offset += natoms
-        if stress_values is not None and index < len(stress_values):
-            calc_kwargs["stress"] = stress_values[index]
-        atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
-
-        ase_write(name + ".extxyz", atoms, format="extxyz")
-        results[name] = 0
-
-    return results
 
 
 def _torchsim_static_batch(
     model_spec: str,
     struct_names: list[str],
-    cell_contents: list[str],
+    structures: list[StructureInput],
     *,
     device: Optional[str] = None,
 ) -> dict[str, int]:
-    """Run single-point calculations on a batch of structures using torchsim.
-
-    Args:
-        model_spec: TorchSim model spec (e.g. ``mace:medium``).
-        struct_names: Structure names (without extension).
-        cell_contents: Corresponding .cell file contents.
-        device: Torch device string.
-
-    Returns:
-        Dict mapping struct_name to return code (0=success, 1=failed).
-    """
-    import torch
-    import torch_sim as ts
-
-    results: dict[str, int] = {}
-
-    resolved_device = (
-        torch.device(device)
-        if device
-        else (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        )
+    """Run single-point calculations on a batch of structures using torchsim."""
+    return TorchSimRunner(model_spec, device=device).static_batch(
+        struct_names,
+        structures,
     )
-    dtype = torch.float32 if resolved_device.type == "cuda" else torch.float64
-    model = _load_torchsim_model(model_spec, device=resolved_device, dtype=dtype)
-
-    # Write cell files and load as Atoms
-    atoms_list = []
-    for name, content in zip(struct_names, cell_contents):
-        cell_path = name + ".cell"
-        if not Path(cell_path).is_file():
-            Path(cell_path).write_text(content)
-        atoms = _cell_to_atoms(cell_path)
-        atoms_list.append(atoms)
-
-    # Convert to SimState batch
-    state = ts.io.atoms_to_state(atoms_list, device=resolved_device, dtype=dtype)
-    props_list = ts.static(system=state, model=model)
-
-    final_atoms_list = ts.io.state_to_atoms(state)
-    force_offset = 0
-    for index, (name, atoms) in enumerate(zip(struct_names, final_atoms_list)):
-        natoms = len(atoms)
-        props = props_list[index]
-        energy = float(props["energy"].reshape(-1)[0])
-        forces = props["forces"].detach().cpu().numpy() if "forces" in props else None
-        stress = props["stress"].detach().cpu().numpy() if "stress" in props else None
-
-        calc_kwargs: dict = {"energy": energy}
-        if forces is not None:
-            calc_kwargs["forces"] = forces[force_offset : force_offset + natoms]
-        if stress is not None and index < len(stress):
-            calc_kwargs["stress"] = stress[index]
-        force_offset += natoms
-
-        atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
-        ase_write(name + ".extxyz", atoms, format="extxyz")
-        results[name] = 0
-
-    return results
 
 
 def _load_torchsim_model(model_spec: str, *, device, dtype):

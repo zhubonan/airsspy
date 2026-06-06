@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 ###########################################################################
 # airss-ase                                                               #
 # Copyright (C) 2019  Bonan Zhu                                           #
@@ -17,11 +16,13 @@
 # with this program; if not, write to the Free Software Foundation, Inc., #
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
-"""
-Tests for the restool module
-"""
+"""Tests for the restool module."""
 
+from tempfile import mkstemp
+
+import numpy as np
 import pytest
+
 from airsspy.restools import (
     RESFile,
     TitlInfo,
@@ -33,9 +34,6 @@ from airsspy.restools import (
     save_airss_res,
 )
 from airsspy.utils import unique
-from tempfile import mkstemp
-import numpy as np
-
 
 res_example = """
 TITL Al-574-3531-1 -0.05 60.5091828526 -53.2326560919 0 0 8 (Fm-3m) n - 1
@@ -122,6 +120,24 @@ def test_read_res_atoms():
     assert atoms.get_chemical_formula() == "Al8"
 
 
+def test_read_res_atoms_ignores_extra_cell_columns():
+    """Test reading RES files with annotation values after CELL parameters."""
+    lines = [
+        "TITL Cl-001 0.000 185.403 -7.293784 0 0 1 (P1) n - 1",
+        "CELL 1.0 4.781455 4.781456 9.227659 90.0 90.0 118.498273 -0.1 0.2 0.3",
+        "LATT -1",
+        "SFAC Cl",
+        "Cl 1 0.500018 0.500018 0.107944 1.0 -0.1 0.2 0.3",
+        "END",
+    ]
+
+    titl, atoms = read_res_atoms(lines)
+
+    assert titl.label == "Cl-001"
+    assert len(atoms) == 1
+    assert atoms.get_chemical_formula() == "Cl"
+
+
 def test_unique():
     """Test unique function"""
     items = ["Al", "Si", "Al", "C", "Si", "Al"]
@@ -198,3 +214,19 @@ def test_resfile_to_res_lines():
     assert any("TITL" in line for line in lines)
     assert any("CELL" in line for line in lines)
     assert any("END" in line for line in lines)
+
+
+def test_resfile_to_file(tmp_path):
+    """Test RESFile writing to a file"""
+    res_obj = RESFile.from_string(res_example)
+    output = tmp_path / "output.res"
+
+    res_obj.to_file(output)
+
+    content = output.read_text()
+    assert content.endswith("\n")
+
+    reread = RESFile.from_file(output)
+    assert reread.label == res_obj.label
+    assert reread.natoms == res_obj.natoms
+    assert reread.enthalpy == pytest.approx(res_obj.enthalpy)

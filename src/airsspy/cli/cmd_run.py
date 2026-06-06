@@ -4,6 +4,7 @@ CLI commands for running AIRSS searches locally (non-jobflow, like airss.pl).
 
 import logging
 import os
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -81,6 +82,40 @@ def _pack_res_files(
     return packed
 
 
+def _is_packed_res_input(path: Path) -> bool:
+    """Return True if *path* appears to contain more than one RES structure."""
+    if path.suffix.lower() != ".res":
+        return False
+    titl_count = 0
+    try:
+        with open(path) as handle:
+            for line in handle:
+                if line.startswith("TITL"):
+                    titl_count += 1
+                    if titl_count > 1:
+                        return True
+    except OSError:
+        return False
+    return False
+
+
+def _filter_packed_res_inputs(paths: list[Path]) -> list[Path]:
+    """Drop packed RES files from per-structure relax/SP input lists."""
+    skipped = [path for path in paths if _is_packed_res_input(path)]
+    if skipped:
+        preview = ", ".join(path.name for path in skipped[:5])
+        if len(skipped) > 5:
+            preview += ", ..."
+        logger.warning("Skipping %d packed RES input(s): %s", len(skipped), preview)
+    return [path for path in paths if path not in skipped]
+
+
+def _cleanup_ml_transients(struct_name: str) -> None:
+    """Remove transient ML outputs without deleting input/output RES files."""
+    for suffix in (".extxyz", ".traj", ".err"):
+        Path(struct_name + suffix).unlink(missing_ok=True)
+
+
 def _apply_mpinp(exe: str, code: str, mpinp: int | None) -> str:
     """Prepend ``mpirun`` to *exe* when *mpinp* is set and *code* supports it."""
     if mpinp is None or code not in ("castep", "abacus"):
@@ -148,6 +183,348 @@ def _move_pruned_file(candidate, workdir: Path) -> None:
     candidate.res_path.replace(target)
 
 
+def _strip_structure_blocks(cell_text: str) -> list[str]:
+    """Return cell lines with lattice and positions blocks removed."""
+    import re
+
+    block_start = re.compile(
+        r"^\s*%BLOCK\s+(LATTICE_(?:CART|ABC)|POSITIONS_(?:FRAC|ABS))\b", re.I
+    )
+    block_end = re.compile(
+        r"^\s*%ENDBLOCK\s+(LATTICE_(?:CART|ABC)|POSITIONS_(?:FRAC|ABS))\b", re.I
+    )
+
+    lines: list[str] = []
+    in_structure_block = False
+    for line in cell_text.splitlines():
+        if block_start.search(line):
+            in_structure_block = True
+            continue
+        if in_structure_block:
+            if block_end.search(line):
+                in_structure_block = False
+            continue
+        lines.append(line)
+    return lines
+
+
+def _read_crud_res_spins(res_lines: list[str], natoms: int) -> list[float]:
+    """Read unambiguous per-site spin columns from RES atom lines."""
+    spins: list[float] = []
+    in_atoms = False
+    for line in res_lines:
+        tokens = line.split()
+        if not tokens:
+            continue
+        if tokens[0] == "SFAC":
+            in_atoms = True
+            continue
+        if tokens[0] == "END":
+            break
+        if not in_atoms or not tokens[0][0].isalpha():
+            continue
+
+        if len(tokens) == 7 or len(tokens) >= 10:
+            try:
+                spins.append(float(tokens[6]))
+            except ValueError:
+                return []
+        else:
+            return []
+
+    return spins if len(spins) == natoms else []
+
+
+def _res_to_cell_lines(res_path: Path, root_cell_path: Path) -> list[str]:
+    """Build a CASTEP cell file from a RES geometry and root cell settings."""
+    from airsspy.restools import read_res_atoms
+
+    res_lines = res_path.read_text().splitlines()
+    _, atoms = read_res_atoms(res_lines)
+    spins = _read_crud_res_spins(res_lines, len(atoms))
+
+    lines = ["%BLOCK LATTICE_CART"]
+    for vec in atoms.cell:
+        lines.append(f"{vec[0]:.10f} {vec[1]:.10f} {vec[2]:.10f}")
+    lines.append("%ENDBLOCK LATTICE_CART")
+    lines.append("%BLOCK POSITIONS_ABS")
+    for i, (symbol, pos) in enumerate(
+        zip(atoms.get_chemical_symbols(), atoms.positions)
+    ):
+        line = f"{symbol}  {pos[0]:.10f} {pos[1]:.10f} {pos[2]:.10f}"
+        if spins:
+            line += f" SPIN={spins[i]:.3f}"
+        lines.append(line)
+    lines.append("%ENDBLOCK POSITIONS_ABS")
+
+    rest = _strip_structure_blocks(root_cell_path.read_text())
+    while rest and not rest[0].strip():
+        rest.pop(0)
+    if rest:
+        lines.append("")
+        lines.extend(rest)
+    return lines
+
+
+def _claim_crud_job(workdir: Path, num: int) -> Path | None:
+    """Atomically move one queued RES file from hopper into *workdir*."""
+    hopper = workdir / "hopper"
+    files = list(hopper.glob("*-*.res"))
+    random.shuffle(files)
+    for src in files[:num]:
+        dst = workdir / src.name
+        if dst.exists():
+            continue
+        try:
+            src.rename(dst)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        if dst.exists():
+            return dst
+    return None
+
+
+def _crud_root_from_seed(seed: str) -> str:
+    """Return AIRSS root name from a structure label."""
+    return seed.split("-", 1)[0]
+
+
+def _sync_castep_spin_param(cell_path: Path, param_path: Path) -> None:
+    """Match CASTEP param spin to per-site SPIN tags in the cell file."""
+    spin_total = 0.0
+    has_spin = False
+    for line in cell_path.read_text().splitlines():
+        if "#SPIN=" in line or "SPIN=" not in line:
+            continue
+        try:
+            spin_total += float(line.split("SPIN=", 1)[1].split()[0])
+            has_spin = True
+        except (ValueError, IndexError):
+            continue
+
+    if not has_spin:
+        return
+
+    lines = []
+    if param_path.exists():
+        for line in param_path.read_text().splitlines():
+            tokens = line.split()
+            if tokens and tokens[0].lower() == "spin":
+                continue
+            lines.append(line)
+    lines.append(f"spin : {spin_total:10.3f}")
+    param_path.write_text("\n".join(lines) + "\n")
+
+
+def _prepare_crud_inputs(seed: str, code: str) -> tuple[str, str | None]:
+    """Create per-structure input files for a claimed CRUD job."""
+    root = _crud_root_from_seed(seed)
+    if code == "ml":
+        return root, None
+
+    root_cell = Path(root + ".cell")
+    if not root_cell.exists():
+        raise click.ClickException(f"Root cell file not found: {root_cell}")
+
+    cell_path = Path(seed + ".cell")
+    cell_path.write_text(
+        "\n".join(_res_to_cell_lines(Path(seed + ".res"), root_cell)) + "\n"
+    )
+
+    param_suffix = SUFFIX_MAP[code]
+    root_param = Path(root + param_suffix)
+    if not root_param.exists():
+        raise click.ClickException(f"Root input file not found: {root_param}")
+    seed_param = Path(seed + param_suffix)
+    if root_param.resolve() != seed_param.resolve():
+        shutil.copy2(root_param, seed_param)
+    if code == "castep":
+        _sync_castep_spin_param(cell_path, seed_param)
+    return root, param_suffix
+
+
+def _resolve_relax_template_cell(input_path: Path, workdir: Path) -> Path:
+    """Find a template .cell file for converting a RES input to CASTEP cell text."""
+    root = _crud_root_from_seed(input_path.stem)
+    candidates = [workdir / f"{root}.cell"]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    names = ", ".join(str(path.name) for path in candidates)
+    raise click.ClickException(
+        f"Template .cell file not found for RES input {input_path.name}; "
+        f"looked for {names}"
+    )
+
+
+def _prepare_relax_input(
+    input_path: Path,
+    workdir: Path,
+    *,
+    write_res_cell: bool = True,
+    convert_res_cell: bool = True,
+) -> tuple[Path, str, str]:
+    """Return cell path/name/content for a relax input, converting RES if needed."""
+    suffix = input_path.suffix.lower()
+    if suffix == ".cell":
+        return input_path, input_path.stem, input_path.read_text()
+    if suffix != ".res":
+        raise click.ClickException(
+            f"Unsupported relax input extension for {input_path.name}; "
+            "expected .cell or .res"
+        )
+
+    cell_path = input_path.with_suffix(".cell")
+    if not convert_res_cell:
+        return cell_path, cell_path.stem, ""
+
+    template_cell = _resolve_relax_template_cell(input_path, workdir)
+    cell_content = "\n".join(_res_to_cell_lines(input_path, template_cell)) + "\n"
+    if write_res_cell:
+        cell_path.write_text(cell_content)
+    return cell_path, cell_path.stem, cell_content
+
+
+def _read_res_as_atoms(res_path: Path):
+    """Read a RES input directly as ASE Atoms for ML backends."""
+    from airsspy.restools import read_res_atoms
+
+    _, atoms = read_res_atoms(res_path.read_text().splitlines())
+    return atoms
+
+
+def _prepare_ml_structure_input(input_path: Path, cell_content: str):
+    """Return the preferred ML input representation for a relax/SP structure."""
+    if input_path.suffix.lower() == ".res":
+        return _read_res_as_atoms(input_path)
+    return cell_content
+
+
+def _resolve_relax_param_file(
+    input_path: Path,
+    cell_path: Path,
+    seed: str,
+    workdir: Path,
+    param_suffix: str,
+) -> Path:
+    """Find the parameter file for a relax input."""
+    if input_path.suffix.lower() == ".res":
+        candidates = [workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"]
+    else:
+        candidates = [
+            workdir / f"{seed}{param_suffix}",
+            workdir / f"{cell_path.stem}{param_suffix}",
+        ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    names = ", ".join(str(path.name) for path in candidates)
+    raise click.ClickException(f"Param file not found; looked for {names}")
+
+
+def _run_crud_relax_one(
+    seed: str,
+    code: str,
+    runner,
+    param_suffix: str | None,
+    calculator_spec: str | None,
+) -> int:
+    """Run one claimed CRUD relaxation with an existing local runner."""
+    if code == "castep":
+        from castepinput.inputs import ParamInput
+
+        return runner.run(
+            seed,
+            Path(seed + ".cell").read_text(),
+            ParamInput.from_file(seed + param_suffix),
+        )
+    if code in ("gulp", "pp3"):
+        root = _crud_root_from_seed(seed)
+        return runner.run(
+            seed,
+            Path(seed + ".cell").read_text(),
+            Path(seed + param_suffix).read_text(),
+            seed_name=root,
+        )
+    if code == "abacus":
+        return runner.run(
+            seed,
+            Path(seed + ".cell").read_text(),
+            Path(seed + param_suffix).read_text(),
+        )
+    if code == "ml":
+        del calculator_spec
+        return runner.run(seed, _read_res_as_atoms(Path(seed + ".res")))
+    raise click.ClickException(f"Unknown code: {code}")
+
+
+def _crud_artifacts(seed: str) -> list[Path]:
+    """Return files/directories belonging to a CRUD structure."""
+    paths = list(Path().glob(seed + ".*"))
+    out_cell = Path(seed + "-out.cell")
+    if out_cell.exists():
+        paths.append(out_cell)
+    seen = set()
+    unique = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return unique
+
+
+def _cleanup_crud_artifacts(seed: str) -> None:
+    """Remove less useful intermediate files before finalizing outputs."""
+    keep_suffixes = {".res", ".cif", ".magres", ".castep", ".odo", ".dos", ".den_fmt"}
+    for path in _crud_artifacts(seed):
+        if path.is_dir() or path.suffix in keep_suffixes:
+            continue
+        path.unlink(missing_ok=True)
+
+
+def _move_crud_artifacts(seed: str, target_dir: Path, keep: bool) -> None:
+    """Move structure artifacts into good/bad output directories."""
+    if not keep:
+        _cleanup_crud_artifacts(seed)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for path in _crud_artifacts(seed):
+        target = target_dir / path.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(path), str(target))
+
+
+def _crud_retryable_failure(seed: str) -> bool:
+    """Return whether a failed CASTEP-like job should be cycled."""
+    for err_path in Path().glob(seed + "*.err"):
+        try:
+            if "electronic_minimisation" in err_path.read_text(errors="ignore"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _requeue_crud_job(seed: str, workdir: Path) -> bool:
+    """Move a checked-out RES file back into hopper."""
+    res_path = Path(seed + ".res")
+    if not res_path.exists():
+        return False
+    hopper = workdir / "hopper"
+    hopper.mkdir(exist_ok=True)
+    target = hopper / res_path.name
+    if target.exists():
+        return False
+    res_path.rename(target)
+    return True
+
+
 def _get_scheduler_for_walltime():
     """Return a scheduler object for walltime checks, falling back to Dummy."""
     try:
@@ -180,20 +557,36 @@ def _walltime_remaining_ok(sched, walltime_buffer: int) -> bool:
 
 
 def _is_torchsim_model(calculator_spec: str) -> bool:
-    """Check if a calculator spec uses torchsim backend format (backend:model).
-
-    TorchSim specs use a simple ``backend:model`` format (e.g. ``mace:medium``)
-    while ASE specs use ``module.path:Class`` or ``module.path.Class`` format.
-    """
-    from airsspy.jf.ml_runners import has_torchsim
-
-    if not has_torchsim():
+    """Return whether a model spec should use the torch-sim backend."""
+    if calculator_spec.startswith("ase:"):
         return False
     if ":" not in calculator_spec:
         return False
     backend = calculator_spec.split(":", 1)[0]
-    # TorchSim backends are single words without dots
     return "." not in backend
+
+
+def _ensure_torchsim_available() -> None:
+    """Raise a CLI error if torch-sim is not importable."""
+    from airsspy.jf.ml_runners import has_torchsim
+
+    if not has_torchsim():
+        raise click.ClickException(
+            "torch-sim is required for plain ML model specs. "
+            "Install torch-sim or use an explicit ASE fallback spec such as "
+            "ase:mace:medium."
+        )
+
+
+def _normalize_ml_ase_spec(model_spec: str) -> str:
+    """Convert an explicit ``ase:`` model spec into an ASE calculator spec."""
+    if not model_spec.startswith("ase:"):
+        return model_spec
+    ase_spec = model_spec[4:]
+    if ase_spec.startswith("mace:"):
+        model_id = ase_spec.split(":", 1)[1]
+        return f"mace.calculators:MACECalculator@{model_id}"
+    return ase_spec
 
 
 def _create_runner(
@@ -243,7 +636,7 @@ def _create_runner(
         from airsspy.jf.ml_runners import AirssMlRelaxRunner
 
         return AirssMlRelaxRunner(
-            calculator_spec=calculator_spec,
+            calculator_spec=_normalize_ml_ase_spec(calculator_spec),
             calculator_kwargs=calculator_kwargs,
             optimizer=optimizer,
             fmax=fmax,
@@ -268,7 +661,7 @@ def _create_sp_runner(code, exe, calculator_spec=None, calculator_kwargs=None):
         from airsspy.jf.ml_runners import AirssMlSinglePointRunner
 
         return AirssMlSinglePointRunner(
-            calculator_spec=calculator_spec,
+            calculator_spec=_normalize_ml_ase_spec(calculator_spec),
             calculator_kwargs=calculator_kwargs,
         )
     else:
@@ -778,6 +1171,212 @@ def run_search(
         os.chdir(orig_dir)
 
 
+@run.command("crud")
+@click.option(
+    "--code",
+    default="castep",
+    show_default=True,
+    type=click.Choice(["castep", "gulp", "pp3", "abacus", "ml"]),
+    help="DFT code or ML mode to use",
+)
+@click.option("--exe", default=None, help="Relaxation executable (default: auto)")
+@click.option(
+    "--workdir",
+    default=".",
+    show_default=True,
+    type=click.Path(),
+    help="Queue root containing hopper/",
+)
+@click.option(
+    "--num",
+    default=1000,
+    type=int,
+    show_default=True,
+    help="Max number of queued files to inspect when claiming",
+)
+@click.option("--nostop", is_flag=True, help="Keep polling when no jobs are available")
+@click.option("--cycle", is_flag=True, help="Retry electronic minimisation failures")
+@click.option("--keep", is_flag=True, help="Keep intermediate files")
+@click.option(
+    "--pressure",
+    default=0.0,
+    type=float,
+    show_default=True,
+    help="External pressure (GPa)",
+)
+@click.option(
+    "--max-iterations",
+    default=200,
+    type=int,
+    show_default=True,
+    help="Max total geometry iterations",
+)
+@click.option("--cluster", is_flag=True, help="Use cluster boundary conditions (GULP)")
+@click.option(
+    "--mpinp",
+    default=None,
+    type=int,
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus only)",
+)
+@click.option(
+    "--walltime-buffer",
+    default=300,
+    type=int,
+    show_default=True,
+    help="Seconds before walltime to stop",
+)
+@click.option(
+    "--calculator",
+    "calculator_spec",
+    default=None,
+    help=(
+        "Model spec for --code ml. Default backend is torch-sim, e.g. "
+        "'mace:medium'. Use 'ase:mace:medium' or 'ase:module:Class@model' "
+        "for ASE fallback."
+    ),
+)
+@click.option(
+    "--optimizer",
+    default="FIRE",
+    show_default=True,
+    type=click.Choice(["FIRE", "BFGS"]),
+    help="ASE optimizer for --code ml",
+)
+@click.option(
+    "--fmax",
+    default=0.05,
+    type=float,
+    show_default=True,
+    help="Force convergence threshold (eV/Ang) for --code ml",
+)
+def run_crud(
+    code,
+    exe,
+    workdir,
+    num,
+    nostop,
+    cycle,
+    keep,
+    pressure,
+    max_iterations,
+    cluster,
+    mpinp,
+    walltime_buffer,
+    calculator_spec,
+    optimizer,
+    fmax,
+):
+    """Consume hopper/*.res jobs locally, like crud.pl."""
+    if code == "ml" and not calculator_spec:
+        raise click.ClickException("--calculator is required when --code ml")
+    if code == "ml" and _is_torchsim_model(calculator_spec):
+        raise click.ClickException(
+            "run crud --code ml currently supports only explicit ASE fallback "
+            "model specs such as ase:mace:medium"
+        )
+
+    workdir = Path(workdir).resolve()
+    hopper = workdir / "hopper"
+    if not hopper.exists():
+        raise click.ClickException(f"Hopper directory not found: {hopper}")
+    workdir.mkdir(parents=True, exist_ok=True)
+
+    if exe is None:
+        exe = EXE_DEFAULTS.get(code, "")
+
+    sched = _get_scheduler_for_walltime()
+    runner = _create_runner(
+        code,
+        exe,
+        max_iterations,
+        cluster,
+        pressure,
+        mpinp,
+        calculator_spec=calculator_spec,
+        optimizer=optimizer,
+        fmax=fmax,
+    )
+
+    orig_dir = os.getcwd()
+    os.chdir(workdir)
+
+    try:
+        n_done = 0
+        n_failed = 0
+        n_requeued = 0
+
+        logger.info("Starting CRUD worker: workdir=%s, code=%s", workdir, code)
+
+        while True:
+            if Path("STOP_CRUD").exists():
+                logger.info("STOP_CRUD detected. Gracefully terminating.")
+                break
+
+            if not _walltime_remaining_ok(sched, walltime_buffer):
+                break
+
+            claimed = _claim_crud_job(workdir, num)
+            if claimed is None:
+                if not nostop:
+                    break
+                import time
+
+                time.sleep(random.random())
+                continue
+
+            seed = claimed.stem
+            collected = False
+
+            try:
+                _, param_suffix = _prepare_crud_inputs(seed, code)
+                rc = _run_crud_relax_one(
+                    seed,
+                    code,
+                    runner,
+                    param_suffix,
+                    calculator_spec,
+                )
+
+                try:
+                    _collect_result(seed, code, calculator_spec=calculator_spec)
+                    collected = True
+                except Exception:
+                    if rc == 0:
+                        raise
+
+                if collected:
+                    _move_crud_artifacts(seed, workdir / "good_castep", keep)
+                    n_done += 1
+                    if rc == 0:
+                        logger.info("CRUD OK: %s", seed)
+                    else:
+                        logger.info("CRUD not converged but collected: %s", seed)
+                else:
+                    raise RuntimeError("calculation did not produce collectable output")
+
+            except Exception:
+                logger.error("CRUD failed: %s", seed, exc_info=True)
+                _emit_diagnostics(seed, code)
+                if cycle and _crud_retryable_failure(seed):
+                    if _requeue_crud_job(seed, workdir):
+                        n_requeued += 1
+                        _cleanup_crud_artifacts(seed)
+                        logger.info("CRUD requeued: %s", seed)
+                        continue
+                _move_crud_artifacts(seed, workdir / "bad_castep", keep=True)
+                n_failed += 1
+
+        logger.info(
+            "CRUD complete: %d collected, %d failed, %d requeued",
+            n_done,
+            n_failed,
+            n_requeued,
+        )
+
+    finally:
+        os.chdir(orig_dir)
+
+
 @run.command("relax")
 @click.option("--cell", required=True, help="Glob pattern for cell files to relax")
 @click.option(
@@ -835,7 +1434,11 @@ def run_search(
     "--calculator",
     "calculator_spec",
     default=None,
-    help="Model spec for --code ml. TorchSim: 'mace:medium'; ASE: 'module:Class@model'.",
+    help=(
+        "Model spec for --code ml. Default backend is torch-sim, e.g. "
+        "'mace:medium'. Use 'ase:mace:medium' or 'ase:module:Class@model' "
+        "for ASE fallback."
+    ),
 )
 @click.option(
     "--optimizer",
@@ -850,6 +1453,23 @@ def run_search(
     type=float,
     show_default=True,
     help="Force convergence threshold (eV/Ang) for --code ml",
+)
+@click.option(
+    "--device",
+    default=None,
+    help="Torch device for torch-sim ML runs, e.g. cuda or cpu.",
+)
+@click.option(
+    "--batch-size",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Number of structures per torch-sim ML batch.",
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Print detailed run-relax debug logging.",
 )
 def run_relax(
     cell,
@@ -867,8 +1487,16 @@ def run_relax(
     calculator_spec,
     optimizer,
     fmax,
+    device,
+    batch_size,
+    debug,
 ):
     """Relax existing cell files locally."""
+    if debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
+
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
 
@@ -876,18 +1504,39 @@ def run_relax(
     cell_files = sorted(workdir.glob(cell))
     if not cell_files:
         raise click.ClickException(f"No files matched pattern: {cell}")
+    cell_files = _filter_packed_res_inputs(cell_files)
+    if not cell_files:
+        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+    use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
+    if use_torchsim:
+        _ensure_torchsim_available()
+    logger.debug(
+        "run relax resolved %d single-structure input(s): %s",
+        len(cell_files),
+        ", ".join(path.name for path in cell_files[:10])
+        + (" ..." if len(cell_files) > 10 else ""),
+    )
+    relax_inputs = [
+        (
+            input_path,
+            *_prepare_relax_input(
+                input_path,
+                workdir,
+                write_res_cell=code == "castep",
+                convert_res_cell=code != "ml",
+            ),
+        )
+        for input_path in cell_files
+    ]
 
     # Read param file (not needed for ML)
-    param_file_name = None
     param_suffix = None
     if code != "ml":
         param_suffix = SUFFIX_MAP[code]
-        param_file = workdir / (seed + param_suffix)
-        if not param_file.exists():
-            param_file = workdir / (cell_files[0].stem + param_suffix)
-        if not param_file.exists():
-            raise click.ClickException(f"Param file not found: {param_file}")
-        param_file_name = param_file.stem  # for use after chdir
+        for input_path, cell_path, _, _ in relax_inputs:
+            _resolve_relax_param_file(
+                input_path, cell_path, seed, workdir, param_suffix
+            )
 
     if exe is None:
         exe = EXE_DEFAULTS.get(code, "")
@@ -895,17 +1544,25 @@ def run_relax(
     # Detect scheduler
     sched = _get_scheduler_for_walltime()
 
-    runner = _create_runner(
-        code,
-        exe,
-        max_iterations,
-        cluster,
-        pressure,
-        mpinp,
-        calculator_spec=calculator_spec,
-        optimizer=optimizer,
-        fmax=fmax,
-    )
+    runner = None
+    if code != "ml" or not use_torchsim:
+        logger.debug(
+            "Creating relax runner for code=%s exe=%s backend=%s",
+            code,
+            exe,
+            "ase" if code == "ml" else "external",
+        )
+        runner = _create_runner(
+            code,
+            exe,
+            max_iterations,
+            cluster,
+            pressure,
+            mpinp,
+            calculator_spec=calculator_spec,
+            optimizer=optimizer,
+            fmax=fmax,
+        )
 
     orig_dir = os.getcwd()
     os.chdir(workdir)
@@ -913,50 +1570,90 @@ def run_relax(
     try:
         n_relaxed = 0
         n_failed = 0
-        total = len(cell_files)
+        collected_res_files: list[Path] = []
+        total = len(relax_inputs)
 
         # TorchSim batch path: process all structures at once on GPU
-        if code == "ml" and _is_torchsim_model(calculator_spec):
-            from airsspy.jf.ml_runners import _torchsim_relax_batch
+        if use_torchsim:
+            from airsspy.jf.ml_runners import TorchSimRunner
 
-            struct_names = [cp.stem for cp in cell_files]
-            cell_contents = [cp.read_text() for cp in cell_files]
+            struct_names = [struct_name for _, _, struct_name, _ in relax_inputs]
+            structures = [
+                _prepare_ml_structure_input(input_path, cell_content)
+                for input_path, _, _, cell_content in relax_inputs
+            ]
+            logger.debug(
+                "Prepared ML structures: total_atoms=%d, first_batch=%s",
+                sum(len(structure) for structure in structures),
+                ", ".join(struct_names[:batch_size]),
+            )
 
             logger.info(
-                "TorchSim batch relaxing %d structures with %s",
+                "TorchSim batch relaxing %d structures with %s (batch size %d)",
                 total,
                 calculator_spec,
+                batch_size,
             )
-            try:
-                batch_results = _torchsim_relax_batch(
-                    calculator_spec,
-                    struct_names,
-                    cell_contents,
-                    max_steps=max_iterations,
-                    force_tol=fmax,
-                    optimizer=optimizer.lower(),
-                    scalar_pressure=pressure,
+            torchsim_runner = TorchSimRunner(calculator_spec, device=device)
+            for start in range(0, total, batch_size):
+                end = min(start + batch_size, total)
+                batch_names = struct_names[start:end]
+                batch_structures = structures[start:end]
+                logger.info(
+                    "TorchSim batch [%d-%d/%d]",
+                    start + 1,
+                    end,
+                    total,
                 )
+                try:
+                    batch_results = torchsim_runner.relax_batch(
+                        batch_names,
+                        batch_structures,
+                        max_steps=max_iterations,
+                        force_tol=fmax,
+                        optimizer=optimizer.lower(),
+                        scalar_pressure=pressure,
+                    )
+                    logger.debug("TorchSim batch result codes: %s", batch_results)
+                except Exception:
+                    logger.error(
+                        "TorchSim batch failed for structures %s",
+                        ", ".join(batch_names),
+                        exc_info=True,
+                    )
+                    n_failed += len(batch_names)
+                    continue
+
                 for sname, rc in batch_results.items():
                     if rc == 0:
-                        _collect_result(sname, code, calculator_spec=calculator_spec)
-                        n_relaxed += 1
+                        try:
+                            _collect_result(
+                                sname,
+                                code,
+                                calculator_spec=calculator_spec,
+                            )
+                            collected_res_files.append(workdir / f"{sname}.res")
+                            n_relaxed += 1
+                        except Exception:
+                            logger.error(
+                                "TorchSim result collection failed: %s",
+                                sname,
+                                exc_info=True,
+                            )
+                            n_failed += 1
+                            _cleanup_ml_transients(sname)
                     else:
                         n_failed += 1
-                        runner.clean_failed(sname)
-            except Exception:
-                logger.error(
-                    "TorchSim batch failed",
-                    exc_info=True,
-                )
-                n_failed = total
+                        _cleanup_ml_transients(sname)
 
         else:
             # Standard one-by-one loop (DFT codes or ASE fallback)
-            logger.info("Relaxing %d structures with %s", total, code)
+            backend_label = "ASE ML" if code == "ml" else code
+            logger.info("Relaxing %d structures with %s", total, backend_label)
 
-            for i, cell_path in enumerate(cell_files, 1):
-                struct_name = cell_path.stem
+            for i, (input_path, cell_path, struct_name, cell_content) in enumerate(
+                relax_inputs, 1
+            ):
 
                 # Check walltime
                 if not _walltime_remaining_ok(sched, walltime_buffer):
@@ -966,32 +1663,66 @@ def run_relax(
                     if code == "castep":
                         from castepinput.inputs import ParamInput
 
-                        cellinput = cell_path.read_text()
+                        cellinput = cell_content
+                        param_file = _resolve_relax_param_file(
+                            input_path, cell_path, seed, workdir, param_suffix
+                        )
+                        logger.debug(
+                            "[%d/%d] Dispatching CASTEP runner: struct=%s param=%s",
+                            i,
+                            total,
+                            struct_name,
+                            param_file.name,
+                        )
                         paraminput = ParamInput.from_file(
-                            param_file_name + param_suffix
+                            param_file.name
                         )
                         rc = runner.run(struct_name, cellinput, paraminput)
                     elif code in ("gulp", "pp3"):
-                        struct_content = cell_path.read_text()
-                        param_content = Path(param_file_name + param_suffix).read_text()
+                        struct_content = cell_content
+                        param_file = _resolve_relax_param_file(
+                            input_path, cell_path, seed, workdir, param_suffix
+                        )
+                        param_content = param_file.read_text()
+                        logger.debug(
+                            "[%d/%d] Dispatching %s runner: struct=%s input=%s",
+                            i,
+                            total,
+                            code.upper(),
+                            struct_name,
+                            param_file.name,
+                        )
                         rc = runner.run(
                             struct_name,
                             struct_content,
                             param_content,
-                            seed_name=seed,
+                            seed_name=_crud_root_from_seed(struct_name),
                         )
                     elif code == "abacus":
-                        struct_content = cell_path.read_text()
-                        param_content = Path(param_file_name + param_suffix).read_text()
+                        struct_content = cell_content
+                        param_file = _resolve_relax_param_file(
+                            input_path, cell_path, seed, workdir, param_suffix
+                        )
+                        param_content = param_file.read_text()
+                        logger.debug(
+                            "[%d/%d] Dispatching ABACUS runner: struct=%s input=%s",
+                            i,
+                            total,
+                            struct_name,
+                            param_file.name,
+                        )
                         rc = runner.run(struct_name, struct_content, param_content)
                     elif code == "ml":
-                        cell_content = cell_path.read_text()
-                        rc = runner.run(struct_name, cell_content)
+                        ml_input = _prepare_ml_structure_input(
+                            input_path, cell_content
+                        )
+                        rc = runner.run(struct_name, ml_input)
 
                     if rc == 0:
                         _collect_result(
                             struct_name, code, calculator_spec=calculator_spec
                         )
+                        collected_res_files.append(workdir / f"{struct_name}.res")
                         n_relaxed += 1
                         logger.info("[%d/%d] OK: %s", i, total, struct_name)
                     else:
@@ -1001,6 +1732,7 @@ def run_relax(
                                 code,
                                 calculator_spec=calculator_spec,
                             )
+                            collected_res_files.append(workdir / f"{struct_name}.res")
                             logger.info(
                                 "[%d/%d] Not converged: %s", i, total, struct_name
                             )
@@ -1032,8 +1764,14 @@ def run_relax(
         )
 
         if pack and n_relaxed > 0:
-            packed = _pack_res_files(workdir)
+            packed = _pack_res_files(workdir, files=collected_res_files)
             logger.info("Packed into %s", packed)
+
+        if use_torchsim and n_relaxed == 0 and n_failed > 0:
+            raise click.ClickException(
+                "TorchSim relaxation failed for all matched structures; "
+                "see verbose log above for the failing batch."
+            )
 
     finally:
         os.chdir(orig_dir)
@@ -1075,10 +1813,36 @@ def run_relax(
     "--calculator",
     "calculator_spec",
     default=None,
-    help="Model spec for --code ml. TorchSim: 'mace:medium'; ASE: 'module:Class@model'.",
+    help=(
+        "Model spec for --code ml. Default backend is torch-sim, e.g. "
+        "'mace:medium'. Use 'ase:mace:medium' or 'ase:module:Class@model' "
+        "for ASE fallback."
+    ),
+)
+@click.option(
+    "--device",
+    default=None,
+    help="Torch device for torch-sim ML runs, e.g. cuda or cpu.",
+)
+@click.option(
+    "--batch-size",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Number of structures per torch-sim ML batch.",
 )
 def run_sp(
-    cell, seed, code, exe, workdir, keep, pack, walltime_buffer, calculator_spec
+    cell,
+    seed,
+    code,
+    exe,
+    workdir,
+    keep,
+    pack,
+    walltime_buffer,
+    calculator_spec,
+    device,
+    batch_size,
 ):
     """Run single-point calculations on existing cell files."""
     if code == "ml" and not calculator_spec:
@@ -1088,6 +1852,30 @@ def run_sp(
     cell_files = sorted(workdir.glob(cell))
     if not cell_files:
         raise click.ClickException(f"No files matched pattern: {cell}")
+    cell_files = _filter_packed_res_inputs(cell_files)
+    if not cell_files:
+        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+    if code != "ml" and any(path.suffix.lower() == ".res" for path in cell_files):
+        raise click.ClickException(
+            "RES input for run sp is currently supported only with --code ml"
+        )
+    sp_inputs = None
+    if code == "ml":
+        sp_inputs = [
+            (
+                input_path,
+                *_prepare_relax_input(
+                    input_path,
+                    workdir,
+                    write_res_cell=False,
+                    convert_res_cell=input_path.suffix.lower() != ".res",
+                ),
+            )
+            for input_path in cell_files
+        ]
+    use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
+    if use_torchsim:
+        _ensure_torchsim_available()
 
     # Read param file (not needed for ML)
     param_file_name = None
@@ -1107,7 +1895,9 @@ def run_sp(
     # Detect scheduler
     sched = _get_scheduler_for_walltime()
 
-    runner = _create_sp_runner(code, exe, calculator_spec=calculator_spec)
+    runner = None
+    if code != "ml" or not use_torchsim:
+        runner = _create_sp_runner(code, exe, calculator_spec=calculator_spec)
 
     orig_dir = os.getcwd()
     os.chdir(workdir)
@@ -1115,42 +1905,83 @@ def run_sp(
     try:
         n_done = 0
         n_failed = 0
-        total = len(cell_files)
+        collected_res_files: list[Path] = []
+        total = len(sp_inputs) if sp_inputs is not None else len(cell_files)
 
         # TorchSim batch path
-        if code == "ml" and _is_torchsim_model(calculator_spec):
-            from airsspy.jf.ml_runners import _torchsim_static_batch
+        if use_torchsim:
+            from airsspy.jf.ml_runners import TorchSimRunner
 
-            struct_names = [cp.stem for cp in cell_files]
-            cell_contents = [cp.read_text() for cp in cell_files]
+            struct_names = [struct_name for _, _, struct_name, _ in sp_inputs]
+            structures = [
+                _prepare_ml_structure_input(input_path, cell_content)
+                for input_path, _, _, cell_content in sp_inputs
+            ]
 
             logger.info(
-                "TorchSim batch SP on %d structures with %s",
+                "TorchSim batch SP on %d structures with %s (batch size %d)",
                 total,
                 calculator_spec,
+                batch_size,
             )
-            try:
-                batch_results = _torchsim_static_batch(
-                    calculator_spec,
-                    struct_names,
-                    cell_contents,
+            torchsim_runner = TorchSimRunner(calculator_spec, device=device)
+            for start in range(0, total, batch_size):
+                end = min(start + batch_size, total)
+                batch_names = struct_names[start:end]
+                batch_structures = structures[start:end]
+                logger.info(
+                    "TorchSim batch SP [%d-%d/%d]",
+                    start + 1,
+                    end,
+                    total,
                 )
+                try:
+                    batch_results = torchsim_runner.static_batch(
+                        batch_names,
+                        batch_structures,
+                    )
+                except Exception:
+                    logger.error(
+                        "TorchSim batch SP failed for structures %s",
+                        ", ".join(batch_names),
+                        exc_info=True,
+                    )
+                    n_failed += len(batch_names)
+                    continue
+
                 for sname, rc in batch_results.items():
                     if rc == 0:
-                        _collect_result(sname, code, calculator_spec=calculator_spec)
-                        n_done += 1
+                        try:
+                            _collect_result(
+                                sname,
+                                code,
+                                calculator_spec=calculator_spec,
+                            )
+                            collected_res_files.append(workdir / f"{sname}.res")
+                            n_done += 1
+                        except Exception:
+                            logger.error(
+                                "TorchSim SP result collection failed: %s",
+                                sname,
+                                exc_info=True,
+                            )
+                            n_failed += 1
+                            _cleanup_ml_transients(sname)
                     else:
                         n_failed += 1
-                        runner.clean_failed(sname)
-            except Exception:
-                logger.error("TorchSim batch SP failed", exc_info=True)
-                n_failed = total
+                        _cleanup_ml_transients(sname)
 
         else:
             logger.info("Running single-point on %d structures with %s", total, code)
 
-            for i, cell_path in enumerate(cell_files, 1):
-                struct_name = cell_path.stem
+            loop_inputs = (
+                sp_inputs
+                if sp_inputs is not None
+                else [(cell_path, cell_path, cell_path.stem, None) for cell_path in cell_files]
+            )
+            for i, (input_path, cell_path, struct_name, cell_content) in enumerate(
+                loop_inputs, 1
+            ):
 
                 # Check walltime
                 if not _walltime_remaining_ok(sched, walltime_buffer):
@@ -1170,13 +2001,16 @@ def run_sp(
                         param_content = Path(param_file_name + param_suffix).read_text()
                         rc = runner.run(struct_name, struct_content, param_content)
                     elif code == "ml":
-                        cell_content = cell_path.read_text()
-                        rc = runner.run(struct_name, cell_content)
+                        ml_input = _prepare_ml_structure_input(
+                            input_path, cell_content
+                        )
+                        rc = runner.run(struct_name, ml_input)
 
                     if rc == 0:
                         _collect_result(
                             struct_name, code, calculator_spec=calculator_spec
                         )
+                        collected_res_files.append(workdir / f"{struct_name}.res")
                         n_done += 1
                         logger.info("[%d/%d] OK: %s", i, total, struct_name)
                     else:
@@ -1186,6 +2020,7 @@ def run_sp(
                                 code,
                                 calculator_spec=calculator_spec,
                             )
+                            collected_res_files.append(workdir / f"{struct_name}.res")
                             logger.info(
                                 "[%d/%d] Not converged: %s",
                                 i,
@@ -1220,8 +2055,16 @@ def run_sp(
         )
 
         if pack and n_done > 0:
-            packed = _pack_res_files(workdir)
+            packed = _pack_res_files(workdir, files=collected_res_files)
             logger.info("Packed into %s", packed)
+
+        if (
+            code == "ml" and use_torchsim and n_done == 0 and n_failed > 0
+        ):
+            raise click.ClickException(
+                "TorchSim single-point failed for all matched structures; "
+                "see verbose log above for the failing batch."
+            )
 
     finally:
         os.chdir(orig_dir)

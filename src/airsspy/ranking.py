@@ -11,7 +11,7 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from functools import reduce
-from math import gcd
+from math import ceil, gcd, isfinite
 from pathlib import Path
 from typing import TextIO
 
@@ -236,6 +236,30 @@ def _reduce_formula(species_counts: dict[str, int]) -> str:
     return "".join(parts)
 
 
+def _parse_formula_counts(formula: str) -> dict[str, int] | None:
+    """Parse a simple chemical formula into integer element counts."""
+    import re
+
+    if not formula:
+        return None
+
+    counts: dict[str, int] = {}
+    pos = 0
+    for match in re.finditer(r"([A-Z][a-z]?)(\d*)", formula):
+        if match.start() != pos:
+            return None
+        element, count_text = match.groups()
+        count = int(count_text or "1")
+        if count <= 0:
+            return None
+        counts[element] = counts.get(element, 0) + count
+        pos = match.end()
+
+    if pos != len(formula):
+        return None
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # Label truncation
 # ---------------------------------------------------------------------------
@@ -302,7 +326,42 @@ def filter_by_formula(
 
     from fnmatch import fnmatch
 
-    return [r for r in records if fnmatch(r.reduced_formula, formula)]
+    if any(char in formula for char in "*?["):
+        return [r for r in records if fnmatch(r.reduced_formula, formula)]
+
+    parsed_counts = _parse_formula_counts(formula)
+    if parsed_counts is not None:
+        formula = _reduce_formula(parsed_counts)
+
+    return [r for r in records if r.reduced_formula == formula]
+
+
+def filter_by_formula_units(
+    records: list[StructureRecord], n_formula_units: int
+) -> list[StructureRecord]:
+    """Filter records by exact number of formula units."""
+    return [r for r in records if r.n_formula_units == n_formula_units]
+
+
+def filter_by_species_number(
+    records: list[StructureRecord], species_number: int
+) -> list[StructureRecord]:
+    """Filter records by exact number of distinct species."""
+    return [r for r in records if len(r.species_counts) == species_number]
+
+
+def filter_by_ions_number(
+    records: list[StructureRecord], ions_number: int
+) -> list[StructureRecord]:
+    """Filter records by ion count.
+
+    Positive values require an exact ``natoms`` match.  Negative values match
+    records with ``natoms <= abs(ions_number)``, following cryan's range form.
+    """
+    if ions_number < 0:
+        limit = abs(ions_number)
+        return [r for r in records if r.natoms <= limit]
+    return [r for r in records if r.natoms == ions_number]
 
 
 def _extract_energy(atoms, field: str | None = None) -> float:
@@ -950,11 +1009,34 @@ def maxwell_construction(
         if verbose:
             logger.warning("skipping %d structures with no atom data", skipped)
 
+    # Maxwell output is composition-level: use the lowest-enthalpy
+    # representative for each reduced formula and accumulate copies.
+    representative_records: list[StructureRecord] = []
+    representative_copies: dict[str, int] = {}
+    representative_by_formula: dict[str, StructureRecord] = {}
+    representative_index: dict[str, int] = {}
+    for rec in valid_records:
+        formula = rec.reduced_formula
+        representative_copies[formula] = (
+            representative_copies.get(formula, 0) + rec.copies
+        )
+
+        if formula not in representative_by_formula:
+            representative_by_formula[formula] = rec
+            representative_index[formula] = len(representative_records)
+            representative_records.append(rec)
+            continue
+
+        current = representative_by_formula[formula]
+        if rec.enthalpy_per_fu < current.enthalpy_per_fu:
+            representative_by_formula[formula] = rec
+            representative_records[representative_index[formula]] = rec
+
     # Convert records to PDEntry
-    entries = records_to_pd_entries(valid_records)
+    entries = records_to_pd_entries(representative_records)
 
     # Add fake elemental references for any missing pure elements
-    missing = check_elemental_references(valid_records, elements)
+    missing = check_elemental_references(representative_records, elements)
     fake_entries = []
     if missing:
         msg = f"Warning: no structures for pure elements: {', '.join(missing)}. Using E=0 references."
@@ -980,11 +1062,12 @@ def maxwell_construction(
             warnings.simplefilter("ignore")
             pd = PhaseDiagram(entries)
 
-    # Compute hull data for each record
+    # Compute hull data for each representative composition
     output_records: list[dict] = []
-    for i, rec in enumerate(valid_records):
+    for i, rec in enumerate(representative_records):
         entry = entries[i]
         comp = entry.composition
+        formula = rec.reduced_formula
 
         # Energy per atom (enthalpy / natoms)
         h_per_atom = rec.enthalpy / rec.natoms if rec.natoms > 0 else rec.enthalpy
@@ -1022,9 +1105,9 @@ def maxwell_construction(
                 if rec.n_formula_units > 0
                 else 0.0,
                 "nfu": rec.n_formula_units,
-                "formula": rec.reduced_formula,
+                "formula": formula,
                 "symm": rec.symm,
-                "copies": rec.copies,
+                "copies": representative_copies[formula],
                 "source": rec.source,
                 "species_counts": rec.species_counts,
                 "_record": rec,
@@ -1075,6 +1158,103 @@ def prefilter_records(
     surviving.sort(key=lambda r: r.enthalpy_per_fu)
 
     return surviving
+
+
+def _enthalpy_per_atom(rec: StructureRecord) -> float:
+    return rec.enthalpy / rec.natoms if rec.natoms > 0 else rec.enthalpy
+
+
+def prune_pathological_records(
+    records: list[StructureRecord],
+    tail_fraction: float = 0.10,
+    sigma_factor: float = 3.0,
+    trim_count: int = 1,
+    min_tail_size: int = 5,
+) -> tuple[list[StructureRecord], list[StructureRecord], list[dict]]:
+    """Remove suspiciously low-energy records using a trimmed MAD cutoff.
+
+    The filter is applied independently for each reduced formula.  Energies are
+    compared as enthalpy per atom.  For each formula group, the lowest
+    ``tail_fraction`` of records is used as the candidate tail, the lowest
+    ``trim_count`` of those records are excluded from the baseline statistics,
+    and the cutoff is ``median - sigma_factor * 1.4826 * MAD``.
+
+    Returns ``(kept, rejected, diagnostics)``.  Diagnostics are dictionaries so
+    callers can report skipped groups and per-formula cutoffs without redoing
+    the statistics.
+    """
+    if not isfinite(tail_fraction) or not 0.0 < tail_fraction <= 1.0:
+        raise ValueError("tail_fraction must be in (0, 1]")
+    if not isfinite(sigma_factor) or sigma_factor < 0.0:
+        raise ValueError("sigma_factor must be finite and >= 0")
+    if trim_count < 0:
+        raise ValueError("trim_count must be >= 0")
+    if min_tail_size < 1:
+        raise ValueError("min_tail_size must be >= 1")
+
+    groups: dict[str, list[StructureRecord]] = {}
+    for rec in records:
+        groups.setdefault(rec.reduced_formula, []).append(rec)
+
+    rejected_ids: set[int] = set()
+    diagnostics: list[dict] = []
+
+    for formula, group in groups.items():
+        ranked = sorted(group, key=_enthalpy_per_atom)
+        tail_count = min(len(ranked), max(1, ceil(tail_fraction * len(ranked))))
+        tail = ranked[:tail_count]
+        baseline = tail[min(trim_count, len(tail)) :]
+
+        diagnostic = {
+            "formula": formula,
+            "group_size": len(group),
+            "tail_size": len(tail),
+            "trim_count": min(trim_count, len(tail)),
+            "baseline_size": len(baseline),
+        }
+
+        if len(baseline) < min_tail_size:
+            diagnostic.update({"status": "skipped", "reason": "insufficient_tail"})
+            diagnostics.append(diagnostic)
+            continue
+
+        values = np.array([_enthalpy_per_atom(rec) for rec in baseline], dtype=float)
+        median = float(np.median(values))
+        mad = float(np.median(np.abs(values - median)))
+        robust_sigma = 1.4826 * mad
+
+        diagnostic.update(
+            {
+                "median": median,
+                "mad": mad,
+                "robust_sigma": robust_sigma,
+            }
+        )
+
+        if robust_sigma <= 0.0:
+            diagnostic.update({"status": "skipped", "reason": "zero_mad"})
+            diagnostics.append(diagnostic)
+            continue
+
+        cutoff = median - sigma_factor * robust_sigma
+        formula_rejected = [
+            rec for rec in group if _enthalpy_per_atom(rec) < cutoff
+        ]
+        rejected_ids.update(id(rec) for rec in formula_rejected)
+
+        diagnostic.update(
+            {
+                "status": "applied",
+                "cutoff": cutoff,
+                "rejected_count": len(formula_rejected),
+                "rejected_labels": [rec.label for rec in formula_rejected],
+            }
+        )
+        diagnostics.append(diagnostic)
+
+    kept = [rec for rec in records if id(rec) not in rejected_ids]
+    rejected = [rec for rec in records if id(rec) in rejected_ids]
+    return kept, rejected, diagnostics
 
 
 def rank_structures(
@@ -1370,7 +1550,7 @@ def plot_maxwell(
             x=x_all,
             y=y_all,
             mode="markers",
-            marker=dict(size=5, color=colors_all),
+            marker={"size": 5, "color": colors_all},
             text=labels_all,
             hovertemplate="x=%{x:.3f}<br>E<sub>f</sub>=%{y:.4f}<br>%{text}<extra></extra>",
             showlegend=False,
@@ -1386,8 +1566,8 @@ def plot_maxwell(
                 x=[s["x"] for s in stable_entries],
                 y=[s["y"] for s in stable_entries],
                 mode="lines+markers",
-                line=dict(color="black", width=2),
-                marker=dict(size=7, color="black", symbol="circle"),
+                line={"color": "black", "width": 2},
+                marker={"size": 7, "color": "black", "symbol": "circle"},
                 text=[s["formula"] for s in stable_entries],
                 hovertemplate="%{text}<extra></extra>",
                 showlegend=False,
@@ -1399,25 +1579,25 @@ def plot_maxwell(
     # Right panel: stable phases table
     fig.add_trace(
         go.Table(
-            header=dict(
-                values=["Phase", "nfu", "Space Group", "x"],
-                fill_color="lightgrey",
-                align="left",
-                font=dict(size=12),
-                line_color="black",
-            ),
-            cells=dict(
-                values=[
+            header={
+                "values": ["Phase", "nfu", "Space Group", "x"],
+                "fill_color": "lightgrey",
+                "align": "left",
+                "font": {"size": 12},
+                "line_color": "black",
+            },
+            cells={
+                "values": [
                     [s["formula"] for s in stable_entries],
                     [str(s["nfu"]) for s in stable_entries],
                     [s["symm"] for s in stable_entries],
                     [f"{s['x']:.3f}" for s in stable_entries],
                 ],
-                fill_color="white",
-                align="left",
-                font=dict(size=11),
-                line_color="black",
-            ),
+                "fill_color": "white",
+                "align": "left",
+                "font": {"size": 11},
+                "line_color": "black",
+            },
         ),
         row=1,
         col=2,
@@ -1433,7 +1613,7 @@ def plot_maxwell(
         title=f"Convex Hull: {el_b}-{el_a}",
         height=600,
         width=900,
-        margin=dict(l=60, r=20, t=50, b=60),
+        margin={"l": 60, "r": 20, "t": 50, "b": 60},
     )
 
     return fig

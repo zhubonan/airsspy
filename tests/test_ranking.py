@@ -18,12 +18,17 @@ from airsspy.ranking import (
     _truncate_label,
     check_elemental_references,
     eliminate_similar,
+    filter_by_formula,
+    filter_by_formula_units,
+    filter_by_ions_number,
+    filter_by_species_number,
     format_header,
     format_maxwell_header,
     format_maxwell_line,
     format_rank_line,
     infer_elements,
     maxwell_construction,
+    prune_pathological_records,
     rank_structures,
     read_res_file,
     read_res_stream,
@@ -335,6 +340,194 @@ class TestRanking:
         rec = self._make_si_record("Si-003", -42.8, copies=5)
         ranked = rank_structures([rec])
         assert ranked[0]["copies"] == 5
+
+
+class TestCryanStyleFilters:
+    def _records(self):
+        return [
+            StructureRecord(
+                label="Si4",
+                pressure=0.0,
+                volume=40.0,
+                enthalpy=-4.0,
+                natoms=4,
+                species_counts={"Si": 4},
+            ),
+            StructureRecord(
+                label="Si2",
+                pressure=0.0,
+                volume=20.0,
+                enthalpy=-2.0,
+                natoms=2,
+                species_counts={"Si": 2},
+            ),
+            StructureRecord(
+                label="SiO2",
+                pressure=0.0,
+                volume=30.0,
+                enthalpy=-6.0,
+                natoms=3,
+                species_counts={"Si": 1, "O": 2},
+            ),
+        ]
+
+    def test_filter_by_formula_units_exact(self):
+        filtered = filter_by_formula_units(self._records(), 4)
+        assert [rec.label for rec in filtered] == ["Si4"]
+
+    def test_filter_by_formula_matches_reordered_reduced_formula(self):
+        filtered = filter_by_formula(self._records(), "O2Si")
+        assert [rec.label for rec in filtered] == ["SiO2"]
+
+    def test_filter_by_formula_reduces_input_formula(self):
+        filtered = filter_by_formula(self._records(), "O4Si2")
+        assert [rec.label for rec in filtered] == ["SiO2"]
+
+    def test_filter_by_formula_keeps_glob_mode(self):
+        filtered = filter_by_formula(self._records(), "Si*")
+        assert [rec.label for rec in filtered] == ["Si4", "Si2", "SiO2"]
+
+    def test_filter_by_species_number_exact(self):
+        filtered = filter_by_species_number(self._records(), 2)
+        assert [rec.label for rec in filtered] == ["SiO2"]
+
+    def test_filter_by_ions_number_exact_and_range(self):
+        records = self._records()
+        exact = filter_by_ions_number(records, 2)
+        ranged = filter_by_ions_number(records, -3)
+        assert [rec.label for rec in exact] == ["Si2"]
+        assert [rec.label for rec in ranged] == ["Si2", "SiO2"]
+
+
+class TestPathologicalPruning:
+    def _record(self, label, energy, element="Si"):
+        return StructureRecord(
+            label=label,
+            pressure=0.0,
+            volume=10.0,
+            enthalpy=energy,
+            natoms=1,
+            species_counts={element: 1},
+        )
+
+    def test_rejects_extreme_low_energy_outlier(self):
+        records = [
+            self._record("Si-pathological", -10.0),
+            self._record("Si-low", -5.2),
+            self._record("Si-a", -5.1),
+            self._record("Si-b", -5.0),
+            self._record("Si-c", -4.9),
+            self._record("Si-d", -4.8),
+        ]
+
+        kept, rejected, diagnostics = prune_pathological_records(
+            records,
+            tail_fraction=1.0,
+            sigma_factor=3.0,
+            trim_count=1,
+            min_tail_size=3,
+        )
+
+        assert [rec.label for rec in rejected] == ["Si-pathological"]
+        assert {rec.label for rec in kept} == {
+            "Si-low",
+            "Si-a",
+            "Si-b",
+            "Si-c",
+            "Si-d",
+        }
+        assert diagnostics[0]["status"] == "applied"
+        assert diagnostics[0]["rejected_count"] == 1
+
+    def test_keeps_normal_low_energy_records(self):
+        records = [
+            self._record("Si-low", -5.3),
+            self._record("Si-a", -5.2),
+            self._record("Si-b", -5.1),
+            self._record("Si-c", -5.0),
+            self._record("Si-d", -4.9),
+            self._record("Si-e", -4.8),
+        ]
+
+        kept, rejected, _ = prune_pathological_records(
+            records,
+            tail_fraction=1.0,
+            sigma_factor=3.0,
+            trim_count=1,
+            min_tail_size=3,
+        )
+
+        assert kept == records
+        assert rejected == []
+
+    def test_computes_cutoffs_per_formula(self):
+        records = [
+            self._record("Si-pathological", -10.0, "Si"),
+            self._record("Si-low", -5.2, "Si"),
+            self._record("Si-a", -5.1, "Si"),
+            self._record("Si-b", -5.0, "Si"),
+            self._record("Si-c", -4.9, "Si"),
+            self._record("Si-d", -4.8, "Si"),
+            self._record("Ge-low", -7.3, "Ge"),
+            self._record("Ge-a", -7.2, "Ge"),
+            self._record("Ge-b", -7.1, "Ge"),
+            self._record("Ge-c", -7.0, "Ge"),
+            self._record("Ge-d", -6.9, "Ge"),
+            self._record("Ge-e", -6.8, "Ge"),
+        ]
+
+        kept, rejected, diagnostics = prune_pathological_records(
+            records,
+            tail_fraction=1.0,
+            sigma_factor=3.0,
+            trim_count=1,
+            min_tail_size=3,
+        )
+
+        assert [rec.label for rec in rejected] == ["Si-pathological"]
+        assert "Ge-low" in {rec.label for rec in kept}
+        assert {diag["formula"] for diag in diagnostics} == {"Si", "Ge"}
+
+    def test_skips_groups_too_small_after_trimming(self):
+        records = [
+            self._record("Si-pathological", -10.0),
+            self._record("Si-a", -5.1),
+            self._record("Si-b", -5.0),
+        ]
+
+        kept, rejected, diagnostics = prune_pathological_records(
+            records,
+            tail_fraction=1.0,
+            trim_count=1,
+            min_tail_size=3,
+        )
+
+        assert kept == records
+        assert rejected == []
+        assert diagnostics[0]["status"] == "skipped"
+        assert diagnostics[0]["reason"] == "insufficient_tail"
+
+    def test_zero_mad_does_not_reject(self):
+        records = [
+            self._record("Si-pathological", -10.0),
+            self._record("Si-a", -5.0),
+            self._record("Si-b", -5.0),
+            self._record("Si-c", -5.0),
+            self._record("Si-d", -5.0),
+            self._record("Si-e", -5.0),
+        ]
+
+        kept, rejected, diagnostics = prune_pathological_records(
+            records,
+            tail_fraction=1.0,
+            trim_count=1,
+            min_tail_size=3,
+        )
+
+        assert kept == records
+        assert rejected == []
+        assert diagnostics[0]["status"] == "skipped"
+        assert diagnostics[0]["reason"] == "zero_mad"
 
 
 # ---------------------------------------------------------------------------
@@ -959,28 +1152,47 @@ class TestMaxwellConstruction:
     def test_binary_hull_basic(self):
         records = self._make_binary_records()
         ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
-        assert len(ranked) == 5
+        assert len(ranked) == 4
         # Si and O should be on hull (elemental references)
         si_rec = next(r for r in ranked if r["formula"] == "Si4")
         o_rec = next(r for r in ranked if r["formula"] == "O2")
-        assert si_rec["on_hull"] == True
-        assert o_rec["on_hull"] == True
+        assert si_rec["on_hull"]
+        assert o_rec["on_hull"]
 
-    def test_binary_hull_stable_compound(self):
+    def test_binary_hull_uses_best_composition_representative(self):
         records = self._make_binary_records()
         ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
-        # The stable SiO2 should be on hull
-        sio2_stable = next(r for r in ranked if r["label"] == "SiO2-001")
-        assert sio2_stable["on_hull"] == True
-        assert sio2_stable["e_above_hull"] == pytest.approx(0.0, abs=1e-4)
+        sio2_recs = [r for r in ranked if r["formula"] == "SiO2"]
+        assert len(sio2_recs) == 1
+        assert sio2_recs[0]["label"] == "SiO2-001"
+        assert sio2_recs[0]["copies"] == 2
+        assert sio2_recs[0]["on_hull"]
+        assert sio2_recs[0]["e_above_hull"] == pytest.approx(0.0, abs=1e-4)
 
-    def test_binary_hull_unstable_compound(self):
-        records = self._make_binary_records()
+    def test_duplicate_composition_tie_preserves_first_seen(self):
+        records = [
+            StructureRecord(
+                label="Si-001", pressure=0.0, volume=40.0, enthalpy=-42.5,
+                natoms=4, species_counts={"Si": 4},
+            ),
+            StructureRecord(
+                label="O2-001", pressure=0.0, volume=20.0, enthalpy=-10.0,
+                natoms=2, species_counts={"O": 2},
+            ),
+            StructureRecord(
+                label="SiO-first", pressure=0.0, volume=35.0, enthalpy=-55.0,
+                natoms=4, species_counts={"Si": 2, "O": 2}, copies=2,
+            ),
+            StructureRecord(
+                label="SiO-second", pressure=0.0, volume=36.0, enthalpy=-55.0,
+                natoms=4, species_counts={"Si": 2, "O": 2}, copies=3,
+            ),
+        ]
         ranked, pd, _ = maxwell_construction(records, elements=["Si", "O"])
-        # The unstable SiO2 should be above hull
-        sio2_unstable = next(r for r in ranked if r["label"] == "SiO2-002")
-        assert sio2_unstable["on_hull"] == False
-        assert sio2_unstable["e_above_hull"] > 0
+        sio_recs = [r for r in ranked if r["formula"] == "SiO"]
+        assert len(sio_recs) == 1
+        assert sio_recs[0]["label"] == "SiO-first"
+        assert sio_recs[0]["copies"] == 5
 
     def test_fake_elemental_reference(self):
         """When missing elemental reference, fake E=0 entry is created."""

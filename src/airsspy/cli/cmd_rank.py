@@ -29,8 +29,9 @@ def _write_record_file(rec, path: Path, fmt: str) -> None:
 
             ase_write(str(path), rec._atoms, format="extxyz")
         elif rec._raw_lines:
-            from airsspy.restools import RESFile
             from ase.io import write as ase_write
+
+            from airsspy.restools import RESFile
 
             res = RESFile.from_lines(rec._raw_lines, include_structure=True)
             if res.atoms is not None:
@@ -45,14 +46,59 @@ def _write_record_file(rec, path: Path, fmt: str) -> None:
             click.echo(f"Warning: no data for {rec.label}, skipping", err=True)
 
 
-@click.command("rank")
+def _echo_pathology_diagnostics(kept_count, rejected, diagnostics) -> None:
+    """Print post-search pathological pruning diagnostics."""
+    click.echo(
+        f"Pathological prune: kept {kept_count}, rejected {len(rejected)}",
+        err=True,
+    )
+
+    skipped = 0
+    for diag in diagnostics:
+        if diag.get("status") != "applied":
+            skipped += 1
+            continue
+
+        message = (
+            "  {formula}: cutoff={cutoff:.6f} eV/atom "
+            "(median={median:.6f}, robust_sigma={robust_sigma:.6f}, "
+            "tail={tail_size}, baseline={baseline_size}, rejected={rejected_count})"
+        ).format(**diag)
+        click.echo(message, err=True)
+
+    if skipped:
+        click.echo(
+            f"  skipped {skipped} formula groups with insufficient/zero-MAD statistics",
+            err=True,
+        )
+
+    if rejected:
+        labels = ", ".join(rec.label for rec in rejected)
+        click.echo(f"Rejected pathological structures: {labels}", err=True)
+
+
+@click.command(
+    "rank",
+    context_settings={"help_option_names": ["-h", "--help", "-?"]},
+)
 @click.argument("files", nargs=-1, type=click.Path(exists=True))
+@click.option(
+    "-r",
+    "--rank",
+    "rank_compat",
+    is_flag=True,
+    expose_value=False,
+    help="Compatibility flag; ranking is the default action.",
+)
 @click.option(
     "-t", "--top", "top_n", type=int, default=None, help="Show only top N structures"
 )
 @click.option(
     "-de",
     "--delta-e",
+    "--denergy",
+    "--delta_e",
+    "delta_e",
     type=float,
     default=None,
     help="Filter structures with relative energy per atom above this threshold (eV)",
@@ -69,12 +115,82 @@ def _write_record_file(rec, path: Path, fmt: str) -> None:
     help="Filter structures by label using glob pattern (e.g. 'BiSI-0*')",
 )
 @click.option(
+    "-fu",
+    "--formula-unit",
+    "--formula_unit",
+    "formula_units",
+    type=int,
+    default=None,
+    help="Filter by exact number of formula units.",
+)
+@click.option(
+    "-sn",
+    "--speciesnumber",
+    "--species-number",
+    "species_number",
+    type=int,
+    default=None,
+    help="Filter by exact number of species.",
+)
+@click.option(
+    "-in",
+    "--ionsnumber",
+    "--ions-number",
+    "ions_number",
+    type=int,
+    default=None,
+    help="Filter by ion count; negative values mean up to abs(N).",
+)
+@click.option(
+    "--prune-pathological",
+    is_flag=True,
+    help="Remove suspicious low-energy pathological structures before ranking.",
+)
+@click.option(
+    "--pathology-tail-fraction",
+    type=float,
+    default=0.10,
+    show_default=True,
+    help="Lowest-energy fraction used for pathological pruning statistics.",
+)
+@click.option(
+    "--pathology-sigma-factor",
+    type=float,
+    default=3.0,
+    show_default=True,
+    help="Robust-sigma multiplier for pathological pruning cutoff.",
+)
+@click.option(
+    "--pathology-trim-count",
+    type=int,
+    default=1,
+    show_default=True,
+    help="Number of lowest tail structures excluded from baseline statistics.",
+)
+@click.option(
+    "--pathology-min-tail-size",
+    type=int,
+    default=5,
+    show_default=True,
+    help="Minimum baseline tail size required for pathological pruning.",
+)
+@click.option(
     "-nr",
     "--absolute",
+    "--not-relative",
+    "--not_relative",
+    "absolute",
     is_flag=True,
     help="Show absolute enthalpy for all entries",
 )
-@click.option("-l", "--long-labels", is_flag=True, help="Show full structure labels")
+@click.option(
+    "-l",
+    "--long-labels",
+    "--long",
+    "long_labels",
+    is_flag=True,
+    help="Show full structure labels",
+)
 @click.option(
     "-s",
     "--summary",
@@ -115,6 +231,9 @@ def _write_record_file(rec, path: Path, fmt: str) -> None:
 @click.option(
     "-el",
     "--element-list",
+    "--elementlist",
+    "--element_list",
+    "element_list",
     default=None,
     help="Comma-separated element list for phase diagram (e.g. Si,O). Auto-detected if not given.",
 )
@@ -132,7 +251,10 @@ def _write_record_file(rec, path: Path, fmt: str) -> None:
     help="Force input format (default: auto-detect from extension)",
 )
 @click.option(
+    "-dr",
+    "--distance",
     "--fingerprint-cutoff",
+    "fingerprint_cutoff",
     type=float,
     default=10.0,
     help="Distance cutoff (Å) for fingerprint computation (default: 10.0)",
@@ -177,6 +299,14 @@ def rank(
     delta_e,
     formula,
     filter_name,
+    formula_units,
+    species_number,
+    ions_number,
+    prune_pathological,
+    pathology_tail_fraction,
+    pathology_sigma_factor,
+    pathology_trim_count,
+    pathology_min_tail_size,
     absolute,
     long_labels,
     summary,
@@ -219,12 +349,16 @@ def rank(
         apply_external_pressure,
         eliminate_similar,
         fill_dict_symm,
+        filter_by_formula_units,
+        filter_by_ions_number,
+        filter_by_species_number,
         format_header,
         format_maxwell_header,
         format_maxwell_line,
         format_rank_line,
         maxwell_construction,
         prefilter_records,
+        prune_pathological_records,
         rank_structures,
         read_extxyz_file,
         read_res_file,
@@ -293,9 +427,54 @@ def rank(
         records = _filter_by_formula(records, formula)
         click.echo(f"Filter -f '{formula}': {before} → {len(records)}", err=True)
 
+    if formula_units is not None:
+        before = len(records)
+        records = filter_by_formula_units(records, formula_units)
+        click.echo(
+            f"Filter -fu {formula_units}: {before} → {len(records)}",
+            err=True,
+        )
+
+    if species_number is not None:
+        before = len(records)
+        records = filter_by_species_number(records, species_number)
+        click.echo(
+            f"Filter -sn {species_number}: {before} → {len(records)}",
+            err=True,
+        )
+
+    if ions_number is not None:
+        before = len(records)
+        records = filter_by_ions_number(records, ions_number)
+        click.echo(
+            f"Filter -in {ions_number}: {before} → {len(records)}",
+            err=True,
+        )
+
     if not records:
         click.echo("No structures remaining after filtering.", err=True)
         return
+
+    if prune_pathological:
+        try:
+            records, rejected, diagnostics = prune_pathological_records(
+                records,
+                tail_fraction=pathology_tail_fraction,
+                sigma_factor=pathology_sigma_factor,
+                trim_count=pathology_trim_count,
+                min_tail_size=pathology_min_tail_size,
+            )
+        except ValueError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
+
+        _echo_pathology_diagnostics(len(records), rejected, diagnostics)
+        if not records:
+            click.echo(
+                "No structures remaining after pathological pruning.",
+                err=True,
+            )
+            return
 
     # Step 4: Pre-rank filter (reduce set before merge)
     if unite is not None:

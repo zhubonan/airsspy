@@ -191,3 +191,20 @@ Python >=3.9.
 ## Testing
 
 Tests live in `tests/` with `conftest.py` providing fixtures (`al_atoms`, `tmpfile`). pytest is configured in `pyproject.toml` with `--strict-markers --strict-config`; the `e2e` marker is reserved for tests that run real CASTEP/ABACUS executables. Tests that depend on external programs such as `buildcell`, CASTEP, ABACUS, GULP, PP3, or optional ML backends should be skipped/guarded when the executable or package is unavailable. The suite covers core seed/build/RES utilities, CASTEP/GULP/ABACUS tools, ranking/conversion, search helpers, scheduler, jobflow documents/jobs/runners/store, ML runner helpers, and CLI commands (using `click.testing.CliRunner`).
+
+## Mandatory final review subagent
+
+After implementing changes and before final response:
+
+1. Spawn a read-only reviewer subagent.
+2. Ask it to review the current branch diff against the base branch.
+3. The reviewer must focus on:
+   - correctness
+   - regressions
+   - missing tests
+   - race conditions
+   - security issues
+   - unintended unrelated edits
+4. Wait for the reviewer result.
+5. Fix any high-confidence issue.
+6. Summarize the review result in the final answer.

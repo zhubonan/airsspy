@@ -1,8 +1,9 @@
 """Tests for CLI commands."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from ase import Atoms
 from click.testing import CliRunner
 
 from airsspy.cli import cmd_run
@@ -103,6 +104,26 @@ def test_rank_help():
     result = runner.invoke(cli, ["rank", "--help"])
     assert result.exit_code == 0
     assert "enthalpy" in result.output.lower()
+    assert "-h" in result.output
+    assert "-?" in result.output
+    assert "--help" in result.output
+    assert "-r, --rank" in result.output
+    assert "--denergy" in result.output
+    assert "--not_relative" in result.output
+    assert "--long" in result.output
+    assert "-fu, --formula-unit" in result.output
+    assert "-sn, --speciesnumber" in result.output
+    assert "-in, --ionsnumber" in result.output
+    assert "-dr, --distance" in result.output
+
+
+def test_rank_cryan_help_aliases():
+    """Test cryan-style help aliases."""
+    runner = CliRunner()
+    for alias in ("-h", "-?"):
+        result = runner.invoke(cli, ["rank", alias])
+        assert result.exit_code == 0
+        assert "Usage: " in result.output
 
 
 def test_rank_from_stdin():
@@ -221,6 +242,215 @@ def test_rank_formula_filter():
     assert result.exit_code == 0
     assert "SiO2-001" in result.output
     assert "Si-001" not in result.output
+
+
+def test_rank_formula_filter_accepts_reordered_formula():
+    """Test -f matches formulas independent of element order."""
+    runner = CliRunner()
+    packed_res = _res_block("SiO2-001", -80.5, ["Si", "O", "O"])
+    result = runner.invoke(cli, ["rank", "-f", "O2Si"], input=packed_res)
+    assert result.exit_code == 0
+    assert "SiO2-001" in result.output
+
+
+def _single_atom_res(label, energy, element="Si"):
+    return (
+        f"TITL {label} 0.0 10.0 {energy:.6f} 0 0 1 (P1) n - 1\n"
+        "CELL 1.0  3.0 3.0 3.0 90.0 90.0 90.0\n"
+        "LATT -1\n"
+        f"SFAC {element}\n"
+        f"{element}     1  0.0  0.0  0.0  1.0\n"
+        "END\n"
+    )
+
+
+def _res_block(label, energy, symbols):
+    species = []
+    for sym in symbols:
+        if sym not in species:
+            species.append(sym)
+
+    lines = [
+        f"TITL {label} 0.0 10.0 {energy:.6f} 0 0 {len(symbols)} (P1) n - 1",
+        "CELL 1.0  3.0 3.0 3.0 90.0 90.0 90.0",
+        "LATT -1",
+        "SFAC " + " ".join(species),
+    ]
+    for i, sym in enumerate(symbols):
+        sfac_index = species.index(sym) + 1
+        coord = i / 10.0
+        lines.append(f"{sym}     {sfac_index}  {coord:.1f}  0.0  0.0  1.0")
+    lines.append("END")
+    return "\n".join(lines) + "\n"
+
+
+def test_rank_cryan_rank_alias_behaves_like_default():
+    """Test -r is accepted as a no-op rank compatibility flag."""
+    runner = CliRunner()
+    packed_res = _single_atom_res("Si-001", -1.0)
+
+    default = runner.invoke(cli, ["rank"], input=packed_res)
+    compat = runner.invoke(cli, ["rank", "-r"], input=packed_res)
+
+    assert default.exit_code == 0
+    assert compat.exit_code == 0
+    assert default.stdout == compat.stdout
+
+
+def test_rank_cryan_option_aliases_are_accepted():
+    """Test common cryan-style aliases parse successfully."""
+    runner = CliRunner()
+    packed_res = _single_atom_res("Si-001", -1.0)
+
+    result = runner.invoke(
+        cli,
+        [
+            "rank",
+            "--not_relative",
+            "--long",
+            "--denergy",
+            "1.0",
+            "--elementlist",
+            "Si,O",
+            "-dr",
+            "4.0",
+        ],
+        input=packed_res,
+    )
+
+    assert result.exit_code == 0
+    assert "Si-001" in result.stdout
+
+
+def test_rank_cryan_formula_unit_filter():
+    """Test -fu filters by exact number of formula units."""
+    runner = CliRunner()
+    packed_res = (
+        _res_block("Si4", -4.0, ["Si", "Si", "Si", "Si"])
+        + _res_block("Si2", -2.0, ["Si", "Si"])
+        + _res_block("SiO2", -6.0, ["Si", "O", "O"])
+    )
+
+    result = runner.invoke(cli, ["rank", "-fu", "4"], input=packed_res)
+
+    assert result.exit_code == 0
+    assert "Si4" in result.stdout
+    assert "Si2" not in result.stdout
+    assert "SiO2" not in result.stdout
+
+
+def test_rank_cryan_species_and_ions_filters():
+    """Test -sn and -in filters from cryan-style options."""
+    runner = CliRunner()
+    packed_res = (
+        _res_block("Si4", -4.0, ["Si", "Si", "Si", "Si"])
+        + _res_block("Si2", -2.0, ["Si", "Si"])
+        + _res_block("SiO2", -6.0, ["Si", "O", "O"])
+    )
+
+    species = runner.invoke(cli, ["rank", "-sn", "2"], input=packed_res)
+    ions = runner.invoke(cli, ["rank", "-in", "-3"], input=packed_res)
+
+    assert species.exit_code == 0
+    assert "SiO2" in species.stdout
+    assert "Si4" not in species.stdout
+    assert "Si2" not in species.stdout
+    assert ions.exit_code == 0
+    assert "Si2" in ions.stdout
+    assert "SiO2" in ions.stdout
+    assert "Si4" not in ions.stdout
+
+
+def test_rank_pathological_prune_hides_rejected_from_stdout():
+    """Test trimmed-MAD pathological pruning filters rank output."""
+    runner = CliRunner()
+    packed_res = "".join(
+        [
+            _single_atom_res("Si-pathological", -10.0),
+            _single_atom_res("Si-low", -5.2),
+            _single_atom_res("Si-a", -5.1),
+            _single_atom_res("Si-b", -5.0),
+            _single_atom_res("Si-c", -4.9),
+            _single_atom_res("Si-d", -4.8),
+        ]
+    )
+
+    result = runner.invoke(
+        cli,
+        [
+            "rank",
+            "--prune-pathological",
+            "--pathology-tail-fraction",
+            "1.0",
+            "--pathology-min-tail-size",
+            "3",
+        ],
+        input=packed_res,
+    )
+
+    assert result.exit_code == 0
+    assert "Si-pathological" not in result.stdout
+    assert "Si-low" in result.stdout
+    assert "Pathological prune: kept 5, rejected 1" in result.stderr
+    assert "Rejected pathological structures: Si-pathological" in result.stderr
+
+
+def test_rank_pathological_prune_absent_keeps_existing_output():
+    """Test rank output is unchanged unless pathological pruning is enabled."""
+    runner = CliRunner()
+    packed_res = "".join(
+        [
+            _single_atom_res("Si-pathological", -10.0),
+            _single_atom_res("Si-low", -5.2),
+            _single_atom_res("Si-a", -5.1),
+        ]
+    )
+
+    result = runner.invoke(cli, ["rank"], input=packed_res)
+
+    assert result.exit_code == 0
+    assert "Si-pathological" in result.stdout
+    assert "Pathological prune" not in result.stderr
+
+
+def test_rank_maxwell_collapses_duplicate_compositions():
+    """Test -m emits one row per reduced composition."""
+    runner = CliRunner()
+    packed_res = (
+        "TITL Si-001 0.0 10.0 -5.000000 0 0 1 (P1) n - 1\n"
+        "CELL 1.0  3.0 3.0 3.0 90.0 90.0 90.0\n"
+        "LATT -1\n"
+        "SFAC Si\n"
+        "Si     1  0.0  0.0  0.0  1.0\n"
+        "END\n"
+        "TITL O2-001 0.0 20.0 -4.000000 0 0 2 (P1) n - 1\n"
+        "CELL 1.0  3.0 3.0 3.0 90.0 90.0 90.0\n"
+        "LATT -1\n"
+        "SFAC O\n"
+        "O      1  0.0  0.0  0.0  1.0\n"
+        "O      1  0.5  0.5  0.5  1.0\n"
+        "END\n"
+        "TITL SiO-001 0.0 20.0 -20.000000 0 0 2 (P1) n - 1\n"
+        "CELL 1.0  3.0 3.0 3.0 90.0 90.0 90.0\n"
+        "LATT -1\n"
+        "SFAC Si O\n"
+        "Si     1  0.0  0.0  0.0  1.0\n"
+        "O      2  0.5  0.5  0.5  1.0\n"
+        "END\n"
+        "TITL SiO-002 0.0 21.0 -18.000000 0 0 2 (P1) n - 3\n"
+        "CELL 1.0  3.1 3.1 3.1 90.0 90.0 90.0\n"
+        "LATT -1\n"
+        "SFAC Si O\n"
+        "Si     1  0.0  0.0  0.0  1.0\n"
+        "O      2  0.5  0.5  0.5  1.0\n"
+        "END\n"
+    )
+    result = runner.invoke(cli, ["rank", "-m", "-el", "Si,O"], input=packed_res)
+    assert result.exit_code == 0
+    lines = [line for line in result.output.splitlines() if "SiO-001" in line]
+    assert len(lines) == 1
+    assert lines[0].split()[-1] == "4"
+    assert "SiO-002" not in result.output
 
 
 def test_rank_delta_e_filter():
@@ -438,6 +668,7 @@ def test_run_help():
     assert result.exit_code == 0
     assert "search" in result.output
     assert "relax" in result.output
+    assert "crud" in result.output
 
 
 def test_run_search_help():
@@ -455,6 +686,443 @@ def test_run_search_help():
     assert "--oxidation-state" in result.output
     assert "--formula-elements" not in result.output
     assert "--prune" in result.output
+
+
+def test_run_crud_help():
+    """Test 'run crud --help'."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "crud", "--help"])
+    assert result.exit_code == 0
+    assert "--workdir" in result.output
+    assert "--nostop" in result.output
+    assert "--cycle" in result.output
+    assert "--pack" not in result.output
+
+
+def test_crud_claim_is_single_owner(tmp_path):
+    """A hopper job can be checked out only once."""
+    hopper = tmp_path / "hopper"
+    hopper.mkdir()
+    (hopper / "Si-001.res").write_text("res")
+
+    first = cmd_run._claim_crud_job(tmp_path, 1000)
+    second = cmd_run._claim_crud_job(tmp_path, 1000)
+
+    assert first == tmp_path / "Si-001.res"
+    assert second is None
+    assert (tmp_path / "Si-001.res").exists()
+    assert not (hopper / "Si-001.res").exists()
+
+
+def test_crud_res_to_cell_preserves_root_settings(tmp_path):
+    """CRUD cell reconstruction replaces geometry and keeps root settings."""
+    root_cell = tmp_path / "Si.cell"
+    root_cell.write_text(
+        "%BLOCK LATTICE_CART\n"
+        "1 0 0\n0 1 0\n0 0 1\n"
+        "%ENDBLOCK LATTICE_CART\n"
+        "%BLOCK POSITIONS_FRAC\n"
+        "Si 0 0 0\n"
+        "%ENDBLOCK POSITIONS_FRAC\n"
+        "kpoints_mp_grid : 2 2 2\n"
+    )
+    res = tmp_path / "Si-001.res"
+    res.write_text(
+        "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+        "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+        "LATT -1\n"
+        "SFAC Si\n"
+        "Si 1 0.5000000000000 0.5000000000000 0.5000000000000 1.0\n"
+        "END\n"
+    )
+
+    lines = cmd_run._res_to_cell_lines(res, root_cell)
+    text = "\n".join(lines)
+
+    assert "%BLOCK LATTICE_CART" in text
+    assert "5.0000000000 0.0000000000 0.0000000000" in text
+    assert "Si  2.5000000000 2.5000000000 2.5000000000" in text
+    assert "kpoints_mp_grid : 2 2 2" in text
+    assert text.count("%BLOCK LATTICE_CART") == 1
+    assert "POSITIONS_FRAC" not in text
+
+
+def test_crud_prepare_inputs_preserves_res_spins(tmp_path, monkeypatch):
+    """Magnetic RES inputs keep SPIN tags and update CASTEP total spin."""
+    monkeypatch.chdir(tmp_path)
+    Path("Fe.cell").write_text(
+        "%BLOCK LATTICE_CART\n"
+        "1 0 0\n0 1 0\n0 0 1\n"
+        "%ENDBLOCK LATTICE_CART\n"
+        "%BLOCK POSITIONS_ABS\n"
+        "Fe 0 0 0\n"
+        "Fe 0.5 0.5 0.5\n"
+        "%ENDBLOCK POSITIONS_ABS\n"
+    )
+    Path("Fe.param").write_text("task : geometryoptimization\nspin : 0\n")
+    Path("Fe-001.res").write_text(
+        "TITL Fe-001 0.000 125.000 -1.0000 2.00 2.00 2 (P1) n - 1\n"
+        "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+        "LATT -1\n"
+        "SFAC Fe\n"
+        "Fe 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0 1.5\n"
+        "Fe 1 0.5000000000000 0.5000000000000 0.5000000000000 1.0 0.5\n"
+        "END\n"
+    )
+
+    cmd_run._prepare_crud_inputs("Fe-001", "castep")
+
+    cell_text = Path("Fe-001.cell").read_text()
+    param_text = Path("Fe-001.param").read_text()
+    assert "SPIN=1.500" in cell_text
+    assert "SPIN=0.500" in cell_text
+    assert "spin :      2.000" in param_text
+    assert "spin : 0" not in param_text
+
+
+def test_crud_prepare_inputs_does_not_treat_forces_as_spins(tmp_path, monkeypatch):
+    """Force-only RES columns must not become CASTEP SPIN tags."""
+    monkeypatch.chdir(tmp_path)
+    Path("Si.cell").write_text(
+        "%BLOCK LATTICE_CART\n"
+        "1 0 0\n0 1 0\n0 0 1\n"
+        "%ENDBLOCK LATTICE_CART\n"
+    )
+    Path("Si.param").write_text("task : geometryoptimization\n")
+    Path("Si-001.res").write_text(
+        "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 2 (P1) n - 1\n"
+        "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+        "LATT -1\n"
+        "SFAC Si\n"
+        "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0 0.10 -0.20 0.30\n"
+        "Si 1 0.5000000000000 0.5000000000000 0.5000000000000 1.0 -0.10 0.20 -0.30\n"
+        "END\n"
+    )
+
+    cmd_run._prepare_crud_inputs("Si-001", "castep")
+
+    cell_text = Path("Si-001.cell").read_text()
+    param_text = Path("Si-001.param").read_text()
+    assert "SPIN=" not in cell_text
+    assert "spin :" not in param_text
+
+
+def test_run_crud_processes_claimed_ml_job():
+    """CRUD ML checks out and runs a RES job without candidate cell files."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("hopper/Si-001.res").write_text(
+            "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "crud",
+                        "--code",
+                        "ml",
+                        "--calculator",
+                        "ase:dummy:model",
+                        "--keep",
+                    ],
+                )
+                assert result.exit_code == 0
+                assert collect.call_count == 1
+                assert Path("good_castep/Si-001.res").exists()
+                assert not Path("good_castep/Si-001.cell").exists()
+                assert not Path("hopper/Si-001.res").exists()
+                fake_runner.run.assert_called_once()
+                assert isinstance(fake_runner.run.call_args.args[1], Atoms)
+
+
+def test_run_crud_ml_rejects_plain_torchsim_model():
+    """CRUD ML requires explicit ASE fallback instead of misrouting torch-sim specs."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        Path("hopper/Si-001.res").write_text(
+            "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "crud",
+                "--code",
+                "ml",
+                "--calculator",
+                "mace:medium",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "supports only explicit ASE fallback" in result.output
+
+
+def test_ml_model_backend_resolution():
+    """ML model specs default to torch-sim and use ase: for ASE fallback."""
+    assert cmd_run._is_torchsim_model("mace:medium")
+    assert not cmd_run._is_torchsim_model("ase:mace:medium")
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:mace:medium")
+        == "mace.calculators:MACECalculator@medium"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:my.module:Calc@model")
+        == "my.module:Calc@model"
+    )
+
+
+def test_plain_ml_model_fails_clearly_without_torchsim():
+    """Plain ML model specs do not fall back to ASE if torch-sim is missing."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            result = runner.invoke(
+                cli,
+                [
+                    "run",
+                    "relax",
+                    "--cell",
+                    "*.res",
+                    "--code",
+                    "ml",
+                    "--calculator",
+                    "mace:medium",
+                ],
+            )
+
+        assert result.exit_code != 0
+        assert "torch-sim is required" in result.output
+
+
+def test_run_relax_accepts_res_input_for_ase_ml():
+    """Explicit ase: model uses ASE fallback with in-memory RES parsing."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "relax",
+                            "--cell",
+                            "*.res",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "ase:mace:medium",
+                            "--keep",
+                        ],
+                    )
+
+        assert result.exit_code == 0
+        assert not Path("LiTaOCl-001.cell").exists()
+        fake_runner.run.assert_called_once()
+        assert fake_runner.run.call_args.args[0] == "LiTaOCl-001"
+        assert isinstance(fake_runner.run.call_args.args[1], Atoms)
+        assert fake_runner.run.call_args.args[1].get_chemical_formula() == "Si"
+        collect.assert_called_once()
+
+
+def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
+    """TorchSim RES relaxation passes device and avoids writing converted cells."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        captured = {}
+
+        def fake_batch(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return {"LiTaOCl-001": 0}
+
+        fake_torchsim = MagicMock()
+        fake_torchsim.relax_batch.side_effect = fake_batch
+        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+            with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+                with patch(
+                    "airsspy.jf.ml_runners.TorchSimRunner",
+                    return_value=fake_torchsim,
+                ):
+                    with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                        result = runner.invoke(
+                            cli,
+                            [
+                                "run",
+                                "relax",
+                                "--cell",
+                                "*.res",
+                                "--code",
+                                "ml",
+                                "--calculator",
+                                "mace:medium-mpa-0",
+                                "--device",
+                                "cuda",
+                                "--keep",
+                            ],
+                        )
+
+        assert result.exit_code == 0
+        assert not Path("LiTaOCl-001.cell").exists()
+        assert fake_torchsim.relax_batch.call_count == 1
+        assert captured["args"][0] == ["LiTaOCl-001"]
+        assert isinstance(captured["args"][1][0], Atoms)
+        assert captured["args"][1][0].get_chemical_formula() == "Si"
+        collect.assert_called_once()
+
+
+def test_run_relax_torchsim_chunks_and_skips_packed_res():
+    """TorchSim globbed RES relaxation skips packed files and batches candidates."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        res = (
+            "TITL {label} 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        for label in ("LiTaOCl-001", "LiTaOCl-002", "LiTaOCl-003"):
+            Path(f"{label}.res").write_text(res.format(label=label))
+        Path("packed.res").write_text(
+            res.format(label="packed-001") + res.format(label="packed-002")
+        )
+        fake_runner = MagicMock()
+        calls = []
+
+        def fake_batch(names, structures, **kwargs):
+            calls.append((names, structures, kwargs))
+            return {name: 0 for name in names}
+
+        fake_torchsim = MagicMock()
+        fake_torchsim.relax_batch.side_effect = fake_batch
+        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+            with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+                with patch(
+                    "airsspy.jf.ml_runners.TorchSimRunner",
+                    return_value=fake_torchsim,
+                ):
+                    with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                        result = runner.invoke(
+                            cli,
+                            [
+                                "run",
+                                "relax",
+                                "--cell",
+                                "*.res",
+                                "--code",
+                                "ml",
+                                "--calculator",
+                                "mace:medium-mpa-0",
+                                "--device",
+                                "cuda",
+                                "--batch-size",
+                                "2",
+                            ],
+                        )
+
+        assert result.exit_code == 0
+        assert [call[0] for call in calls] == [
+            ["LiTaOCl-001", "LiTaOCl-002"],
+            ["LiTaOCl-003"],
+        ]
+        assert all(isinstance(struct, Atoms) for call in calls for struct in call[1])
+        assert fake_torchsim.relax_batch.call_count == 2
+        assert collect.call_count == 3
+        assert not Path("packed.cell").exists()
+
+
+def test_run_relax_accepts_res_input_for_castep():
+    """Relax command converts RES inputs and loads param files for CASTEP."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl.param").write_text("task : geometryoptimization\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.2500000000000 0.2500000000000 0.2500000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "relax",
+                            "--cell",
+                            "*.res",
+                            "--seed",
+                            "IGNORED",
+                            "--code",
+                            "castep",
+                            "--keep",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        assert Path("LiTaOCl-001.cell").exists()
+        cell_text = Path("LiTaOCl-001.cell").read_text()
+        assert "Si  1.2500000000 1.2500000000 1.2500000000" in cell_text
+        fake_runner.run.assert_called_once()
+        assert fake_runner.run.call_args.args[0] == "LiTaOCl-001"
+        assert "%BLOCK LATTICE_CART" in fake_runner.run.call_args.args[1]
+        collect.assert_called_once()
 
 
 def test_run_search_formula_diagnose():

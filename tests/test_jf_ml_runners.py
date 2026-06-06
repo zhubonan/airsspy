@@ -1,5 +1,7 @@
 """Tests for ML interatomic potential runners."""
 
+import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -342,6 +344,118 @@ class TestMlRelaxRunner:
                 assert atoms.info["relax_steps"] == 7
         finally:
             os.chdir(orig)
+
+
+def test_torchsim_relax_converts_pressure_gpa_to_ev_ang3(monkeypatch, tmp_path):
+    """TorchSim batch relax keeps CLI pressure in GPa at the wrapper boundary."""
+    from airsspy.jf import ml_runners
+    from airsspy.jf.ml_runners import EV_PER_ANG3_TO_GPA
+
+    captured = {}
+
+    class FakeDevice:
+        def __init__(self, value):
+            self.type = value
+
+        def __str__(self):
+            return self.type
+
+    fake_torch = SimpleNamespace(
+        device=FakeDevice,
+        cuda=SimpleNamespace(is_available=lambda: False),
+        float32="float32",
+        float64="float64",
+    )
+
+    fake_ts = SimpleNamespace(
+        Optimizer=SimpleNamespace(
+            fire="fire",
+            lbfgs="lbfgs",
+            bfgs="bfgs",
+            gradient_descent="gradient_descent",
+        ),
+        CellFilter=SimpleNamespace(frechet="frechet", unit="unit"),
+        io=SimpleNamespace(
+            atoms_to_state=lambda atoms, device, dtype: {"atoms": atoms},
+            state_to_atoms=lambda state: state["atoms"],
+        ),
+        optimize=lambda **kwargs: captured.setdefault("kwargs", kwargs)["system"],
+    )
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torch_sim", fake_ts)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ml_runners, "_load_torchsim_model", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(
+        ml_runners,
+        "_cell_to_atoms",
+        lambda path: Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True),
+    )
+    monkeypatch.setattr(ml_runners, "ase_write", lambda *a, **k: None)
+
+    rc = ml_runners._torchsim_relax_batch(
+        "mace:medium-mpa-0",
+        ["Si-001"],
+        ["cell"],
+        max_steps=1,
+        scalar_pressure=10.0,
+    )
+
+    assert rc == {"Si-001": 0}
+    assert captured["kwargs"]["init_kwargs"]["scalar_pressure"] == pytest.approx(
+        10.0 / EV_PER_ANG3_TO_GPA
+    )
+
+
+def test_torchsim_relax_atoms_input_skips_cell_parser(monkeypatch, tmp_path):
+    """TorchSim batch relax accepts Atoms without temporary .cell parsing."""
+    from airsspy.jf import ml_runners
+
+    class FakeDevice:
+        def __init__(self, value):
+            self.type = value
+
+    fake_torch = SimpleNamespace(
+        device=FakeDevice,
+        cuda=SimpleNamespace(is_available=lambda: False),
+        float32="float32",
+        float64="float64",
+    )
+    fake_ts = SimpleNamespace(
+        Optimizer=SimpleNamespace(
+            fire="fire",
+            lbfgs="lbfgs",
+            bfgs="bfgs",
+            gradient_descent="gradient_descent",
+        ),
+        CellFilter=SimpleNamespace(frechet="frechet", unit="unit"),
+        io=SimpleNamespace(
+            atoms_to_state=lambda atoms, device, dtype: {"atoms": atoms},
+            state_to_atoms=lambda state: state["atoms"],
+        ),
+        optimize=lambda **kwargs: kwargs["system"],
+    )
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torch_sim", fake_ts)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ml_runners, "_load_torchsim_model", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(
+        ml_runners,
+        "_cell_content_to_atoms",
+        lambda content: (_ for _ in ()).throw(AssertionError("cell parser called")),
+    )
+    monkeypatch.setattr(ml_runners, "ase_write", lambda *a, **k: None)
+
+    atoms = Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True)
+    rc = ml_runners._torchsim_relax_batch(
+        "mace:medium-mpa-0",
+        ["Si-001"],
+        [atoms],
+        max_steps=1,
+    )
+
+    assert rc == {"Si-001": 0}
 
 
 # ---------------------------------------------------------------------------

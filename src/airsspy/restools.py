@@ -227,7 +227,7 @@ def _read_res(lines: list[str]) -> dict[str, Any]:
         if tokens[0] == "TITL":
             title_items = parse_titl(line)
 
-        elif tokens[0] == "CELL" and len(tokens) == 8:
+        elif tokens[0] == "CELL" and len(tokens) >= 8:
             abc = [float(tok) for tok in tokens[2:5]]
             ang = [float(tok) for tok in tokens[5:8]]
 
@@ -679,6 +679,15 @@ class RESFile:
         lines = _get_res_lines(titl, species, frac_pos, cellpar, self.rem, self.spins)
         lines.append("")  # Add trailing newline
         return lines
+
+    def to_file(self, fname: Union[str, os.PathLike]) -> None:
+        """Write this RES file to disk."""
+        lines = [line.rstrip("\n") for line in self.to_res_lines()]
+        content = "\n".join(lines)
+        if content and not content.endswith("\n"):
+            content += "\n"
+        with open(fname, "w") as fhandle:
+            fhandle.write(content)
 
     def get_minsep(self, string: bool = False) -> Union[dict[str, float], str]:
         """Return species-wise minimum separations"""

@@ -9,3 +9,4 @@ docs/apidocs
 docs/jupyter_execute
 uv.lock
 CLAUDE.md
+tmp/
