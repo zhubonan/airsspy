@@ -249,6 +249,56 @@ class TestParseAbacusLogConvergence:
 # --- parse_abacus_stru tests ---
 
 
+class TestCellToStru:
+    def test_positions_abs_writes_cartesian_positions(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_CART
+5.0 0.0 0.0
+0.0 5.0 0.0
+0.0 0.0 5.0
+%ENDBLOCK LATTICE_CART
+%BLOCK POSITIONS_ABS
+Si 2.5 0.0 0.0
+%ENDBLOCK POSITIONS_ABS
+%BLOCK SPECIES_POT
+Si Si.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        stru = cell_to_stru(cell)
+
+        assert "Si 28.086 Si.UPF" in stru
+        assert "ATOMIC_POSITIONS\nCartesian" in stru
+        assert "2.5000000000 0.0000000000 0.0000000000 1 1 1" in stru
+
+    def test_positions_frac_takes_precedence_over_abs(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_CART
+5.0 0.0 0.0
+0.0 5.0 0.0
+0.0 0.0 5.0
+%ENDBLOCK LATTICE_CART
+%BLOCK POSITIONS_ABS
+Si 2.5 0.0 0.0
+%ENDBLOCK POSITIONS_ABS
+%BLOCK POSITIONS_FRAC
+Si 0.25 0.0 0.0
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Si Si.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        stru = cell_to_stru(cell)
+
+        assert "ATOMIC_POSITIONS\nDirect" in stru
+        assert "0.2500000000 0.0000000000 0.0000000000 1 1 1" in stru
+
+
 class TestParseAbacusStru:
     def test_stru_direct(self, tmp_path):
         from airsspy.abacustools import parse_abacus_stru

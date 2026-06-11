@@ -229,13 +229,18 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
             max_iter = 0
             with open(struct_name + ".castep") as fhandle:
                 for line in fhandle:
-                    match = re.search(r"Geometry optimization ([a-z]+)", line)
+                    match = re.search(
+                        r"Geometry optimization ([a-z]+)", line, re.IGNORECASE
+                    )
                     if match is not None:
-                        if match.group(1) == "completed":
+                        status = match.group(1).lower()
+                        if status == "completed":
                             result = True
-                        elif match.group(1) == "failed":
+                        elif status == "failed":
                             result = False
-                    match = re.search(r"Finished iteration +(\d+)", line)
+                    match = re.search(
+                        r"Finished iteration +(\d+)", line, re.IGNORECASE
+                    )
                     if match is not None:
                         max_iter = int(match.group(1))
 

@@ -458,6 +458,72 @@ def test_torchsim_relax_atoms_input_skips_cell_parser(monkeypatch, tmp_path):
     assert rc == {"Si-001": 0}
 
 
+def test_torchsim_static_batch_preserves_per_structure_forces(monkeypatch, tmp_path):
+    """TorchSim static returns per-system forces, not one concatenated force array."""
+    from airsspy.jf import ml_runners
+
+    class FakeDevice:
+        def __init__(self, value):
+            self.type = value
+
+    fake_torch = SimpleNamespace(
+        device=FakeDevice,
+        cuda=SimpleNamespace(is_available=lambda: False),
+        float32="float32",
+        float64="float64",
+    )
+    atoms = [
+        Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True),
+        Atoms("Si2", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True),
+    ]
+    props_list = [
+        {
+            "potential_energy": np.array([1.0]),
+            "forces": np.array([[[1.0, 2.0, 3.0]]]),
+            "stress": np.array([np.eye(3)]),
+        },
+        {
+            "potential_energy": np.array([2.0]),
+            "forces": np.array([[[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]),
+            "stress": np.array([np.eye(3) * 2.0]),
+        },
+    ]
+    written = {}
+    fake_ts = SimpleNamespace(
+        io=SimpleNamespace(
+            atoms_to_state=lambda atoms_in, device, dtype: {"atoms": atoms_in},
+            state_to_atoms=lambda state: state["atoms"],
+        ),
+        static=lambda system, model: props_list,
+    )
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torch_sim", fake_ts)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ml_runners, "_load_torchsim_model", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(
+        ml_runners,
+        "ase_write",
+        lambda filename, atoms_obj, format: written.setdefault(filename, atoms_obj),
+    )
+
+    rc = ml_runners._torchsim_static_batch(
+        "mace:medium-mpa-0",
+        ["Si-001", "Si2-001"],
+        atoms,
+    )
+
+    assert rc == {"Si-001": 0, "Si2-001": 0}
+    assert np.allclose(
+        written["Si2-001.extxyz"].calc.results["forces"],
+        [[4.0, 5.0, 6.0], [7.0, 8.0, 9.0]],
+    )
+    assert np.allclose(
+        written["Si2-001.extxyz"].calc.results["stress"],
+        np.eye(3) * 2.0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # compose_ml_task_doc tests
 # ---------------------------------------------------------------------------

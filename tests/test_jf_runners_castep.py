@@ -302,6 +302,44 @@ def test_castep_runner_max_iterations(mock_run, mock_cellinput, tmp_path, monkey
 
 @patch("castepinput.inputs.CellInput")
 @patch("airsspy.jf.runners.subprocess.run")
+def test_castep_runner_counts_lowercase_lbfgs_iterations(
+    mock_run, mock_cellinput, tmp_path, monkeypatch
+):
+    """Lowercase CASTEP LBFGS iteration lines should advance max_iterations."""
+    from castepinput.inputs import ParamInput
+
+    from airsspy.jf.runners import AirssCastepRelaxRunner
+
+    monkeypatch.chdir(tmp_path)
+    mock_run.return_value = MagicMock(returncode=0)
+    mock_ci = MagicMock()
+    mock_ci.get_cell.return_value = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    mock_ci.get_positions.return_value = (["Si"], [[0, 0, 0]], [None])
+    mock_cellinput.from_file.return_value = mock_ci
+
+    def write_castep_side_effect(*args, **kwargs):
+        with open("Si-001.castep", "w") as f:
+            f.write(
+                "LBFGS: finished iteration     0 with enthalpy= -1.0E+000 eV\n"
+                "LBFGS: finished iteration     1 with enthalpy= -2.0E+000 eV\n"
+                "LBFGS: finished iteration     2 with enthalpy= -3.0E+000 eV\n"
+                "LBFGS: WARNING - Geometry optimization failed to converge "
+                "after          2 steps\n"
+            )
+        return MagicMock(returncode=0)
+
+    mock_run.side_effect = write_castep_side_effect
+
+    param = ParamInput()
+    runner = AirssCastepRelaxRunner(executable="castep", max_iterations=6)
+    result = runner.run("Si-001", "cell content", param)
+
+    assert result == 1
+    assert mock_run.call_count == 3
+
+
+@patch("castepinput.inputs.CellInput")
+@patch("airsspy.jf.runners.subprocess.run")
 def test_castep_runner_max_fails(mock_run, mock_cellinput, tmp_path, monkeypatch):
     """Test runner returns 1 after too many consecutive failures."""
     from castepinput.inputs import ParamInput

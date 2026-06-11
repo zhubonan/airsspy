@@ -696,6 +696,9 @@ def test_run_crud_help():
     assert "--workdir" in result.output
     assert "--nostop" in result.output
     assert "--cycle" in result.output
+    assert "--singlepoint" in result.output
+    assert "--device" in result.output
+    assert "--batch-size" in result.output
     assert "--pack" not in result.output
 
 
@@ -846,11 +849,118 @@ def test_run_crud_processes_claimed_ml_job():
                 assert isinstance(fake_runner.run.call_args.args[1], Atoms)
 
 
-def test_run_crud_ml_rejects_plain_torchsim_model():
-    """CRUD ML requires explicit ASE fallback instead of misrouting torch-sim specs."""
+def test_run_crud_ml_torchsim_batches_claimed_jobs():
+    """CRUD ML supports the same torch-sim model path as run relax."""
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path("hopper").mkdir()
+        res = (
+            "TITL {label} 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        for label in ("Si-001", "Si-002"):
+            Path(f"hopper/{label}.res").write_text(res.format(label=label))
+        fake_torchsim = MagicMock()
+        captured = {}
+
+        def fake_relax_batch(names, structures, **kwargs):
+            captured["names"] = names
+            captured["structures"] = structures
+            captured["kwargs"] = kwargs
+            for name in names:
+                Path(f"{name}.extxyz").write_text("")
+            return dict.fromkeys(names, 0)
+
+        fake_torchsim.relax_batch.side_effect = fake_relax_batch
+        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+            with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
+                with patch(
+                    "airsspy.jf.ml_runners.TorchSimRunner",
+                    return_value=fake_torchsim,
+                ) as torchsim_cls:
+                    with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                        result = runner.invoke(
+                            cli,
+                            [
+                                "run",
+                                "crud",
+                                "--code",
+                                "ml",
+                                "--calculator",
+                                "mace:medium",
+                                "--device",
+                                "cuda",
+                                "--batch-size",
+                                "2",
+                            ],
+                        )
+
+        assert result.exit_code == 0
+        torchsim_cls.assert_called_once_with("mace:medium", device="cuda")
+        assert set(captured["names"]) == {"Si-001", "Si-002"}
+        assert all(isinstance(struct, Atoms) for struct in captured["structures"])
+        assert captured["kwargs"]["optimizer"] == "fire"
+        assert collect.call_count == 2
+        assert Path("good_castep/Si-001.res").exists()
+        assert Path("good_castep/Si-002.res").exists()
+
+
+def test_run_crud_ml_torchsim_singlepoint_uses_static_batch():
+    """CRUD ML single-point uses torch-sim static batching."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        res = (
+            "TITL {label} 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        for label in ("Si-001", "Si-002"):
+            Path(f"hopper/{label}.res").write_text(res.format(label=label))
+        fake_torchsim = MagicMock()
+        fake_torchsim.static_batch.return_value = {"Si-001": 0, "Si-002": 0}
+        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+            with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
+                with patch(
+                    "airsspy.jf.ml_runners.TorchSimRunner",
+                    return_value=fake_torchsim,
+                ):
+                    with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                        result = runner.invoke(
+                            cli,
+                            [
+                                "run",
+                                "crud",
+                                "--code",
+                                "ml",
+                                "--calculator",
+                                "mace:medium",
+                                "--singlepoint",
+                                "--batch-size",
+                                "2",
+                            ],
+                        )
+
+        assert result.exit_code == 0
+        fake_torchsim.static_batch.assert_called_once()
+        assert fake_torchsim.relax_batch.call_count == 0
+        assert collect.call_count == 2
+
+
+def test_run_crud_singlepoint_uses_sp_runner():
+    """CRUD can run a single-point calculation instead of full relaxation."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("Si.param").write_text("task : geometryoptimization\n")
         Path("hopper/Si-001.res").write_text(
             "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
             "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
@@ -859,20 +969,27 @@ def test_run_crud_ml_rejects_plain_torchsim_model():
             "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
             "END\n"
         )
-        result = runner.invoke(
-            cli,
-            [
-                "run",
-                "crud",
-                "--code",
-                "ml",
-                "--calculator",
-                "mace:medium",
-            ],
-        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "crud",
+                        "--code",
+                        "castep",
+                        "--singlepoint",
+                        "--keep",
+                    ],
+                )
 
-        assert result.exit_code != 0
-        assert "supports only explicit ASE fallback" in result.output
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        paraminput = fake_runner.run.call_args.args[2]
+        assert paraminput["task"] == "geometryoptimization"
+        collect.assert_called_once()
 
 
 def test_ml_model_backend_resolution():
@@ -1122,6 +1239,42 @@ def test_run_relax_accepts_res_input_for_castep():
         fake_runner.run.assert_called_once()
         assert fake_runner.run.call_args.args[0] == "LiTaOCl-001"
         assert "%BLOCK LATTICE_CART" in fake_runner.run.call_args.args[1]
+        collect.assert_called_once()
+
+
+def test_run_relax_singlepoint_uses_sp_runner():
+    """Relax command can dispatch existing structures through SP runners."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si-001.cell").write_text(
+            "%BLOCK LATTICE_CART\n"
+            "1 0 0\n0 1 0\n0 0 1\n"
+            "%ENDBLOCK LATTICE_CART\n"
+            "%BLOCK POSITIONS_ABS\n"
+            "Si 0 0 0\n"
+            "%ENDBLOCK POSITIONS_ABS\n"
+        )
+        Path("Si-001.param").write_text("task : geometryoptimization\n")
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "relax",
+                        "--cell",
+                        "*.cell",
+                        "--code",
+                        "castep",
+                        "--singlepoint",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        assert fake_runner.run.call_args.args[0] == "Si-001"
         collect.assert_called_once()
 
 

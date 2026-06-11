@@ -30,6 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Union
 
+import numpy as np
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import read as ase_read
@@ -127,6 +128,42 @@ def _get_pressure_gpa(atoms) -> float:
         return pressure_ev_ang3 * EV_PER_ANG3_TO_GPA
     except Exception:
         return 0.0
+
+
+def _normalize_static_forces(forces):
+    """Return forces for one static-batch structure."""
+    if forces is None:
+        return None
+    if getattr(forces, "ndim", 0) == 3 and forces.shape[0] == 1:
+        return forces[0]
+    return forces
+
+
+def _normalize_static_stress(stress, index: int):
+    """Return stress for one static-batch structure."""
+    if stress is None:
+        return None
+    if getattr(stress, "ndim", 0) == 3:
+        if stress.shape[0] == 1:
+            return stress[0]
+        return stress[index]
+    return stress
+
+
+def _as_numpy_array(value):
+    """Convert torch/array-like values from torch-sim to numpy."""
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def _static_prop(props: dict, *names: str):
+    """Return the first available torch-sim static property."""
+    for name in names:
+        if name in props:
+            return props[name]
+    names_text = ", ".join(names)
+    raise KeyError(f"torch-sim static output missing expected key(s): {names_text}")
 
 
 class AirssMlSinglePointRunner:
@@ -559,28 +596,18 @@ class TorchSimRunner:
         props_list = ts.static(system=state, model=self.model)
 
         final_atoms_list = ts.io.state_to_atoms(state)
-        force_offset = 0
         for index, (name, atoms) in enumerate(zip(struct_names, final_atoms_list)):
-            natoms = len(atoms)
             props = props_list[index]
-            energy = float(props["energy"].reshape(-1)[0])
-            forces = (
-                props["forces"].detach().cpu().numpy()
-                if "forces" in props
-                else None
-            )
-            stress = (
-                props["stress"].detach().cpu().numpy()
-                if "stress" in props
-                else None
-            )
+            energy_prop = _static_prop(props, "energy", "potential_energy")
+            energy = float(_as_numpy_array(energy_prop).reshape(-1)[0])
+            forces = _as_numpy_array(props["forces"]) if "forces" in props else None
+            stress = _as_numpy_array(props["stress"]) if "stress" in props else None
 
             calc_kwargs: dict = {"energy": energy}
             if forces is not None:
-                calc_kwargs["forces"] = forces[force_offset : force_offset + natoms]
-            if stress is not None and index < len(stress):
-                calc_kwargs["stress"] = stress[index]
-            force_offset += natoms
+                calc_kwargs["forces"] = _normalize_static_forces(forces)
+            if stress is not None:
+                calc_kwargs["stress"] = _normalize_static_stress(stress, index)
 
             atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
             ase_write(name + ".extxyz", atoms, format="extxyz")

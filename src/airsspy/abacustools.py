@@ -147,23 +147,33 @@ def cell_to_stru(cell_content: str) -> str:
     if len(lattice) != 3:
         raise ValueError(f"Expected 3 lattice vectors, got {len(lattice)}")
 
-    # Parse POSITIONS_FRAC
-    elements = []
-    positions = []
-    in_block = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.upper().startswith("%BLOCK POSITIONS_FRAC"):
-            in_block = True
-            continue
-        if stripped.upper().startswith("%ENDBLOCK"):
-            if in_block:
-                break
-            continue
-        if in_block and stripped:
-            parts = stripped.split()
-            elements.append(parts[0])
-            positions.append([float(x) for x in parts[1:4]])
+    def _parse_positions_block(block_name):
+        parsed_elements = []
+        parsed_positions = []
+        in_positions = False
+        for line in lines:
+            stripped = line.strip()
+            upper = stripped.upper()
+            if upper.startswith(f"%BLOCK {block_name}"):
+                in_positions = True
+                continue
+            if upper.startswith("%ENDBLOCK"):
+                if in_positions:
+                    break
+                continue
+            if in_positions and stripped:
+                parts = stripped.split()
+                parsed_elements.append(parts[0])
+                parsed_positions.append([float(x) for x in parts[1:4]])
+        return parsed_elements, parsed_positions
+
+    # Parse positions. CRUD rebuilds claimed structures as POSITIONS_ABS, while
+    # hand-written ABACUS seeds commonly use POSITIONS_FRAC.
+    elements, positions = _parse_positions_block("POSITIONS_FRAC")
+    position_mode = "Direct"
+    if not elements:
+        elements, positions = _parse_positions_block("POSITIONS_ABS")
+        position_mode = "Cartesian"
 
     # Parse SPECIES_POT — pairs of (orbital, pseudopotential) per element
     # Format (LCAO): Element orbital_file / Element pseudopotential_file
@@ -223,13 +233,13 @@ def cell_to_stru(cell_content: str) -> str:
     out_lines.append("")
 
     out_lines.append("ATOMIC_POSITIONS")
-    out_lines.append("Direct")
+    out_lines.append(position_mode)
     for elem in unique_elements:
         out_lines.append(elem)
         out_lines.append("0.0")  # magnetization
         n = elements.count(elem)
         out_lines.append(str(n))
-        for i, (e, pos) in enumerate(zip(elements, positions)):
+        for e, pos in zip(elements, positions):
             if e == elem:
                 out_lines.append(f"{pos[0]:.10f} {pos[1]:.10f} {pos[2]:.10f} 1 1 1")
 

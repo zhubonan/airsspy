@@ -424,40 +424,159 @@ def _resolve_relax_param_file(
     raise click.ClickException(f"Param file not found; looked for {names}")
 
 
-def _run_crud_relax_one(
+def _run_local_structure_one(
+    input_path: Path,
+    cell_path: Path,
+    struct_name: str,
+    cell_content: str,
+    code: str,
+    runner,
+    param_suffix: str | None,
+    seed: str,
+    workdir: Path,
+    *,
+    singlepoint: bool = False,
+) -> int:
+    """Run one local relax/SP structure with an existing runner."""
+    if code == "castep":
+        from castepinput.inputs import ParamInput
+
+        param_file = _resolve_relax_param_file(
+            input_path, cell_path, seed, workdir, param_suffix
+        )
+        return runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
+    if code in ("gulp", "pp3"):
+        if singlepoint:
+            raise click.ClickException(f"Single-point not supported for code: {code}")
+        param_file = _resolve_relax_param_file(
+            input_path, cell_path, seed, workdir, param_suffix
+        )
+        return runner.run(
+            struct_name,
+            cell_content,
+            param_file.read_text(),
+            seed_name=_crud_root_from_seed(struct_name),
+        )
+    if code == "abacus":
+        param_file = _resolve_relax_param_file(
+            input_path, cell_path, seed, workdir, param_suffix
+        )
+        return runner.run(struct_name, cell_content, param_file.read_text())
+    if code == "ml":
+        ml_input = _prepare_ml_structure_input(input_path, cell_content)
+        return runner.run(struct_name, ml_input)
+    raise click.ClickException(f"Unknown code: {code}")
+
+
+def _run_crud_one(
     seed: str,
     code: str,
     runner,
     param_suffix: str | None,
-    calculator_spec: str | None,
+    workdir: Path,
+    *,
+    singlepoint: bool = False,
 ) -> int:
-    """Run one claimed CRUD relaxation with an existing local runner."""
-    if code == "castep":
-        from castepinput.inputs import ParamInput
+    """Run one claimed CRUD structure with an existing local runner."""
+    cell_path = Path(seed + ".cell")
+    input_path = Path(seed + ".res") if code == "ml" else cell_path
+    cell_content = "" if code == "ml" else cell_path.read_text()
+    return _run_local_structure_one(
+        input_path,
+        cell_path,
+        seed,
+        cell_content,
+        code,
+        runner,
+        param_suffix,
+        seed,
+        workdir,
+        singlepoint=singlepoint,
+    )
 
-        return runner.run(
-            seed,
-            Path(seed + ".cell").read_text(),
-            ParamInput.from_file(seed + param_suffix),
+
+def _create_task_runner(
+    code,
+    exe,
+    max_iterations,
+    cluster,
+    pressure,
+    mpinp=None,
+    calculator_spec=None,
+    calculator_kwargs=None,
+    optimizer="FIRE",
+    fmax=0.05,
+    *,
+    singlepoint: bool = False,
+):
+    """Create a relaxation or single-point runner for a local run command."""
+    if not singlepoint:
+        return _create_runner(
+            code,
+            exe,
+            max_iterations,
+            cluster,
+            pressure,
+            mpinp,
+            calculator_spec=calculator_spec,
+            calculator_kwargs=calculator_kwargs,
+            optimizer=optimizer,
+            fmax=fmax,
         )
-    if code in ("gulp", "pp3"):
-        root = _crud_root_from_seed(seed)
-        return runner.run(
-            seed,
-            Path(seed + ".cell").read_text(),
-            Path(seed + param_suffix).read_text(),
-            seed_name=root,
+    exe = _apply_mpinp(exe, code, mpinp)
+    return _create_sp_runner(
+        code,
+        exe,
+        calculator_spec=calculator_spec,
+        calculator_kwargs=calculator_kwargs,
+    )
+
+
+def _run_torchsim_batch(
+    torchsim_runner,
+    struct_names: list[str],
+    structures: list,
+    code: str,
+    calculator_spec: str,
+    *,
+    singlepoint: bool = False,
+    max_iterations: int = 200,
+    fmax: float = 0.05,
+    optimizer: str = "FIRE",
+    pressure: float = 0.0,
+) -> tuple[int, int, list[Path]]:
+    """Run and collect one torch-sim batch."""
+    if singlepoint:
+        batch_results = torchsim_runner.static_batch(struct_names, structures)
+    else:
+        batch_results = torchsim_runner.relax_batch(
+            struct_names,
+            structures,
+            max_steps=max_iterations,
+            force_tol=fmax,
+            optimizer=optimizer.lower(),
+            scalar_pressure=pressure,
         )
-    if code == "abacus":
-        return runner.run(
-            seed,
-            Path(seed + ".cell").read_text(),
-            Path(seed + param_suffix).read_text(),
-        )
-    if code == "ml":
-        del calculator_spec
-        return runner.run(seed, _read_res_as_atoms(Path(seed + ".res")))
-    raise click.ClickException(f"Unknown code: {code}")
+
+    n_done = 0
+    n_failed = 0
+    collected_res_files: list[Path] = []
+    for sname, rc in batch_results.items():
+        if rc == 0:
+            try:
+                _collect_result(sname, code, calculator_spec=calculator_spec)
+                collected_res_files.append(Path(f"{sname}.res"))
+                n_done += 1
+            except Exception:
+                logger.error(
+                    "TorchSim result collection failed: %s", sname, exc_info=True
+                )
+                n_failed += 1
+                _cleanup_ml_transients(sname)
+        else:
+            n_failed += 1
+            _cleanup_ml_transients(sname)
+    return n_done, n_failed, collected_res_files
 
 
 def _crud_artifacts(seed: str) -> list[Path]:
@@ -1198,6 +1317,12 @@ def run_search(
 @click.option("--cycle", is_flag=True, help="Retry electronic minimisation failures")
 @click.option("--keep", is_flag=True, help="Keep intermediate files")
 @click.option(
+    "--singlepoint",
+    "--single-point",
+    is_flag=True,
+    help="Run a single-point calculation instead of a full relaxation",
+)
+@click.option(
     "--pressure",
     default=0.0,
     type=float,
@@ -1249,6 +1374,18 @@ def run_search(
     show_default=True,
     help="Force convergence threshold (eV/Ang) for --code ml",
 )
+@click.option(
+    "--device",
+    default=None,
+    help="Torch device for torch-sim ML runs, e.g. cuda or cpu.",
+)
+@click.option(
+    "--batch-size",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Number of structures per torch-sim ML batch.",
+)
 def run_crud(
     code,
     exe,
@@ -1257,6 +1394,7 @@ def run_crud(
     nostop,
     cycle,
     keep,
+    singlepoint,
     pressure,
     max_iterations,
     cluster,
@@ -1265,15 +1403,17 @@ def run_crud(
     calculator_spec,
     optimizer,
     fmax,
+    device,
+    batch_size,
 ):
     """Consume hopper/*.res jobs locally, like crud.pl."""
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
-    if code == "ml" and _is_torchsim_model(calculator_spec):
-        raise click.ClickException(
-            "run crud --code ml currently supports only explicit ASE fallback "
-            "model specs such as ase:mace:medium"
-        )
+    if singlepoint and code not in ("castep", "abacus", "ml"):
+        raise click.ClickException(f"Single-point not supported for code: {code}")
+    use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
+    if use_torchsim:
+        _ensure_torchsim_available()
 
     workdir = Path(workdir).resolve()
     hopper = workdir / "hopper"
@@ -1285,17 +1425,21 @@ def run_crud(
         exe = EXE_DEFAULTS.get(code, "")
 
     sched = _get_scheduler_for_walltime()
-    runner = _create_runner(
-        code,
-        exe,
-        max_iterations,
-        cluster,
-        pressure,
-        mpinp,
-        calculator_spec=calculator_spec,
-        optimizer=optimizer,
-        fmax=fmax,
-    )
+    runner = None
+    if not use_torchsim:
+        runner = _create_task_runner(
+            code,
+            exe,
+            max_iterations,
+            cluster,
+            pressure,
+            mpinp,
+            calculator_spec=calculator_spec,
+            optimizer=optimizer,
+            fmax=fmax,
+            singlepoint=singlepoint,
+        )
+    torchsim_runner = None
 
     orig_dir = os.getcwd()
     os.chdir(workdir)
@@ -1306,6 +1450,24 @@ def run_crud(
         n_requeued = 0
 
         logger.info("Starting CRUD worker: workdir=%s, code=%s", workdir, code)
+
+        def handle_failure(seed: str) -> bool:
+            logger.error("CRUD failed: %s", seed, exc_info=True)
+            _emit_diagnostics(seed, code)
+            if not singlepoint and cycle and _crud_retryable_failure(seed):
+                if _requeue_crud_job(seed, workdir):
+                    _cleanup_crud_artifacts(seed)
+                    logger.info("CRUD requeued: %s", seed)
+                    return True
+            _move_crud_artifacts(seed, workdir / "bad_castep", keep=True)
+            return False
+
+        def finalize_success(seed: str, rc: int) -> None:
+            _move_crud_artifacts(seed, workdir / "good_castep", keep)
+            if rc == 0:
+                logger.info("CRUD OK: %s", seed)
+            else:
+                logger.info("CRUD not converged but collected: %s", seed)
 
         while True:
             if Path("STOP_CRUD").exists():
@@ -1325,46 +1487,98 @@ def run_crud(
                 continue
 
             seed = claimed.stem
-            collected = False
 
             try:
                 _, param_suffix = _prepare_crud_inputs(seed, code)
-                rc = _run_crud_relax_one(
+                if use_torchsim:
+                    claimed_seeds = [seed]
+                    while len(claimed_seeds) < batch_size:
+                        extra = _claim_crud_job(workdir, num)
+                        if extra is None:
+                            break
+                        extra_seed = extra.stem
+                        try:
+                            _prepare_crud_inputs(extra_seed, code)
+                        except Exception:
+                            if handle_failure(extra_seed):
+                                n_requeued += 1
+                            else:
+                                n_failed += 1
+                            continue
+                        claimed_seeds.append(extra_seed)
+
+                    if torchsim_runner is None:
+                        from airsspy.jf.ml_runners import TorchSimRunner
+
+                        torchsim_runner = TorchSimRunner(
+                            calculator_spec, device=device
+                        )
+                    structures = [
+                        _read_res_as_atoms(Path(sname + ".res"))
+                        for sname in claimed_seeds
+                    ]
+                    try:
+                        done, failed, collected = _run_torchsim_batch(
+                            torchsim_runner,
+                            claimed_seeds,
+                            structures,
+                            code,
+                            calculator_spec,
+                            singlepoint=singlepoint,
+                            max_iterations=max_iterations,
+                            fmax=fmax,
+                            optimizer=optimizer,
+                            pressure=pressure,
+                        )
+                    except Exception:
+                        logger.error(
+                            "CRUD TorchSim batch failed for structures %s",
+                            ", ".join(claimed_seeds),
+                            exc_info=True,
+                        )
+                        for sname in claimed_seeds:
+                            _move_crud_artifacts(
+                                sname, workdir / "bad_castep", keep=True
+                            )
+                        n_failed += len(claimed_seeds)
+                        continue
+
+                    collected_names = {path.stem for path in collected}
+                    for sname in claimed_seeds:
+                        if sname in collected_names:
+                            finalize_success(sname, 0)
+                        else:
+                            _move_crud_artifacts(
+                                sname, workdir / "bad_castep", keep=True
+                            )
+                    n_done += done
+                    n_failed += failed
+                    continue
+
+                rc = _run_crud_one(
                     seed,
                     code,
                     runner,
                     param_suffix,
-                    calculator_spec,
+                    workdir,
+                    singlepoint=singlepoint,
                 )
 
                 try:
                     _collect_result(seed, code, calculator_spec=calculator_spec)
-                    collected = True
                 except Exception:
                     if rc == 0:
                         raise
-
-                if collected:
-                    _move_crud_artifacts(seed, workdir / "good_castep", keep)
-                    n_done += 1
-                    if rc == 0:
-                        logger.info("CRUD OK: %s", seed)
-                    else:
-                        logger.info("CRUD not converged but collected: %s", seed)
-                else:
                     raise RuntimeError("calculation did not produce collectable output")
 
+                finalize_success(seed, rc)
+                n_done += 1
+
             except Exception:
-                logger.error("CRUD failed: %s", seed, exc_info=True)
-                _emit_diagnostics(seed, code)
-                if cycle and _crud_retryable_failure(seed):
-                    if _requeue_crud_job(seed, workdir):
-                        n_requeued += 1
-                        _cleanup_crud_artifacts(seed)
-                        logger.info("CRUD requeued: %s", seed)
-                        continue
-                _move_crud_artifacts(seed, workdir / "bad_castep", keep=True)
-                n_failed += 1
+                if handle_failure(seed):
+                    n_requeued += 1
+                else:
+                    n_failed += 1
 
         logger.info(
             "CRUD complete: %d collected, %d failed, %d requeued",
@@ -1402,6 +1616,12 @@ def run_crud(
 )
 @click.option("--keep", is_flag=True, help="Keep intermediate files from failed runs")
 @click.option("--pack", is_flag=True, help="Concatenate .res files into packed.res")
+@click.option(
+    "--singlepoint",
+    "--single-point",
+    is_flag=True,
+    help="Run a single-point calculation instead of a full relaxation",
+)
 @click.option(
     "--pressure",
     default=0.0,
@@ -1479,6 +1699,7 @@ def run_relax(
     workdir,
     keep,
     pack,
+    singlepoint,
     pressure,
     max_iterations,
     cluster,
@@ -1499,6 +1720,8 @@ def run_relax(
 
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
+    if singlepoint and code not in ("castep", "abacus", "ml"):
+        raise click.ClickException(f"Single-point not supported for code: {code}")
 
     workdir = Path(workdir).resolve()
     cell_files = sorted(workdir.glob(cell))
@@ -1547,12 +1770,13 @@ def run_relax(
     runner = None
     if code != "ml" or not use_torchsim:
         logger.debug(
-            "Creating relax runner for code=%s exe=%s backend=%s",
+            "Creating %s runner for code=%s exe=%s backend=%s",
+            "single-point" if singlepoint else "relax",
             code,
             exe,
             "ase" if code == "ml" else "external",
         )
-        runner = _create_runner(
+        runner = _create_task_runner(
             code,
             exe,
             max_iterations,
@@ -1562,6 +1786,7 @@ def run_relax(
             calculator_spec=calculator_spec,
             optimizer=optimizer,
             fmax=fmax,
+            singlepoint=singlepoint,
         )
 
     orig_dir = os.getcwd()
@@ -1588,8 +1813,10 @@ def run_relax(
                 ", ".join(struct_names[:batch_size]),
             )
 
+            mode_label = "SP" if singlepoint else "relaxing"
             logger.info(
-                "TorchSim batch relaxing %d structures with %s (batch size %d)",
+                "TorchSim batch %s %d structures with %s (batch size %d)",
+                mode_label,
                 total,
                 calculator_spec,
                 batch_size,
@@ -1606,15 +1833,21 @@ def run_relax(
                     total,
                 )
                 try:
-                    batch_results = torchsim_runner.relax_batch(
+                    done, failed, collected = _run_torchsim_batch(
+                        torchsim_runner,
                         batch_names,
                         batch_structures,
-                        max_steps=max_iterations,
-                        force_tol=fmax,
-                        optimizer=optimizer.lower(),
-                        scalar_pressure=pressure,
+                        code,
+                        calculator_spec,
+                        singlepoint=singlepoint,
+                        max_iterations=max_iterations,
+                        fmax=fmax,
+                        optimizer=optimizer,
+                        pressure=pressure,
                     )
-                    logger.debug("TorchSim batch result codes: %s", batch_results)
+                    collected_res_files.extend(workdir / path.name for path in collected)
+                    n_relaxed += done
+                    n_failed += failed
                 except Exception:
                     logger.error(
                         "TorchSim batch failed for structures %s",
@@ -1624,32 +1857,15 @@ def run_relax(
                     n_failed += len(batch_names)
                     continue
 
-                for sname, rc in batch_results.items():
-                    if rc == 0:
-                        try:
-                            _collect_result(
-                                sname,
-                                code,
-                                calculator_spec=calculator_spec,
-                            )
-                            collected_res_files.append(workdir / f"{sname}.res")
-                            n_relaxed += 1
-                        except Exception:
-                            logger.error(
-                                "TorchSim result collection failed: %s",
-                                sname,
-                                exc_info=True,
-                            )
-                            n_failed += 1
-                            _cleanup_ml_transients(sname)
-                    else:
-                        n_failed += 1
-                        _cleanup_ml_transients(sname)
-
         else:
             # Standard one-by-one loop (DFT codes or ASE fallback)
             backend_label = "ASE ML" if code == "ml" else code
-            logger.info("Relaxing %d structures with %s", total, backend_label)
+            logger.info(
+                "%s %d structures with %s",
+                "Running single-point on" if singlepoint else "Relaxing",
+                total,
+                backend_label,
+            )
 
             for i, (input_path, cell_path, struct_name, cell_content) in enumerate(
                 relax_inputs, 1
@@ -1660,63 +1876,18 @@ def run_relax(
                     break
 
                 try:
-                    if code == "castep":
-                        from castepinput.inputs import ParamInput
-
-                        cellinput = cell_content
-                        param_file = _resolve_relax_param_file(
-                            input_path, cell_path, seed, workdir, param_suffix
-                        )
-                        logger.debug(
-                            "[%d/%d] Dispatching CASTEP runner: struct=%s param=%s",
-                            i,
-                            total,
-                            struct_name,
-                            param_file.name,
-                        )
-                        paraminput = ParamInput.from_file(
-                            param_file.name
-                        )
-                        rc = runner.run(struct_name, cellinput, paraminput)
-                    elif code in ("gulp", "pp3"):
-                        struct_content = cell_content
-                        param_file = _resolve_relax_param_file(
-                            input_path, cell_path, seed, workdir, param_suffix
-                        )
-                        param_content = param_file.read_text()
-                        logger.debug(
-                            "[%d/%d] Dispatching %s runner: struct=%s input=%s",
-                            i,
-                            total,
-                            code.upper(),
-                            struct_name,
-                            param_file.name,
-                        )
-                        rc = runner.run(
-                            struct_name,
-                            struct_content,
-                            param_content,
-                            seed_name=_crud_root_from_seed(struct_name),
-                        )
-                    elif code == "abacus":
-                        struct_content = cell_content
-                        param_file = _resolve_relax_param_file(
-                            input_path, cell_path, seed, workdir, param_suffix
-                        )
-                        param_content = param_file.read_text()
-                        logger.debug(
-                            "[%d/%d] Dispatching ABACUS runner: struct=%s input=%s",
-                            i,
-                            total,
-                            struct_name,
-                            param_file.name,
-                        )
-                        rc = runner.run(struct_name, struct_content, param_content)
-                    elif code == "ml":
-                        ml_input = _prepare_ml_structure_input(
-                            input_path, cell_content
-                        )
-                        rc = runner.run(struct_name, ml_input)
+                    rc = _run_local_structure_one(
+                        input_path,
+                        cell_path,
+                        struct_name,
+                        cell_content,
+                        code,
+                        runner,
+                        param_suffix,
+                        seed,
+                        workdir,
+                        singlepoint=singlepoint,
+                    )
 
                     if rc == 0:
                         _collect_result(
@@ -1745,9 +1916,10 @@ def run_relax(
 
                 except Exception:
                     logger.error(
-                        "[%d/%d] Relax crashed: %s",
+                        "[%d/%d] %s crashed: %s",
                         i,
                         total,
+                        "SP" if singlepoint else "Relax",
                         struct_name,
                         exc_info=True,
                     )
@@ -1757,7 +1929,8 @@ def run_relax(
                     n_failed += 1
 
         logger.info(
-            "Relaxation complete: %d/%d succeeded, %d failed",
+            "%s complete: %d/%d succeeded, %d failed",
+            "SP" if singlepoint else "Relaxation",
             n_relaxed,
             total,
             n_failed,
@@ -1769,7 +1942,8 @@ def run_relax(
 
         if use_torchsim and n_relaxed == 0 and n_failed > 0:
             raise click.ClickException(
-                "TorchSim relaxation failed for all matched structures; "
+                f"TorchSim {'single-point' if singlepoint else 'relaxation'} "
+                "failed for all matched structures; "
                 "see verbose log above for the failing batch."
             )
 
