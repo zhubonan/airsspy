@@ -121,7 +121,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-markers = ["e2e: end-to-end tests that run actual CASTEP/ABACUS executables"]
+markers = ["e2e: end-to-end tests that run actual CASTEP/ABACUS/VASP executables"]
 
 [tool.coverage.run]
 source = ["src/airsspy"]

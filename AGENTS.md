@@ -5,6 +5,33 @@ repository.
 
 Venv for development is at .venv, activate with `source .venv/bin/activate` before any command. Always use `uv pip install` instead of `pip install` for installing packages.
 
+## Worktree virtualenv bootstrap
+
+Worktree checkouts may start with an empty or partial `.venv`. When that
+happens, mirror the dependency versions from the main repository instead of
+letting uv resolve a fresh environment. This is especially important for torch:
+the worktree must use the same torch build as the main repo.
+
+Recommended workflow:
+
+```bash
+# From the worktree checkout
+uv pip freeze --python /home/bonan/appdir/airsspy/.venv/bin/python > /tmp/airsspy-main-freeze.txt
+sed 's#^-e file:///home/bonan/appdir/airsspy$#-e file://'"$(pwd)"'#' \
+  /tmp/airsspy-main-freeze.txt > /tmp/airsspy-worktree-freeze.txt
+uv venv --python /home/bonan/appdir/airsspy/.venv/bin/python --clear .venv
+uv pip install --python .venv/bin/python --no-deps -r /tmp/airsspy-worktree-freeze.txt
+```
+
+If running inside a sandboxed worktree, run the final `uv pip install` outside
+the sandbox when necessary so uv can use its normal cache. Verify torch before
+running ML-related tests:
+
+```bash
+/home/bonan/appdir/airsspy/.venv/bin/python -c "import torch; print(torch.__version__)"
+.venv/bin/python -c "import torch; print(torch.__version__)"
+```
+
 ## Project Overview
 
 airsspy is a Python library providing an ASE-based interface for Ab initio Random Structure Searching (AIRSS). It wraps the external `buildcell` executable (not bundled) and lets users construct search seeds programmatically, generate random structures, parse `.res` output files, run distributed searches via jobflow, and analyse results. Licensed under GPLv2.

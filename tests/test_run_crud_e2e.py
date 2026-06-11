@@ -18,6 +18,8 @@ from airsspy.cli.main import cli
 CASTEP_EXE_ENV = "AIRSSPY_E2E_CASTEP_EXE"
 ABACUS_EXE_ENV = "AIRSSPY_E2E_ABACUS_EXE"
 ABACUS_PSEUDO_ENV = "AIRSSPY_E2E_ABACUS_PSEUDO"
+VASP_EXE_ENV = "AIRSSPY_E2E_VASP_EXE"
+VASP_POTCAR_DIR_ENV = "AIRSSPY_E2E_VASP_POTCAR_DIR"
 MPINP_ENV = "AIRSSPY_E2E_MPINP"
 ML_CALCULATOR_ENV = "AIRSSPY_E2E_ML_CALCULATOR"
 
@@ -39,6 +41,42 @@ def _resolve_executable(env_name: str) -> str:
     if shutil.which(value) is None:
         pytest.skip(f"{env_name} executable is not on PATH: {value}")
     return value
+
+
+def _resolve_vasp_executable() -> str:
+    """Return the configured VASP executable, defaulting to ``vasp_std``."""
+    value = os.environ.get(VASP_EXE_ENV, "vasp_std")
+    exe = Path(value).expanduser()
+    if exe.is_absolute() or os.sep in value:
+        if not exe.is_file():
+            pytest.skip(f"{VASP_EXE_ENV} does not point to a file: {value}")
+        if not os.access(exe, os.X_OK):
+            pytest.skip(f"{VASP_EXE_ENV} is not executable: {value}")
+        return str(exe)
+    if shutil.which(value) is None:
+        pytest.skip(f"VASP executable is not on PATH: {value}")
+    return value
+
+
+def _resolve_vasp_potcar_dir() -> str:
+    """Return a POTCAR root without requiring POTCAR files in the repo."""
+    for env_name in (
+        VASP_POTCAR_DIR_ENV,
+        "AIRSSPY_POTCAR_DIR",
+        "PMG_VASP_PSP_DIR",
+        "VASP_PSP_DIR",
+    ):
+        value = os.environ.get(env_name)
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        if path.is_dir():
+            return str(path)
+        pytest.skip(f"{env_name} does not point to a directory: {value}")
+    pytest.skip(
+        f"{VASP_POTCAR_DIR_ENV}, AIRSSPY_POTCAR_DIR, PMG_VASP_PSP_DIR, "
+        "or VASP_PSP_DIR must be set for VASP e2e tests"
+    )
 
 
 def _mpinp_args() -> list[str]:
@@ -106,6 +144,30 @@ def _assert_crud_success(root: Path, label: str) -> str:
     assert f"TITL {label}" in res_text
     assert "REM" in res_text
     return res_text
+
+
+def _write_vasp_inputs(root: Path, input_set: str, *, nsw: int | None = None) -> None:
+    """Create small VASP INCAR/KPOINTS inputs for Si e2e smoke tests."""
+    incar_lines = [
+        f"AIRSSPY_VASP_INPUT_SET = {input_set}",
+        "ENCUT = 200",
+        "EDIFF = 1E-4",
+        "NELM = 20",
+        "ISMEAR = 0",
+        "SIGMA = 0.05",
+        "LWAVE = .FALSE.",
+        "LCHARG = .FALSE.",
+    ]
+    if nsw is not None:
+        incar_lines.append(f"NSW = {nsw}")
+    root.joinpath("Si.INCAR").write_text("\n".join(incar_lines) + "\n")
+    root.joinpath("Si.KPOINTS").write_text(
+        "Automatic mesh\n"
+        "0\n"
+        "Gamma\n"
+        "1 1 1\n"
+        "0 0 0\n"
+    )
 
 
 @pytest.fixture
@@ -210,6 +272,126 @@ def test_run_crud_abacus_real_executable_smoke(crud_workdir):
     res_text = _assert_crud_success(crud_workdir, "Si-001")
     assert "Basis pw" in res_text
     assert crud_workdir.joinpath("good_castep", "Si-001.abacus").is_dir()
+
+
+@pytest.mark.e2e
+def test_run_crud_vasp_real_executable_smoke(crud_workdir):
+    """VASP CRUD claims one RES job, runs VASP SP, and collects it."""
+    exe = _resolve_vasp_executable()
+    potcar_dir = _resolve_vasp_potcar_dir()
+
+    _write_root_cell(crud_workdir, "Si")
+    _write_hopper_res(crud_workdir, "Si-001", "Si")
+    _write_vasp_inputs(crud_workdir, "MPStaticSet")
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "run",
+            "crud",
+            "--code",
+            "vasp",
+            "--exe",
+            exe,
+            "--potcar-dir",
+            potcar_dir,
+            "--potcar-map",
+            "Si=Si",
+            "--max-iterations",
+            "1",
+            "--singlepoint",
+            "--keep",
+            *_mpinp_args(),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    res_text = _assert_crud_success(crud_workdir, "Si-001")
+    assert "VASP input set MPStaticSet" in res_text
+    assert "POTCAR Si Si sha256=" in res_text
+    assert crud_workdir.joinpath("good_castep", "Si-001.vasp", "OUTCAR").is_file()
+
+
+@pytest.mark.e2e
+def test_run_crud_vasp_relax_real_executable_smoke(crud_workdir):
+    """VASP CRUD claims one RES job, runs a short relaxation, and collects it."""
+    exe = _resolve_vasp_executable()
+    potcar_dir = _resolve_vasp_potcar_dir()
+
+    _write_root_cell(crud_workdir, "Si")
+    _write_hopper_res(crud_workdir, "Si-001", "Si")
+    _write_vasp_inputs(crud_workdir, "MPRelaxSet", nsw=1)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "run",
+            "crud",
+            "--code",
+            "vasp",
+            "--exe",
+            exe,
+            "--potcar-dir",
+            potcar_dir,
+            "--potcar-map",
+            "Si=Si",
+            "--max-iterations",
+            "1",
+            "--keep",
+            *_mpinp_args(),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    res_text = _assert_crud_success(crud_workdir, "Si-001")
+    assert "VASP input set MPRelaxSet" in res_text
+    incar_text = crud_workdir.joinpath("good_castep", "Si-001.vasp", "INCAR").read_text()
+    assert "NSW = 1" in incar_text
+    assert crud_workdir.joinpath("good_castep", "Si-001.vasp", "OUTCAR").is_file()
+
+
+@pytest.mark.e2e
+def test_run_relax_vasp_real_executable_smoke(crud_workdir):
+    """VASP run-relax accepts RES input and runs a short relaxation."""
+    exe = _resolve_vasp_executable()
+    potcar_dir = _resolve_vasp_potcar_dir()
+
+    _write_root_cell(crud_workdir, "Si")
+    _write_hopper_res(crud_workdir, "Si-001", "Si")
+    shutil.move(
+        crud_workdir / "hopper" / "Si-001.res",
+        crud_workdir / "Si-001.res",
+    )
+    _write_vasp_inputs(crud_workdir, "MPRelaxSet", nsw=1)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "run",
+            "relax",
+            "--cell",
+            "Si-001.res",
+            "--code",
+            "vasp",
+            "--exe",
+            exe,
+            "--potcar-dir",
+            potcar_dir,
+            "--potcar-map",
+            "Si=Si",
+            "--max-iterations",
+            "1",
+            "--keep",
+            *_mpinp_args(),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    res_text = crud_workdir.joinpath("Si-001.res").read_text()
+    assert "VASP input set MPRelaxSet" in res_text
+    incar_text = crud_workdir.joinpath("Si-001.vasp", "INCAR").read_text()
+    assert "NSW = 1" in incar_text
+    assert crud_workdir.joinpath("Si-001.vasp", "OUTCAR").is_file()
 
 
 @pytest.mark.e2e

@@ -23,6 +23,7 @@ EXE_DEFAULTS = {
     "gulp": "ggulp",
     "pp3": "pp3",
     "abacus": "abacus",
+    "vasp": "vasp_std",
 }
 
 
@@ -61,6 +62,21 @@ def _emit_diagnostics(struct_name: str, code: str) -> None:
                 if "error" in low or "warning" in low or "failed" in low:
                     print(f"  | {line.strip()}", file=sys.stderr)
                     break
+
+    elif code == "vasp":
+        for rel_path in ("vasp.out", "OUTCAR", "OSZICAR"):
+            path = Path(struct_name + ".vasp") / rel_path
+            if not path.is_file():
+                continue
+            lines = path.read_text(errors="ignore").splitlines()
+            tail = lines[-20:] if len(lines) > 20 else lines
+            print(f"  {rel_path}:", file=sys.stderr)
+            for line in tail:
+                low = line.lower()
+                if any(word in low for word in ("error", "warning", "fail", "fatal")):
+                    print(f"  | {line.strip()}", file=sys.stderr)
+            if tail:
+                break
 
     print("  --- End diagnostics ---\n", file=sys.stderr)
 
@@ -118,7 +134,7 @@ def _cleanup_ml_transients(struct_name: str) -> None:
 
 def _apply_mpinp(exe: str, code: str, mpinp: int | None) -> str:
     """Prepend ``mpirun`` to *exe* when *mpinp* is set and *code* supports it."""
-    if mpinp is None or code not in ("castep", "abacus"):
+    if mpinp is None or code not in ("castep", "abacus", "vasp"):
         return exe
     if mpinp == 0:
         return f"mpirun {exe}"
@@ -156,6 +172,21 @@ def _parse_oxidation_state_options(values) -> dict[str, list[int]]:
                     f"assignments, got {assignment!r}"
                 ) from exc
     return parsed
+
+
+def _parse_potcar_map_options(values) -> dict[str, str]:
+    """Parse repeatable VASP ``Element=symbol`` POTCAR map options."""
+    from airsspy.vasptools import parse_potcar_map
+
+    try:
+        return parse_potcar_map(values)
+    except ValueError as exc:
+        raise click.ClickException(f"Invalid --potcar-map: {exc}") from exc
+
+
+def _resolve_optional_path(path: str | None) -> str | None:
+    """Resolve an optional user path before command handlers chdir."""
+    return str(Path(path).expanduser().resolve()) if path else None
 
 
 def _parse_formula_option(value: str) -> list[str]:
@@ -342,6 +373,10 @@ def _prepare_crud_inputs(seed: str, code: str) -> tuple[str, str | None]:
         shutil.copy2(root_param, seed_param)
     if code == "castep":
         _sync_castep_spin_param(cell_path, seed_param)
+    if code == "vasp":
+        root_kpoints = Path(root + ".KPOINTS")
+        if root_kpoints.exists():
+            shutil.copy2(root_kpoints, seed + ".KPOINTS")
     return root, param_suffix
 
 
@@ -462,6 +497,19 @@ def _run_local_structure_one(
             input_path, cell_path, seed, workdir, param_suffix
         )
         return runner.run(struct_name, cell_content, param_file.read_text())
+    if code == "vasp":
+        param_file = _resolve_relax_param_file(
+            input_path, cell_path, seed, workdir, param_suffix
+        )
+        kpoints_path = param_file.with_suffix(".KPOINTS")
+        if not kpoints_path.exists():
+            kpoints_path = workdir / f"{seed}.KPOINTS"
+        return runner.run(
+            struct_name,
+            cell_content,
+            param_file.read_text(),
+            kpoints_path=kpoints_path if kpoints_path.exists() else None,
+        )
     if code == "ml":
         ml_input = _prepare_ml_structure_input(input_path, cell_content)
         return runner.run(struct_name, ml_input)
@@ -506,6 +554,8 @@ def _create_task_runner(
     calculator_kwargs=None,
     optimizer="FIRE",
     fmax=0.05,
+    potcar_dir=None,
+    potcar_map=None,
     *,
     singlepoint: bool = False,
 ):
@@ -522,6 +572,8 @@ def _create_task_runner(
             calculator_kwargs=calculator_kwargs,
             optimizer=optimizer,
             fmax=fmax,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
         )
     exe = _apply_mpinp(exe, code, mpinp)
     return _create_sp_runner(
@@ -529,6 +581,9 @@ def _create_task_runner(
         exe,
         calculator_spec=calculator_spec,
         calculator_kwargs=calculator_kwargs,
+        pressure=pressure,
+        potcar_dir=potcar_dir,
+        potcar_map=potcar_map,
     )
 
 
@@ -719,6 +774,8 @@ def _create_runner(
     calculator_kwargs=None,
     optimizer="FIRE",
     fmax=0.05,
+    potcar_dir=None,
+    potcar_map=None,
 ):
     """Create the appropriate relaxation runner for the given *code*."""
     from airsspy.jf.runners import (
@@ -726,6 +783,7 @@ def _create_runner(
         AirssCastepRelaxRunner,
         AirssGulpRelaxRunner,
         AirssPp3RelaxRunner,
+        AirssVaspRelaxRunner,
     )
 
     exe = _apply_mpinp(exe, code, mpinp)
@@ -751,6 +809,13 @@ def _create_runner(
             max_iterations=max_iterations,
             pressure=pressure,
         )
+    elif code == "vasp":
+        return AirssVaspRelaxRunner(
+            executable=exe,
+            pressure=pressure,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
+        )
     elif code == "ml":
         from airsspy.jf.ml_runners import AirssMlRelaxRunner
 
@@ -766,7 +831,15 @@ def _create_runner(
         raise click.ClickException(f"Unknown code: {code}")
 
 
-def _create_sp_runner(code, exe, calculator_spec=None, calculator_kwargs=None):
+def _create_sp_runner(
+    code,
+    exe,
+    calculator_spec=None,
+    calculator_kwargs=None,
+    pressure=0.0,
+    potcar_dir=None,
+    potcar_map=None,
+):
     """Create the appropriate single-point runner for the given *code*."""
     if code == "castep":
         from airsspy.jf.runners import AirssCastepSinglePointRunner
@@ -776,6 +849,15 @@ def _create_sp_runner(code, exe, calculator_spec=None, calculator_kwargs=None):
         from airsspy.jf.runners import AirssAbacusSinglePointRunner
 
         return AirssAbacusSinglePointRunner(executable=exe)
+    elif code == "vasp":
+        from airsspy.jf.runners import AirssVaspSinglePointRunner
+
+        return AirssVaspSinglePointRunner(
+            executable=exe,
+            pressure=pressure,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
+        )
     elif code == "ml":
         from airsspy.jf.ml_runners import AirssMlSinglePointRunner
 
@@ -801,6 +883,13 @@ def _collect_result(struct_name: str, code: str, calculator_spec: str = None) ->
         from airsspy.jf.ml_runners import compose_ml_task_doc
 
         compose_ml_task_doc(struct_name, calculator_spec=calculator_spec or "")
+    elif code == "vasp":
+        from airsspy.vasptools import compose_vasp_task_doc
+
+        metadata = getattr(calculator_spec, "last_metadata", None)
+        if isinstance(calculator_spec, dict):
+            metadata = calculator_spec
+        compose_vasp_task_doc(struct_name, metadata=metadata)
     else:
         # pp3, gulp — use the external castep2res tool
         import subprocess
@@ -836,7 +925,7 @@ def run():
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "gulp", "pp3", "abacus"]),
+    type=click.Choice(["castep", "gulp", "pp3", "abacus", "vasp"]),
     help="DFT code to use",
 )
 @click.option("--exe", default=None, help="Relaxation executable (default: auto)")
@@ -995,6 +1084,13 @@ def run():
     is_flag=True,
     help="Leave rejected .res files in place instead of moving to pruned/.",
 )
+@click.option("--potcar-dir", default=None, help="VASP POTCAR library directory.")
+@click.option(
+    "--potcar-map",
+    "potcar_map_values",
+    multiple=True,
+    help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
+)
 def run_search(
     seed,
     nmax,
@@ -1027,6 +1123,8 @@ def run_search(
     prune_median_abs_tol,
     prune_zweight,
     prune_keep_rejected,
+    potcar_dir,
+    potcar_map_values,
 ):
     """Run an AIRSS random structure search locally."""
     from airsspy.jf.runners import run_buildcell
@@ -1120,6 +1218,9 @@ def run_search(
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
 
+    potcar_dir = _resolve_optional_path(potcar_dir)
+    potcar_map = _parse_potcar_map_options(potcar_map_values)
+
     # Copy param file to workdir so runners can find it after chdir
     if not build_only:
         param_suffix = SUFFIX_MAP[code]
@@ -1128,6 +1229,10 @@ def run_search(
             raise click.ClickException(f"Param file not found: {param_file}")
         if Path(workdir).resolve() != Path().resolve():
             shutil.copy2(param_file, workdir / param_file.name)
+            if code == "vasp":
+                kpoints = Path(seed + ".KPOINTS")
+                if kpoints.exists():
+                    shutil.copy2(kpoints, workdir / kpoints.name)
 
     if exe is None:
         exe = EXE_DEFAULTS[code]
@@ -1204,7 +1309,16 @@ def run_search(
                 continue
 
             # Relax
-            runner = _create_runner(code, exe, max_iterations, cluster, pressure, mpinp)
+            runner = _create_runner(
+                code,
+                exe,
+                max_iterations,
+                cluster,
+                pressure,
+                mpinp,
+                potcar_dir=potcar_dir,
+                potcar_map=potcar_map,
+            )
 
             try:
                 if code == "castep":
@@ -1225,9 +1339,23 @@ def run_search(
                     struct_content = Path(struct_name + ".cell").read_text()
                     param_content = Path(seed + param_suffix).read_text()
                     rc = runner.run(struct_name, struct_content, param_content)
+                elif code == "vasp":
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    incar_content = Path(seed + param_suffix).read_text()
+                    kpoints_path = Path(seed + ".KPOINTS")
+                    rc = runner.run(
+                        struct_name,
+                        struct_content,
+                        incar_content,
+                        kpoints_path=kpoints_path if kpoints_path.exists() else None,
+                    )
 
                 if rc == 0:
-                    _collect_result(struct_name, code)
+                    _collect_result(
+                        struct_name,
+                        code,
+                        calculator_spec=runner if code == "vasp" else None,
+                    )
                     n_relaxed += 1
                     if prune_options is not None:
                         candidate = candidate_from_res(Path(struct_name + ".res"))
@@ -1243,7 +1371,11 @@ def run_search(
                     logger.info("[%d] Relaxed OK: %s", i, struct_name)
                 else:
                     try:
-                        _collect_result(struct_name, code)
+                        _collect_result(
+                            struct_name,
+                            code,
+                            calculator_spec=runner if code == "vasp" else None,
+                        )
                         if prune_options is not None:
                             candidate = candidate_from_res(Path(struct_name + ".res"))
                             prune_pool.append(candidate)
@@ -1295,7 +1427,7 @@ def run_search(
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "gulp", "pp3", "abacus", "ml"]),
+    type=click.Choice(["castep", "gulp", "pp3", "abacus", "vasp", "ml"]),
     help="DFT code or ML mode to use",
 )
 @click.option("--exe", default=None, help="Relaxation executable (default: auto)")
@@ -1386,6 +1518,13 @@ def run_search(
     show_default=True,
     help="Number of structures per torch-sim ML batch.",
 )
+@click.option("--potcar-dir", default=None, help="VASP POTCAR library directory.")
+@click.option(
+    "--potcar-map",
+    "potcar_map_values",
+    multiple=True,
+    help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
+)
 def run_crud(
     code,
     exe,
@@ -1405,11 +1544,13 @@ def run_crud(
     fmax,
     device,
     batch_size,
+    potcar_dir,
+    potcar_map_values,
 ):
     """Consume hopper/*.res jobs locally, like crud.pl."""
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
-    if singlepoint and code not in ("castep", "abacus", "ml"):
+    if singlepoint and code not in ("castep", "abacus", "vasp", "ml"):
         raise click.ClickException(f"Single-point not supported for code: {code}")
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
@@ -1424,6 +1565,8 @@ def run_crud(
     if exe is None:
         exe = EXE_DEFAULTS.get(code, "")
 
+    potcar_dir = _resolve_optional_path(potcar_dir)
+    potcar_map = _parse_potcar_map_options(potcar_map_values)
     sched = _get_scheduler_for_walltime()
     runner = None
     if not use_torchsim:
@@ -1437,6 +1580,8 @@ def run_crud(
             calculator_spec=calculator_spec,
             optimizer=optimizer,
             fmax=fmax,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
             singlepoint=singlepoint,
         )
     torchsim_runner = None
@@ -1565,7 +1710,11 @@ def run_crud(
                 )
 
                 try:
-                    _collect_result(seed, code, calculator_spec=calculator_spec)
+                    _collect_result(
+                        seed,
+                        code,
+                        calculator_spec=runner if code == "vasp" else calculator_spec,
+                    )
                 except Exception:
                     if rc == 0:
                         raise
@@ -1603,7 +1752,7 @@ def run_crud(
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "gulp", "pp3", "abacus", "ml"]),
+    type=click.Choice(["castep", "gulp", "pp3", "abacus", "vasp", "ml"]),
     help="DFT code or ML mode to use",
 )
 @click.option("--exe", default=None, help="Relaxation executable (default: auto)")
@@ -1691,6 +1840,13 @@ def run_crud(
     is_flag=True,
     help="Print detailed run-relax debug logging.",
 )
+@click.option("--potcar-dir", default=None, help="VASP POTCAR library directory.")
+@click.option(
+    "--potcar-map",
+    "potcar_map_values",
+    multiple=True,
+    help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
+)
 def run_relax(
     cell,
     seed,
@@ -1711,6 +1867,8 @@ def run_relax(
     device,
     batch_size,
     debug,
+    potcar_dir,
+    potcar_map_values,
 ):
     """Relax existing cell files locally."""
     if debug:
@@ -1720,8 +1878,10 @@ def run_relax(
 
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
-    if singlepoint and code not in ("castep", "abacus", "ml"):
+    if singlepoint and code not in ("castep", "abacus", "vasp", "ml"):
         raise click.ClickException(f"Single-point not supported for code: {code}")
+    potcar_dir = _resolve_optional_path(potcar_dir)
+    potcar_map = _parse_potcar_map_options(potcar_map_values)
 
     workdir = Path(workdir).resolve()
     cell_files = sorted(workdir.glob(cell))
@@ -1786,6 +1946,8 @@ def run_relax(
             calculator_spec=calculator_spec,
             optimizer=optimizer,
             fmax=fmax,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
             singlepoint=singlepoint,
         )
 
@@ -1891,7 +2053,9 @@ def run_relax(
 
                     if rc == 0:
                         _collect_result(
-                            struct_name, code, calculator_spec=calculator_spec
+                            struct_name,
+                            code,
+                            calculator_spec=runner if code == "vasp" else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_relaxed += 1
@@ -1901,7 +2065,9 @@ def run_relax(
                             _collect_result(
                                 struct_name,
                                 code,
-                                calculator_spec=calculator_spec,
+                                calculator_spec=runner
+                                if code == "vasp"
+                                else calculator_spec,
                             )
                             collected_res_files.append(workdir / f"{struct_name}.res")
                             logger.info(
@@ -1963,7 +2129,7 @@ def run_relax(
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "abacus", "ml"]),
+    type=click.Choice(["castep", "abacus", "vasp", "ml"]),
     help="Code to use for single-point calculation",
 )
 @click.option("--exe", default=None, help="Executable (default: auto)")
@@ -2005,6 +2171,20 @@ def run_relax(
     show_default=True,
     help="Number of structures per torch-sim ML batch.",
 )
+@click.option(
+    "--pressure",
+    default=0.0,
+    type=float,
+    show_default=True,
+    help="External pressure (GPa)",
+)
+@click.option("--potcar-dir", default=None, help="VASP POTCAR library directory.")
+@click.option(
+    "--potcar-map",
+    "potcar_map_values",
+    multiple=True,
+    help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
+)
 def run_sp(
     cell,
     seed,
@@ -2017,6 +2197,9 @@ def run_sp(
     calculator_spec,
     device,
     batch_size,
+    pressure,
+    potcar_dir,
+    potcar_map_values,
 ):
     """Run single-point calculations on existing cell files."""
     if code == "ml" and not calculator_spec:
@@ -2029,20 +2212,23 @@ def run_sp(
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
         raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
-    if code != "ml" and any(path.suffix.lower() == ".res" for path in cell_files):
+    if code not in ("ml", "vasp") and any(
+        path.suffix.lower() == ".res" for path in cell_files
+    ):
         raise click.ClickException(
-            "RES input for run sp is currently supported only with --code ml"
+            "RES input for run sp is currently supported only with --code ml or vasp"
         )
     sp_inputs = None
-    if code == "ml":
+    if code in ("ml", "vasp"):
         sp_inputs = [
             (
                 input_path,
                 *_prepare_relax_input(
                     input_path,
                     workdir,
-                    write_res_cell=False,
-                    convert_res_cell=input_path.suffix.lower() != ".res",
+                    write_res_cell=code == "vasp",
+                    convert_res_cell=input_path.suffix.lower() != ".res"
+                    or code == "vasp",
                 ),
             )
             for input_path in cell_files
@@ -2056,22 +2242,38 @@ def run_sp(
     param_suffix = None
     if code != "ml":
         param_suffix = SUFFIX_MAP[code]
-        param_file = workdir / (seed + param_suffix)
-        if not param_file.exists():
-            param_file = workdir / (cell_files[0].stem + param_suffix)
-        if not param_file.exists():
-            raise click.ClickException(f"Param file not found: {param_file}")
-        param_file_name = param_file.stem
+        if code == "vasp" and sp_inputs is not None:
+            for input_path, cell_path, _, _ in sp_inputs:
+                _resolve_relax_param_file(
+                    input_path, cell_path, seed, workdir, param_suffix
+                )
+        else:
+            param_file = workdir / (seed + param_suffix)
+            if not param_file.exists():
+                param_file = workdir / (cell_files[0].stem + param_suffix)
+            if not param_file.exists():
+                raise click.ClickException(f"Param file not found: {param_file}")
+            param_file_name = param_file.stem
 
     if exe is None:
         exe = EXE_DEFAULTS.get(code, "")
+
+    potcar_dir = _resolve_optional_path(potcar_dir)
+    potcar_map = _parse_potcar_map_options(potcar_map_values)
 
     # Detect scheduler
     sched = _get_scheduler_for_walltime()
 
     runner = None
     if code != "ml" or not use_torchsim:
-        runner = _create_sp_runner(code, exe, calculator_spec=calculator_spec)
+        runner = _create_sp_runner(
+            code,
+            exe,
+            calculator_spec=calculator_spec,
+            pressure=pressure,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
+        )
 
     orig_dir = os.getcwd()
     os.chdir(workdir)
@@ -2174,6 +2376,18 @@ def run_sp(
                         struct_content = cell_path.read_text()
                         param_content = Path(param_file_name + param_suffix).read_text()
                         rc = runner.run(struct_name, struct_content, param_content)
+                    elif code == "vasp":
+                        struct_content = cell_content or cell_path.read_text()
+                        param_file = _resolve_relax_param_file(
+                            input_path, cell_path, seed, workdir, param_suffix
+                        )
+                        kpoints_path = param_file.with_suffix(".KPOINTS")
+                        rc = runner.run(
+                            struct_name,
+                            struct_content,
+                            param_file.read_text(),
+                            kpoints_path=kpoints_path if kpoints_path.exists() else None,
+                        )
                     elif code == "ml":
                         ml_input = _prepare_ml_structure_input(
                             input_path, cell_content
@@ -2182,7 +2396,9 @@ def run_sp(
 
                     if rc == 0:
                         _collect_result(
-                            struct_name, code, calculator_spec=calculator_spec
+                            struct_name,
+                            code,
+                            calculator_spec=runner if code == "vasp" else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_done += 1
@@ -2192,7 +2408,9 @@ def run_sp(
                             _collect_result(
                                 struct_name,
                                 code,
-                                calculator_spec=calculator_spec,
+                                calculator_spec=runner
+                                if code == "vasp"
+                                else calculator_spec,
                             )
                             collected_res_files.append(workdir / f"{struct_name}.res")
                             logger.info(

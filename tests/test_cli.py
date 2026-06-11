@@ -848,6 +848,43 @@ def test_run_crud_processes_claimed_ml_job():
                 fake_runner.run.assert_called_once()
                 assert isinstance(fake_runner.run.call_args.args[1], Atoms)
 
+def test_run_crud_processes_claimed_vasp_job():
+    """CRUD VASP converts RES input and passes INCAR/KPOINTS to the runner."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("Si.INCAR").write_text("ENCUT = 400\n")
+        Path("Si.KPOINTS").write_text("explicit kpoints\n")
+        Path("hopper/Si-001.res").write_text(
+            "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_task_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    ["run", "crud", "--code", "vasp", "--keep"],
+                )
+
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        assert fake_runner.run.call_args.args[:3] == (
+            "Si-001",
+            Path("good_castep/Si-001.cell").read_text(),
+            "ENCUT = 400\n",
+        )
+        kpoints_path = fake_runner.run.call_args.kwargs["kpoints_path"]
+        assert kpoints_path.name == "Si-001.KPOINTS"
+        assert Path("good_castep/Si-001.KPOINTS").read_text() == "explicit kpoints\n"
+        collect.assert_called_once()
+
 
 def test_run_crud_ml_torchsim_batches_claimed_jobs():
     """CRUD ML supports the same torch-sim model path as run relax."""
@@ -1222,13 +1259,13 @@ def test_run_relax_accepts_res_input_for_castep():
                     [
                         "run",
                         "relax",
-                            "--cell",
-                            "*.res",
-                            "--seed",
-                            "IGNORED",
-                            "--code",
-                            "castep",
-                            "--keep",
+                        "--cell",
+                        "*.res",
+                        "--seed",
+                        "IGNORED",
+                        "--code",
+                        "castep",
+                        "--keep",
                     ],
                 )
 
@@ -1275,6 +1312,87 @@ def test_run_relax_singlepoint_uses_sp_runner():
         assert result.exit_code == 0
         fake_runner.run.assert_called_once()
         assert fake_runner.run.call_args.args[0] == "Si-001"
+        collect.assert_called_once()
+
+
+def test_run_relax_accepts_res_input_for_vasp():
+    """Relax command converts RES inputs and dispatches VASP with root INCAR."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl.INCAR").write_text("ENCUT = 400\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.2500000000000 0.2500000000000 0.2500000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_task_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "relax",
+                        "--cell",
+                        "*.res",
+                        "--seed",
+                        "IGNORED",
+                        "--code",
+                        "vasp",
+                        "--potcar-map",
+                        "Si=Si_GW",
+                        "--keep",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        assert fake_runner.run.call_args.args[0] == "LiTaOCl-001"
+        assert fake_runner.run.call_args.args[2] == "ENCUT = 400\n"
+        collect.assert_called_once()
+
+
+def test_run_sp_accepts_res_input_for_vasp():
+    """Single-point VASP supports RES input using the root INCAR."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("Si.INCAR").write_text("ENCUT = 400\n")
+        Path("Si-001.res").write_text(
+            "TITL Si-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.2500000000000 0.2500000000000 0.2500000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner):
+            with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "sp",
+                        "--cell",
+                        "*.res",
+                        "--seed",
+                        "IGNORED",
+                        "--code",
+                        "vasp",
+                    ],
+                )
+
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        assert fake_runner.run.call_args.args[0] == "Si-001"
+        assert fake_runner.run.call_args.args[2] == "ENCUT = 400\n"
         collect.assert_called_once()
 
 

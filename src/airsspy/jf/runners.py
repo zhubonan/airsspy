@@ -8,6 +8,7 @@ standalone or within jobflow Makers.
 
 import logging
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -625,6 +626,111 @@ class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
 
     def _get_cmd(self, struct_name: str) -> list[str]:
         return ["pp3_relax", self.executable, struct_name]
+
+
+class AirssVaspRelaxRunner:
+    """Execute a local VASP relaxation in ``<struct_name>.vasp``."""
+
+    _cleanup_extensions = [".cell", ".INCAR", ".KPOINTS", "-orig.cell", ".res", ".err"]
+
+    def __init__(
+        self,
+        executable: str = "vasp_std",
+        pressure: float = 0.0,
+        potcar_dir: str | None = None,
+        potcar_map: dict[str, str] | None = None,
+    ) -> None:
+        self.executable = executable
+        self.pressure = pressure
+        self.potcar_dir = potcar_dir
+        self.potcar_map = potcar_map or {}
+        self.last_metadata: dict | None = None
+
+    def clean_failed(self, struct_name: str) -> None:
+        clean_files(
+            struct_name,
+            self._cleanup_extensions,
+            extra_paths=[f"{struct_name}.vasp"],
+        )
+
+    def prepare_inputs(
+        self,
+        struct_name: str,
+        cell_content: str,
+        incar_content: str,
+        kpoints_path: str | Path | None = None,
+    ) -> dict:
+        """Write top-level AIRSS inputs and prepare VASP input directory."""
+        from ..vasptools import prepare_vasp_inputs, structure_from_cell_text
+
+        Path(struct_name + ".cell").write_text(cell_content)
+        Path(struct_name + ".INCAR").write_text(incar_content)
+        structure = structure_from_cell_text(cell_content)
+        metadata = prepare_vasp_inputs(
+            struct_name,
+            structure,
+            incar_content,
+            mode="relax",
+            pressure=self.pressure,
+            potcar_dir=self.potcar_dir,
+            potcar_map=self.potcar_map,
+            kpoints_path=kpoints_path,
+        )
+        self.last_metadata = metadata
+        return metadata
+
+    def run(
+        self,
+        struct_name: str,
+        cell_content: str,
+        incar_content: str,
+        kpoints_path: str | Path | None = None,
+    ) -> int:
+        """Run VASP and return its process return code."""
+        metadata = self.prepare_inputs(
+            struct_name, cell_content, incar_content, kpoints_path=kpoints_path
+        )
+        workdir = metadata["workdir"]
+        Path(workdir).mkdir(parents=True, exist_ok=True)
+        out_path = Path(workdir) / "vasp.out"
+        with open(out_path, "w") as outf:
+            output = subprocess.run(
+                shlex.split(self.executable),
+                stdout=outf,
+                stderr=subprocess.STDOUT,
+                cwd=workdir,
+                check=False,
+            )
+        return output.returncode
+
+
+class AirssVaspSinglePointRunner(AirssVaspRelaxRunner):
+    """Execute a local VASP single-point calculation."""
+
+    def prepare_inputs(
+        self,
+        struct_name: str,
+        cell_content: str,
+        incar_content: str,
+        kpoints_path: str | Path | None = None,
+    ) -> dict:
+        from ..vasptools import prepare_vasp_inputs, structure_from_cell_text
+
+        Path(struct_name + ".cell").write_text(cell_content)
+        Path(struct_name + ".INCAR").write_text(incar_content)
+        structure = structure_from_cell_text(cell_content)
+        metadata = prepare_vasp_inputs(
+            struct_name,
+            structure,
+            incar_content,
+            mode="sp",
+            pressure=self.pressure,
+            potcar_dir=self.potcar_dir,
+            potcar_map=self.potcar_map,
+            kpoints_path=kpoints_path,
+        )
+        self.last_metadata = metadata
+        return metadata
 
 
 class AirssAbacusRelaxRunner:
