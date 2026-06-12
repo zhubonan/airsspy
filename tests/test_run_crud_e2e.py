@@ -170,6 +170,12 @@ def _write_vasp_inputs(root: Path, input_set: str, *, nsw: int | None = None) ->
     )
 
 
+@pytest.fixture(autouse=True)
+def _e2e_single_thread(monkeypatch):
+    """Keep tiny real-executable smoke tests from oversubscribing CPUs."""
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+
+
 @pytest.fixture
 def crud_workdir(tmp_path, monkeypatch):
     """Use one pytest tmp directory as both cwd and CRUD workdir."""

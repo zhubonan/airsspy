@@ -812,6 +812,7 @@ def _create_runner(
     elif code == "vasp":
         return AirssVaspRelaxRunner(
             executable=exe,
+            max_iterations=max_iterations,
             pressure=pressure,
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,

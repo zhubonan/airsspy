@@ -639,11 +639,15 @@ class AirssVaspRelaxRunner:
         pressure: float = 0.0,
         potcar_dir: str | None = None,
         potcar_map: dict[str, str] | None = None,
+        max_fails: int = 2,
+        max_iterations: int = 200,
     ) -> None:
         self.executable = executable
         self.pressure = pressure
         self.potcar_dir = potcar_dir
         self.potcar_map = potcar_map or {}
+        self.max_fails = max_fails
+        self.max_iterations = max_iterations
         self.last_metadata: dict | None = None
 
     def clean_failed(self, struct_name: str) -> None:
@@ -679,21 +683,14 @@ class AirssVaspRelaxRunner:
         self.last_metadata = metadata
         return metadata
 
-    def run(
-        self,
-        struct_name: str,
-        cell_content: str,
-        incar_content: str,
-        kpoints_path: str | Path | None = None,
-    ) -> int:
-        """Run VASP and return its process return code."""
-        metadata = self.prepare_inputs(
-            struct_name, cell_content, incar_content, kpoints_path=kpoints_path
-        )
-        workdir = metadata["workdir"]
-        Path(workdir).mkdir(parents=True, exist_ok=True)
-        out_path = Path(workdir) / "vasp.out"
-        with open(out_path, "w") as outf:
+    def _run_vasp_process(self, workdir: Path, cycle: int) -> int:
+        """Run one VASP process invocation in *workdir*."""
+        workdir.mkdir(parents=True, exist_ok=True)
+        out_path = workdir / "vasp.out"
+        mode = "w" if cycle == 1 else "a"
+        with open(out_path, mode) as outf:
+            if cycle > 1:
+                outf.write(f"\n# airsspy VASP restart cycle {cycle}\n")
             output = subprocess.run(
                 shlex.split(self.executable),
                 stdout=outf,
@@ -702,6 +699,107 @@ class AirssVaspRelaxRunner:
                 check=False,
             )
         return output.returncode
+
+    def _read_vasp_status(self, workdir: Path) -> tuple[bool, int] | None:
+        """Return ``(converged, ionic_steps)`` for the latest VASP run."""
+        try:
+            from ..vasptools import _parse_vasprun
+
+            data = _parse_vasprun(workdir)
+        except Exception as exc:
+            logger.warning("Unable to parse VASP status in %s: %s", workdir, exc)
+            return None
+
+        if "parse_error" in data:
+            logger.warning(
+                "Unable to parse VASP status in %s: %s",
+                workdir,
+                data["parse_error"],
+            )
+            return None
+
+        return bool(data.get("converged")), int(data.get("ionic_steps") or 0)
+
+    def _prepare_restart(self, workdir: Path) -> bool:
+        """Restart VASP from the latest relaxed structure, if available."""
+        contcar = workdir / "CONTCAR"
+        poscar = workdir / "POSCAR"
+        if not contcar.is_file():
+            logger.error("Cannot restart VASP: missing %s", contcar)
+            return False
+        shutil.copyfile(contcar, poscar)
+        return True
+
+    def run(
+        self,
+        struct_name: str,
+        cell_content: str,
+        incar_content: str,
+        kpoints_path: str | Path | None = None,
+    ) -> int:
+        """Run a cyclic VASP relaxation.
+
+        As with the CASTEP runner, two consecutive converged VASP runs are
+        required before declaring success. Between cycles, ``CONTCAR`` is copied
+        back to ``POSCAR`` so the next invocation continues from the last
+        relaxed geometry.
+        """
+        metadata = self.prepare_inputs(
+            struct_name, cell_content, incar_content, kpoints_path=kpoints_path
+        )
+        workdir = Path(metadata["workdir"])
+        fail_counter = 0
+        success_counter = 0
+        iter_counter = 0
+        cycle = 0
+
+        while iter_counter < self.max_iterations:
+            if fail_counter > self.max_fails:
+                logger.error("VASP failed more than %d times", self.max_fails)
+                return 1
+
+            cycle += 1
+            logger.info("Starting VASP relaxation cycle %d for %s", cycle, struct_name)
+            return_code = self._run_vasp_process(workdir, cycle)
+            if return_code != 0:
+                fail_counter += 1
+                logger.warning(
+                    "VASP cycle %d exited with return code %d",
+                    cycle,
+                    return_code,
+                )
+                continue
+
+            fail_counter = 0
+            status = self._read_vasp_status(workdir)
+            if status is None:
+                fail_counter += 1
+                continue
+
+            converged, ionic_steps = status
+            iter_counter += max(ionic_steps, 1)
+            logger.info(
+                "VASP cycle %d finished: converged=%s ionic_steps=%d total=%d/%d",
+                cycle,
+                converged,
+                ionic_steps,
+                iter_counter,
+                self.max_iterations,
+            )
+
+            if converged:
+                success_counter += 1
+            else:
+                success_counter = 0
+
+            if success_counter >= 2:
+                return 0
+
+            if not self._prepare_restart(workdir):
+                return 1
+
+        logger.error("VASP relaxation reached max_iterations=%d", self.max_iterations)
+        return 1
 
 
 class AirssVaspSinglePointRunner(AirssVaspRelaxRunner):
@@ -731,6 +829,19 @@ class AirssVaspSinglePointRunner(AirssVaspRelaxRunner):
         )
         self.last_metadata = metadata
         return metadata
+
+    def run(
+        self,
+        struct_name: str,
+        cell_content: str,
+        incar_content: str,
+        kpoints_path: str | Path | None = None,
+    ) -> int:
+        """Run one VASP single-point calculation."""
+        metadata = self.prepare_inputs(
+            struct_name, cell_content, incar_content, kpoints_path=kpoints_path
+        )
+        return self._run_vasp_process(Path(metadata["workdir"]), cycle=1)
 
 
 class AirssAbacusRelaxRunner:

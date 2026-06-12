@@ -886,6 +886,28 @@ def test_run_crud_processes_claimed_vasp_job():
         collect.assert_called_once()
 
 
+def test_create_runner_passes_max_iterations_to_vasp():
+    """VASP relaxations use the same restart iteration budget as CASTEP."""
+    with patch("airsspy.jf.runners.AirssVaspRelaxRunner") as runner_cls:
+        cmd_run._create_runner(
+            "vasp",
+            "vasp_std",
+            7,
+            False,
+            100.0,
+            potcar_dir="/potcars",
+            potcar_map={"Si": "Si"},
+        )
+
+    runner_cls.assert_called_once_with(
+        executable="vasp_std",
+        max_iterations=7,
+        pressure=100.0,
+        potcar_dir="/potcars",
+        potcar_map={"Si": "Si"},
+    )
+
+
 def test_run_crud_ml_torchsim_batches_claimed_jobs():
     """CRUD ML supports the same torch-sim model path as run relax."""
     runner = CliRunner()
