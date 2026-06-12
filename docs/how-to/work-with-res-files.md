@@ -28,8 +28,8 @@ First, let's create some sample RES files for demonstration:
 
 from airsspy import SeedAtoms, save_airss_res
 from ase.calculators.lj import LennardJones
+from ase.filters import UnitCellFilter
 from ase.optimize import BFGS
-from ase.constraints import UnitCellFilter
 import tempfile
 import os
 

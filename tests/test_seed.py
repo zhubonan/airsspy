@@ -30,6 +30,25 @@ def test_bc_param():
     assert "Ce-O=2-3" in bcp.to_string()
 
 
+def test_buildcell_param_populate_defaults():
+    bcp = BuildcellParam().populate_defaults()
+
+    assert bcp.symmops == (2, 4)
+    assert bcp.nform == 1
+    assert bcp.slack == 0.25
+    assert bcp.overlap == 0.1
+    assert bcp.compact is True
+    assert bcp.celladapt is True
+
+    output = bcp.to_string()
+    assert "#SYMMOPS=2-4" in output
+    assert "#NFORM=1" in output
+    assert "#SLACK=0.25" in output
+    assert "#OVERLAP=0.1" in output
+    assert "#COMPACT" in output
+    assert "#CELLADAPT" in output
+
+
 def test_nested_range():
     bcp = BuildcellParam()
 
@@ -187,6 +206,7 @@ def test_all_buildcell_tag_properties():
         "fix",
         "abfix",
         "autoslack",
+        "celladapt",
         "flip",
         "surface",
         "symmorphic",
@@ -254,7 +274,6 @@ def test_all_buildcell_generic_properties():
     generic_properties = {
         "adjgen": "test_value",
         "breakamp": 1.5,
-        "celladapt": "value",
         "cellamp": 2.0,
         "cellcon": "constraint",
         "cylinder": 3.0,
@@ -511,3 +530,16 @@ def test_clear_all():
     assert bcp.formula is None
     assert bcp.fix is None
     assert len(bcp.prop_data) == 0
+
+
+def test_range_tag_random_choice():
+    """Test that RangeTag supports {'random': [2, 3, 4]} dict syntax"""
+    bcp = BuildcellParam()
+
+    # Set nform with random-choice dict
+    bcp.nform = {"random": [2, 3, 4, 6, 8]}
+    assert bcp.nform == {"random": [2, 3, 4, 6, 8]}
+
+    # Verify serialization produces #NFORM={2,3,4,6,8}
+    output = bcp.to_string()
+    assert "#NFORM={2,3,4,6,8}" in output

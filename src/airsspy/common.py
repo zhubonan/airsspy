@@ -23,3 +23,7 @@ Common module
 
 class BuildcellError(RuntimeError):
     """Exception for not been able to build the random cell"""
+
+
+class RelaxError(RuntimeError):
+    """Exception for errors during structure relaxation"""

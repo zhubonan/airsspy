@@ -38,3 +38,11 @@ These guides provide deeper understanding of AIRSS concepts and how airsspy work
 - **[Getting Started](../getting-started/index.md)** - Learn airsspy basics
 - **[How-To Guides](../how-to/index.md)** - Task-oriented guides
 - **[API Reference](../reference/index.md)** - Detailed API documentation
+
+```{toctree}
+:hidden:
+
+airss-overview
+seed-concept
+buildcell-parameters
+```

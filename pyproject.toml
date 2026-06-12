@@ -8,7 +8,7 @@ version = "0.1.4"
 description = "A wrapper for using AIRSS with python and ase"
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 authors = [
     {name = "Bonan Zhu", email = "zhubonan@outlook.com"}
 ]
@@ -22,7 +22,6 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -33,27 +32,29 @@ classifiers = [
 dependencies = [
     "ase>=3.17",
     "castepinput>=0.1",
+    "click>=8.0",
+    "jobflow>=0.1",
+    "maggma>=0.50",
     "numpy>=1.20",
+    "pandas>=1.3.0",
+    "plotly",
     "pymatgen>=2024.2.20",
+    "spglib>=1.16",
+    "tabulate",
+    "tqdm",
 ]
 
 [project.optional-dependencies]
-analysis = [
-    "pandas>=1.3.0",
-]
-full = [
-    "pandas>=1.3.0",
-    "spglib>=1.16",
-]
-test = [
+dev = [
+    "mypy",
+    "pre-commit",
     "pytest>=6.0",
     "pytest-cov",
-]
-dev = [
     "ruff",
-    "pre-commit",
-    "build",
     "twine",
+]
+ml = [
+    "torch-sim",
 ]
 docs = [
     "sphinx>=7.0",
@@ -65,6 +66,9 @@ docs = [
     "sphinx-togglebutton>=0.3",
     "ipykernel",  # For notebook execution
 ]
+
+[project.scripts]
+ap = "airsspy.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/zhubonan/airsspy"
@@ -84,7 +88,7 @@ include = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py38"
+target-version = "py39"
 
 [tool.ruff.lint]
 select = [
@@ -117,6 +121,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = ["e2e: end-to-end tests that run actual CASTEP/ABACUS/VASP executables"]
 
 [tool.coverage.run]
 source = ["src/airsspy"]

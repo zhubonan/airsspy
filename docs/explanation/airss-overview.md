@@ -112,7 +112,7 @@ Use ASE optimization algorithms:
 
 ```python
 from ase.optimize import BFGS, FIRE, BFGSLineSearch
-from ase.constraints import UnitCellFilter
+from ase.filters import UnitCellFilter
 
 # Optimize both positions and cell
 opt = BFGS(UnitCellFilter(atoms))
@@ -139,7 +139,7 @@ Here's a complete structure search workflow:
 from airsspy import SeedAtoms, save_airss_res
 from ase.calculators.emt import EMT
 from ase.optimize import BFGS
-from ase.constraints import UnitCellFilter
+from ase.filters import UnitCellFilter
 
 # 1. Define seed
 seed = SeedAtoms('Al8', cell=[3, 3, 3], pbc=True)

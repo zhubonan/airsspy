@@ -86,7 +86,7 @@ class Buildcell:
 
         cell = cellout.get_cell()
         elements, positions, _ = cellout.get_positions()
-        atoms = Atoms(symbols=elements, cell=cell, positions=positions)
+        atoms = Atoms(symbols=elements, cell=cell, positions=positions, pbc=True)
         self.res_atoms = atoms
         return atoms
 

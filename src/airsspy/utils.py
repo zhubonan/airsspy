@@ -19,16 +19,17 @@
 """
 General utility functions for AIRSS workflows
 """
+
 import io
 import re
-from typing import List, Optional, TextIO, Tuple
+from typing import Optional, TextIO
 
 import numpy as np
 from ase import Atoms
 
 
 def trim_stream(
-    stream: TextIO, start: str, end: str, extra_remove: Optional[List[str]] = None
+    stream: TextIO, start: str, end: str, extra_remove: Optional[list[str]] = None
 ) -> io.StringIO:
     """
     Select a portion of a stream, return the portion without lines
@@ -109,7 +110,7 @@ def filter_out_stream(stream: TextIO, start: str, end: str) -> io.StringIO:
 
 def calc_kpt_tuple_recip(
     structure: Atoms, mp_spacing: float = 0.05, rounding: str = "up"
-) -> Tuple[int, int, int]:
+) -> tuple[int, int, int]:
     """
     Calculate reciprocal-space sampling with real-space parameter.
 
@@ -149,7 +150,7 @@ def calc_kpt_tuple_recip(
     return tuple(int(x) for x in k_samples)
 
 
-def unique(items: List) -> List:
+def unique(items: list) -> list:
     """
     Get a list of ordered unique items.
 
@@ -166,7 +167,7 @@ def unique(items: List) -> List:
     return out
 
 
-def stream_to_list(stream: TextIO) -> List[str]:
+def stream_to_list(stream: TextIO) -> list[str]:
     """
     Convert a stream to a list of strings.
 
@@ -233,7 +234,7 @@ def extract_number_from_string(text: str, default: float = 0.0) -> float:
 
 def find_pattern_in_file(
     filename: str, pattern: str, max_matches: int = 0
-) -> List[str]:
+) -> list[str]:
     """
     Find all lines matching a pattern in a file.
 

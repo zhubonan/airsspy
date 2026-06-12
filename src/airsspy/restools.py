@@ -19,10 +19,11 @@
 """
 Tools for handling res files
 """
+
 import os
 import re
 from collections import namedtuple
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 from ase import Atoms
@@ -44,13 +45,13 @@ except ImportError:
     get_spacegroup = None
 
 
-def extract_res(fname: str) -> Dict[str, Union[str, float, int, List[str]]]:
+def extract_res(fname: str) -> dict[str, Union[str, float, int, list[str]]]:
     """
     Extract information from res file.
     Returns a dictionary.
     The structure of he res file is not extracted
     """
-    rems: List[str] = []
+    rems: list[str] = []
     title: str = ""
     with open(fname) as fh:
         for line in fh:
@@ -62,7 +63,7 @@ def extract_res(fname: str) -> Dict[str, Union[str, float, int, List[str]]]:
             if "cell" in line:
                 break
     entries = title.split()
-    res: Dict[str, Union[str, float, int, List[str]]] = {}
+    res: dict[str, Union[str, float, int, list[str]]] = {}
     res["rem"] = rems
     res["uid"] = entries[1]
     res["P"] = float(entries[2])
@@ -76,9 +77,10 @@ def extract_res(fname: str) -> Dict[str, Union[str, float, int, List[str]]]:
 
 def save_airss_res(
     atoms: Atoms,
-    info_dict: Dict[str, Any],
+    info_dict: dict[str, Any],
     fname: Optional[str] = None,
     force_write: bool = False,
+    atom_annotations: Optional[list[str]] = None,
 ) -> None:
     """
     Save the relaxed structure in res format which is compatible with the
@@ -106,7 +108,7 @@ def save_airss_res(
         + " "
         + str(nat)
         + " "
-        + sg
+        + "(" + sg.strip("()") + ")"
         + " n - 1\n"
     )
     rems = info_dict.get("rem", [])
@@ -117,13 +119,22 @@ def save_airss_res(
     with open(restmp) as resin:
         with open(fname, "w") as fout:
             # Write the title
-            fout.write(title + "\n")
+            fout.write(title)
             for line in rems:
                 fout.write("REM " + line + "\n")
             # Write the data lines
+            atom_idx = 0
             for n, line in enumerate(resin):
                 if n > 0:
+                    # Append atom annotation if provided
+                    if (
+                        atom_annotations
+                        and atom_idx < len(atom_annotations)
+                        and atom_annotations[atom_idx]
+                    ):
+                        line = line.rstrip("\n") + " " + atom_annotations[atom_idx] + "\n"
                     fout.write(line)
+                    atom_idx += 1
 
     os.remove(restmp)
     return
@@ -186,7 +197,7 @@ def parse_titl(line: str) -> TitlInfo:
     )
 
 
-def _read_res(lines: List[str]) -> Dict[str, Any]:
+def _read_res(lines: list[str]) -> dict[str, Any]:
     """
     Read a res file from a list of lines
 
@@ -216,7 +227,7 @@ def _read_res(lines: List[str]) -> Dict[str, Any]:
         if tokens[0] == "TITL":
             title_items = parse_titl(line)
 
-        elif tokens[0] == "CELL" and len(tokens) == 8:
+        elif tokens[0] == "CELL" and len(tokens) >= 8:
             abc = [float(tok) for tok in tokens[2:5]]
             ang = [float(tok) for tok in tokens[5:8]]
 
@@ -257,12 +268,13 @@ def _read_res(lines: List[str]) -> Dict[str, Any]:
 
 def _get_res_lines(
     titl,
-    species: List[str],
-    scaled_positions: List[List[float]],
-    cellpar: List[float],
-    rem_lines: Optional[List[str]] = None,
-    spins: Optional[List[float]] = None,
-) -> List[str]:
+    species: list[str],
+    scaled_positions: list[list[float]],
+    cellpar: list[float],
+    rem_lines: Optional[list[str]] = None,
+    spins: Optional[list[float]] = None,
+    atom_annotations: Optional[list[str]] = None,
+) -> list[str]:
     """
     Write RES format lines using given data
 
@@ -273,6 +285,8 @@ def _get_res_lines(
         cellpar: Cell parameters in a, b, c, alpha, beta, gamma
         rem_lines: Lines for the REM information
         spins: A list of spins to be added to each site if given
+        atom_annotations: Optional list of per-atom annotation strings
+            to append to each atom line (e.g. forces, charges).
 
     Returns:
         A list of lines for the RES file
@@ -327,15 +341,15 @@ def _get_res_lines(
         )
         if spins:
             line = line + f" {spins[i]:>8.3f}"
+        if atom_annotations and i < len(atom_annotations) and atom_annotations[i]:
+            line = line + " " + atom_annotations[i]
         lines.append(line)
 
     lines.append("END")
     return lines
 
 
-
-
-def read_res_atoms(lines: List[str]) -> tuple[TitlInfo, Atoms]:
+def read_res_atoms(lines: list[str]) -> tuple[TitlInfo, Atoms]:
     """Read a RES file, return as (TitlInfo, ase.Atoms)"""
     out = _read_res(lines)
     return out["titl"], Atoms(
@@ -347,8 +361,8 @@ def read_res_atoms(lines: List[str]) -> tuple[TitlInfo, Atoms]:
 
 
 def read_res_pmg(
-    lines: List[str],
-) -> tuple[TitlInfo, List[str], Optional[Structure], List[float]]:
+    lines: list[str],
+) -> tuple[TitlInfo, list[str], Optional[Structure], list[float]]:
     """Read a RES file, return as (TitlInfo, rem_lines, pymatgen.Structure, spins)"""
     out = _read_res(lines)
     cell = cellpar_to_cell(out["cellpar"])
@@ -372,7 +386,7 @@ def get_spacegroup_atoms(
     )
 
 
-def get_minsep(species: List[str], distance_matrix: np.ndarray) -> Dict[str, float]:
+def get_minsep(species: list[str], distance_matrix: np.ndarray) -> dict[str, float]:
     """
     Calculate minimum separations given species and distance matrix
 
@@ -400,7 +414,7 @@ def get_minsep(species: List[str], distance_matrix: np.ndarray) -> Dict[str, flo
     return all_minseps
 
 
-def format_minsep(minsep: Dict[str, float]) -> str:
+def format_minsep(minsep: dict[str, float]) -> str:
     """Return string representation of the minimum separations"""
     string = ""
     for key, value in minsep.items():
@@ -422,9 +436,9 @@ class RESFile:
     def __init__(
         self,
         structure: Union[Atoms, Structure, None],
-        data: Dict[str, Any],
-        lines: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        data: dict[str, Any],
+        lines: Optional[list[str]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize a RESFile object.
@@ -453,7 +467,7 @@ class RESFile:
         self.metadata = metadata if metadata else {}
 
     @property
-    def rem(self) -> Optional[List[str]]:
+    def rem(self) -> Optional[list[str]]:
         """REM lines"""
         return self._data.get("rem")
 
@@ -465,7 +479,7 @@ class RESFile:
         return AseAtomsAdaptor.get_atoms(self.structure)
 
     @property
-    def data(self) -> Dict[str, Any]:
+    def data(self) -> dict[str, Any]:
         """Underlying data of the object"""
         return self._data
 
@@ -510,7 +524,7 @@ class RESFile:
         return self._data.get("spin", 0.0)
 
     @property
-    def spins(self) -> List[float]:
+    def spins(self) -> list[float]:
         """Spin values for each atom"""
         return self._data.get("spins", [])
 
@@ -547,7 +561,7 @@ class RESFile:
 
     @classmethod
     def from_lines(
-        cls, lines: List[str], include_structure: bool = True, only_titl: bool = False
+        cls, lines: list[str], include_structure: bool = True, only_titl: bool = False
     ) -> "RESFile":
         """Construct from lines"""
         if include_structure:
@@ -599,7 +613,49 @@ class RESFile:
                 only_titl=only_titl,
             )
 
-    def to_res_lines(self) -> List[str]:
+    @classmethod
+    def from_packed(
+        cls, fname: str, include_structure: bool = True, only_titl: bool = False
+    ) -> list["RESFile"]:
+        """
+        Read data from a packed file.
+
+        A packed file is a file with multiple SHELX structures concatenated.
+        Each structure is separated by an ``END`` line.
+
+        Args:
+            fname: Path to the packed RES file.
+            include_structure: Whether to parse structures.
+            only_titl: Whether to only parse TITL lines.
+
+        Returns:
+            A list of RESFile objects.
+        """
+        res_objs = []
+        with open(fname) as stream:
+            lines = []
+            for line in stream:
+                if line.startswith("END"):
+                    res_objs.append(
+                        cls.from_lines(
+                            lines,
+                            include_structure=include_structure,
+                            only_titl=only_titl,
+                        )
+                    )
+                    lines = []
+                else:
+                    lines.append(line)
+        return res_objs
+
+    @property
+    def n_formula_units(self) -> Optional[int]:
+        """Number of formula units"""
+        if not self.structure:
+            return None
+        return self.composition.get_reduced_formula_and_factor()[1]
+
+    def to_res_lines(self) -> list[str]:
         """Get the raw RES representation of this object"""
 
         species = [site.symbol for site in self.structure.species]
@@ -624,7 +680,16 @@ class RESFile:
         lines.append("")  # Add trailing newline
         return lines
 
-    def get_minsep(self, string: bool = False) -> Union[Dict[str, float], str]:
+    def to_file(self, fname: Union[str, os.PathLike]) -> None:
+        """Write this RES file to disk."""
+        lines = [line.rstrip("\n") for line in self.to_res_lines()]
+        content = "\n".join(lines)
+        if content and not content.endswith("\n"):
+            content += "\n"
+        with open(fname, "w") as fhandle:
+            fhandle.write(content)
+
+    def get_minsep(self, string: bool = False) -> Union[dict[str, float], str]:
         """Return species-wise minimum separations"""
 
         minsep = get_minsep(self.structure.species, self.structure.distance_matrix)

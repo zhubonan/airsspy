@@ -4,7 +4,7 @@ This guide covers how to install airsspy and its dependencies.
 
 ## Requirements
 
-- Python 3.8 or later
+- Python 3.9 or later
 - pip or uv package manager
 - AIRSS buildcell executable (for structure generation)
 
@@ -29,7 +29,7 @@ For development or to get the latest version from source:
 ```bash
 git clone https://github.com/zhubonan/airsspy.git
 cd airsspy
-pip install -e .[full,test,docs]
+pip install -e ".[dev,docs]"
 ```
 
 Or with uv:
@@ -37,22 +37,23 @@ Or with uv:
 ```bash
 git clone https://github.com/zhubonan/airsspy.git
 cd airsspy
-uv pip install -e .[full,test,docs]
+uv pip install -e ".[dev,docs]"
 ```
 
 ## Optional Dependencies
 
 airsspy has several optional dependency groups:
 
-- **`analysis`**: Pandas for data analysis
-- **`full`**: All optional dependencies (pandas, spglib)
-- **`test`**: Testing tools (pytest, pytest-cov)
+- **`dev`**: Development and test tools (pytest, pytest-cov, ruff, mypy,
+  pre-commit, twine)
+- **`ml`**: Optional machine-learning potential support through torch-sim
 - **`docs`**: Documentation building tools (Sphinx, themes, extensions)
 
 Install with optional dependencies:
 
 ```bash
-pip install airsspy[full]
+pip install "airsspy[ml]"
+pip install "airsspy[docs]"
 ```
 
 ## Installing AIRSS
@@ -94,8 +95,14 @@ airsspy depends on:
 
 - **ase** - Atomic Simulation Environment
 - **castepinput** (≥0.1) - CASTEP input file handling
+- **click** - Command-line interface
+- **jobflow** and **maggma** - Workflow and MongoDB-backed result storage
 - **numpy** (≥1.20) - Numerical computing
+- **pandas** - DataFrame analysis helpers
+- **plotly** - Plotting support
 - **pymatgen** (≥2022.0.0) - Interface for reading SHELX files
+- **spglib** - Symmetry detection
+- **tabulate** and **tqdm** - CLI tables and progress display
 
 These are automatically installed when you install airsspy.
 
@@ -127,9 +134,10 @@ If you get an error about buildcell not being found:
 
 If you encounter import errors:
 
-1. Verify you're using Python 3.8 or later: `python --version`
+1. Verify you're using Python 3.9 or later: `python --version`
 2. Try installing in a fresh virtual environment
-3. Ensure all dependencies are installed: `pip install airsspy[full]`
+3. Ensure optional dependencies are installed when needed, for example
+   `pip install "airsspy[ml]"` for ML workflows
 
 ## Next Steps
 

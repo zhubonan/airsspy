@@ -26,7 +26,7 @@ Follow a complete example to perform your first random structure search.
 
 Before you begin, you should have:
 
-- Python 3.8 or later
+- Python 3.9 or later
 - Basic familiarity with Python programming
 - Basic understanding of atomic structures (helpful but not required)
 - The AIRSS buildcell executable installed (see [Installation](installation.md))
@@ -38,10 +38,18 @@ We recommend following this order:
 1. **[Installation](installation.md)** - Set up airsspy and AIRSS on your system
 2. **[Quickstart Tutorial](quickstart.md)** - Complete your first structure search
 3. **[How-To Guides](../how-to/index.md)** - Learn specific tasks and techniques
-4. **[Explanations](../explanation/index.md)** - Understand AIRSS concepts in depth
+4. **[Command Line](../reference/cli.md)** - Use the installed `ap` workflow commands
+5. **[Explanations](../explanation/index.md)** - Understand AIRSS concepts in depth
 
 ## Need Help?
 
 - Check the [API Reference](../reference/index.md) for detailed class and function documentation
 - Visit the [GitHub repository](https://github.com/zhubonan/airsspy) to report issues or ask questions
 - Read the [AIRSS documentation](http://www.mtg.msm.cam.ac.uk/Codes/AIRSS) for background on the AIRSS package
+
+```{toctree}
+:hidden:
+
+installation
+quickstart
+```

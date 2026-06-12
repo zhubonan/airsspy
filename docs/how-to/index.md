@@ -27,6 +27,13 @@ Master different approaches for generating random structures with buildcell.
 
 Read, write, and analyze AIRSS .res output files.
 :::
+
+:::{grid-item-card} Command Line Workflows
+:link: ../reference/cli
+:link-type: doc
+
+Run local searches, rank results, convert files, and query jobflow output.
+:::
 ::::
 
 ## About How-To Guides
@@ -38,3 +45,11 @@ These guides assume you're familiar with the basics from the [Quickstart Tutoria
 - **[Getting Started](../getting-started/index.md)** - If you're new to airsspy
 - **[Explanations](../explanation/index.md)** - For deeper understanding of concepts
 - **[API Reference](../reference/index.md)** - For detailed class and function documentation
+
+```{toctree}
+:hidden:
+
+create-seeds
+generate-structures
+work-with-res-files
+```
