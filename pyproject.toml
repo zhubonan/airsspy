@@ -54,7 +54,7 @@ dev = [
     "twine",
 ]
 ml = [
-    "torch-sim",
+    "torch-sim-atomistic>=0.4.0; python_version >= '3.12'",
 ]
 docs = [
     "sphinx>=7.0",

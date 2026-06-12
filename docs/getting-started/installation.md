@@ -46,7 +46,7 @@ airsspy has several optional dependency groups:
 
 - **`dev`**: Development and test tools (pytest, pytest-cov, ruff, mypy,
   pre-commit, twine)
-- **`ml`**: Optional machine-learning potential support through torch-sim
+- **`ml`**: Optional machine-learning potential support through torch-sim-atomistic
 - **`docs`**: Documentation building tools (Sphinx, themes, extensions)
 
 Install with optional dependencies:
