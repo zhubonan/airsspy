@@ -27,8 +27,8 @@ This tutorial demonstrates a complete AIRSS workflow: creating a seed, generatin
 ```{code-cell} ipython3
 from airsspy import SeedAtoms, Buildcell
 from ase.calculators.lj import LennardJones
+from ase.filters import UnitCellFilter
 from ase.optimize import BFGS
-from ase.constraints import UnitCellFilter
 ```
 
 ### Step 2: Create a Seed Structure
@@ -186,8 +186,8 @@ Here's the full working example:
 ```{code-cell} ipython3
 from airsspy import SeedAtoms
 from ase.calculators.lj import LennardJones
+from ase.filters import UnitCellFilter
 from ase.optimize import BFGS
-from ase.constraints import UnitCellFilter
 
 # Create seed
 seed = SeedAtoms('Al', cell=[2, 2, 2], pbc=True)

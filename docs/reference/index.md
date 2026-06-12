@@ -8,31 +8,38 @@ Complete API documentation for airsspy modules and classes.
 :gutter: 3
 
 :::{grid-item-card} airsspy.seed
-:link: api/airsspy/airsspy.seed
+:link: ../apidocs/airsspy/airsspy.seed
 :link-type: doc
 
 SeedAtoms, BuildcellParam, and tag classes for seed generation.
 :::
 
 :::{grid-item-card} airsspy.build
-:link: api/airsspy/airsspy.build
+:link: ../apidocs/airsspy/airsspy.build
 :link-type: doc
 
 Buildcell class for interfacing with AIRSS buildcell executable.
 :::
 
 :::{grid-item-card} airsspy.restools
-:link: api/airsspy/airsspy.restools
+:link: ../apidocs/airsspy/airsspy.restools
 :link-type: doc
 
 RESFile and utilities for handling CASTEP .res files.
 :::
 
 :::{grid-item-card} airsspy.utils
-:link: api/airsspy/airsspy.utils
+:link: ../apidocs/airsspy/airsspy.utils
 :link-type: doc
 
 Utility functions for file parsing and data processing.
+:::
+
+:::{grid-item-card} Command Line
+:link: cli
+:link-type: doc
+
+Installed `ap` command groups and workflow examples.
 :::
 ::::
 
@@ -65,15 +72,19 @@ Utility functions for file parsing and data processing.
 - {py:func}`~airsspy.format_minsep` - Format minsep dictionary
 - {py:func}`~airsspy.calc_kpt_tuple_recip` - Calculate k-point mesh
 
+### Command Line Modules
+
+- {py:mod}`airsspy.cli.main` - Top-level `ap` command and global options
+- {py:mod}`airsspy.cli.cmd_run` - Local search, relaxation, CRUD, and single-point commands
+- {py:mod}`airsspy.cli.cmd_rank` - Structure ranking and convex-hull command
+- {py:mod}`airsspy.cli.cmd_convert` - RES/extxyz conversion command
+- {py:mod}`airsspy.cli.cmd_pack` - Pack and unpack commands
+- {py:mod}`airsspy.cli.cmd_deploy` - jobflow deployment commands
+- {py:mod}`airsspy.cli.cmd_db` - jobflow database query commands
+
 ## Module Index
 
-```{eval-rst}
-.. autosummary::
-   :toctree: api
-   :recursive:
-
-   airsspy
-```
+The generated module index is available at [API Modules](../apidocs/index).
 
 ## Usage Examples
 
@@ -141,3 +152,10 @@ from airsspy.restools import RESFile, TitlInfo
 - [Getting Started](../getting-started/index.md) - Learn the basics
 - [How-To Guides](../how-to/index.md) - Task-oriented guides
 - [Explanations](../explanation/index.md) - Understand concepts
+
+```{toctree}
+:hidden:
+
+cli
+../apidocs/index
+```

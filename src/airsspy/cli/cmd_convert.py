@@ -20,13 +20,13 @@ def convert(input_path, output_path, label):
 
     \b
     Bulk conversion (all structures):
-      airss convert packed.res output.xyz       # .res → extxyz
-      airss convert input.xyz output_dir/       # extxyz → unpacked .res files
+      ap convert packed.res output.xyz       # .res → extxyz
+      ap convert input.xyz output_dir/       # extxyz → unpacked .res files
 
     \b
     Extract a single structure by label:
-      airss convert -l Si-002 packed.res Si-002.res
-      airss convert -l Si-001 input.xyz Si-001.res
+      ap convert -l Si-002 packed.res Si-002.res
+      ap convert -l Si-001 input.xyz Si-001.res
     """
     from airsspy.convert import extract_structure, extxyz_to_res, res_to_extxyz
 

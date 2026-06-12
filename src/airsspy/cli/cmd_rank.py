@@ -336,14 +336,14 @@ def rank(
     Example usage:
 
     \b
-      cat *.res | airss rank
-      airss rank *.res -t 20
-      airss rank structures.xyz --input-format extxyz
-      airss rank structures.xyz --label-field structure_id
-      cat packed.res | airss rank -de 0.05 -f SiO2
-      cat *.res | airss rank -u 0.1 -s
-      cat *.res | airss rank -m -el Si,O
-      cat *.res | airss rank -m -el Si,O --plot hull.html
+      cat *.res | ap rank
+      ap rank *.res -t 20
+      ap rank structures.xyz --input-format extxyz
+      ap rank structures.xyz --label-field structure_id
+      cat packed.res | ap rank -de 0.05 -f SiO2
+      cat *.res | ap rank -u 0.1 -s
+      cat *.res | ap rank -m -el Si,O
+      cat *.res | ap rank -m -el Si,O --plot hull.html
     """
     from airsspy.ranking import (
         apply_external_pressure,

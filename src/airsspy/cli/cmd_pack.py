@@ -72,7 +72,8 @@ def unpack(input, output_dir, fmt):
     \b
       ap unpack packed.res output_dir/
       ap unpack packed.xyz output_dir/
-      ap unpack packed.xyz output_dir/ --format res
+
+    Use ``ap convert`` to change between RES and extxyz formats.
     """
     inp = Path(input)
     out = Path(output_dir)
