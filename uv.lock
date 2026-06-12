@@ -103,7 +103,7 @@ requires-dist = [
     { name = "plotly" },
     { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "pydata-sphinx-theme", marker = "extra == 'docs'", specifier = ">=0.15" },
-    { name = "pymatgen", specifier = ">=2022.0.0" },
+    { name = "pymatgen", specifier = ">=2024.2.20" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
