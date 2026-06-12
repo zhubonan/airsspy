@@ -21,6 +21,7 @@ from .runners import (
     AirssCastepRelaxRunner,
     AirssGulpRelaxRunner,
     AirssPp3RelaxRunner,
+    AirssVaspRelaxRunner,
     compose_task_doc,
     run_buildcell,
 )
@@ -129,8 +130,6 @@ class AirssSearchMaker(Maker):
                         struct_name, struct_content, param_content, seed_name=seed_name
                     )
                 elif self.code == "abacus":
-                    from ..abacustools import compose_abacus_task_doc
-
                     struct_content = Path(struct_name + ".cell").read_text()
                     param_content = (
                         paraminput.get_string()
@@ -139,6 +138,19 @@ class AirssSearchMaker(Maker):
                     )
                     runner = AirssAbacusRelaxRunner(
                         executable=self.executable,
+                        max_iterations=self.max_iterations,
+                    )
+                    return_code = runner.run(struct_name, struct_content, param_content)
+                elif self.code == "vasp":
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssVaspRelaxRunner(
+                        executable=self.executable,
+                        max_fails=self.max_fails,
                         max_iterations=self.max_iterations,
                     )
                     return_code = runner.run(struct_name, struct_content, param_content)
@@ -154,6 +166,16 @@ class AirssSearchMaker(Maker):
                     from ..abacustools import compose_abacus_task_doc
 
                     task_doc = compose_abacus_task_doc(struct_name)
+                elif self.code == "vasp":
+                    from ..vasptools import compose_vasp_task_doc
+
+                    if return_code != 0 and not runner.last_outputs_fresh:
+                        raise RuntimeError(
+                            "VASP did not produce fresh parseable output"
+                        )
+                    task_doc = compose_vasp_task_doc(
+                        struct_name, metadata=runner.last_metadata
+                    )
                 else:
                     task_doc = compose_task_doc(struct_name)
                 result_doc = AirssResultDoc(
@@ -320,8 +342,6 @@ class AirssRelaxMaker(Maker):
                         struct_name, struct_content, param_content, seed_name=seed_name
                     )
                 elif self.code == "abacus":
-                    from ..abacustools import compose_abacus_task_doc
-
                     struct_content = (
                         cellinput.get_string()
                         if hasattr(cellinput, "get_string")
@@ -337,6 +357,23 @@ class AirssRelaxMaker(Maker):
                         max_iterations=self.max_iterations,
                     )
                     return_code = runner.run(struct_name, struct_content, param_content)
+                elif self.code == "vasp":
+                    struct_content = (
+                        cellinput.get_string()
+                        if hasattr(cellinput, "get_string")
+                        else str(cellinput)
+                    )
+                    param_content = (
+                        paraminput.get_string()
+                        if hasattr(paraminput, "get_string")
+                        else str(paraminput)
+                    )
+                    runner = AirssVaspRelaxRunner(
+                        executable=self.executable,
+                        max_fails=self.max_fails,
+                        max_iterations=self.max_iterations,
+                    )
+                    return_code = runner.run(struct_name, struct_content, param_content)
                 else:
                     raise ValueError(f"Unknown code: {self.code}")
 
@@ -348,6 +385,16 @@ class AirssRelaxMaker(Maker):
                     from ..abacustools import compose_abacus_task_doc
 
                     task_doc = compose_abacus_task_doc(struct_name)
+                elif self.code == "vasp":
+                    from ..vasptools import compose_vasp_task_doc
+
+                    if return_code != 0 and not runner.last_outputs_fresh:
+                        raise RuntimeError(
+                            "VASP did not produce fresh parseable output"
+                        )
+                    task_doc = compose_vasp_task_doc(
+                        struct_name, metadata=runner.last_metadata
+                    )
                 else:
                     task_doc = compose_task_doc(struct_name)
                 result_doc = AirssResultDoc(

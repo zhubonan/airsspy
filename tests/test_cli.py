@@ -76,6 +76,61 @@ def test_deploy_search_dryrun(tmp_path, monkeypatch):
         assert "task: geometryoptimization" in result.output
 
 
+def test_deploy_search_vasp_dryrun_uses_incar(tmp_path):
+    """VASP deploy search dryrun reads INCAR text and selects VASP executable."""
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path("Si.cell").write_text(
+            "%BLOCK LATTICE_CART\n5.43 0 0\n0 5.43 0\n0 0 5.43\n"
+            "%ENDBLOCK LATTICE_CART\n"
+        )
+        Path("Si.INCAR").write_text("ENCUT = 400\n")
+
+        result = runner.invoke(
+            cli,
+            [
+                "deploy",
+                "search",
+                "--seed",
+                "Si",
+                "--project",
+                "test",
+                "--num",
+                "1",
+                "--code",
+                "vasp",
+                "--dryrun",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Executable: vasp_std, Code: vasp" in result.output
+    assert "ENCUT = 400" in result.output
+
+
+def test_deploy_search_rejects_unknown_code():
+    """Deploy validates code choices before indexing suffix maps."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "deploy",
+            "search",
+            "--seed",
+            "Si",
+            "--project",
+            "test",
+            "--num",
+            "1",
+            "--code",
+            "unknown",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--code'" in result.output
+
+
 def test_db_commands_help():
     """Test all db subcommands have valid help."""
     runner = CliRunner()

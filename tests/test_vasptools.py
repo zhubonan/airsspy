@@ -1,5 +1,6 @@
 """Tests for VASP input helpers."""
 
+import gzip
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -109,6 +110,52 @@ def test_assemble_potcar_finds_common_pymatgen_layout(tmp_path):
     vasptools.assemble_potcar(structure, tmp_path / "POTCAR", potcar_dir=str(potcars))
 
     assert (tmp_path / "POTCAR").read_text() == "si-potcar\n"
+
+
+def test_assemble_potcar_reads_compressed_pymatgen_layout(tmp_path):
+    potcars = tmp_path / "potcars"
+    (potcars / "POT_GGA_PAW_PBE").mkdir(parents=True)
+    with gzip.open(potcars / "POT_GGA_PAW_PBE" / "POTCAR.Si.gz", "wb") as handle:
+        handle.write(b"si-potcar-gz\n")
+
+    structure = [SimpleNamespace(specie=SimpleNamespace(symbol="Si"))]
+    vasptools.assemble_potcar(structure, tmp_path / "POTCAR", potcar_dir=str(potcars))
+
+    assert (tmp_path / "POTCAR").read_text() == "si-potcar-gz\n"
+
+
+def test_potcar_root_uses_pymatgen_settings(monkeypatch, tmp_path):
+    """POTCAR root discovery should honor pymatgen's .pmgrc settings."""
+    from pymatgen.core import SETTINGS
+
+    monkeypatch.delenv("AIRSSPY_POTCAR_DIR", raising=False)
+    monkeypatch.delenv("PMG_VASP_PSP_DIR", raising=False)
+    monkeypatch.delenv("VASP_PSP_DIR", raising=False)
+    monkeypatch.setitem(SETTINGS, "PMG_VASP_PSP_DIR", str(tmp_path))
+
+    assert vasptools._potcar_root() == tmp_path
+
+
+def test_potcar_root_uses_pymatgen_pmgrc_yml(monkeypatch, tmp_path):
+    """POTCAR root discovery should honor the .pmgrc.yml spelling."""
+    import pymatgen.core as pmg_core
+
+    potcars = tmp_path / "potcars"
+    potcars.mkdir()
+    settings_path = tmp_path / ".pmgrc.yaml"
+    settings_path.with_suffix(".yml").write_text(
+        f"PMG_VASP_PSP_DIR: {potcars}\n"
+    )
+
+    monkeypatch.delenv("AIRSSPY_POTCAR_DIR", raising=False)
+    monkeypatch.delenv("PMG_VASP_PSP_DIR", raising=False)
+    monkeypatch.delenv("VASP_PSP_DIR", raising=False)
+    monkeypatch.delenv("PMG_CONFIG_FILE", raising=False)
+    monkeypatch.delitem(pmg_core.SETTINGS, "PMG_VASP_PSP_DIR", raising=False)
+    monkeypatch.setattr(pmg_core, "SETTINGS_FILE", str(settings_path))
+    monkeypatch.setattr(pmg_core, "OLD_SETTINGS_FILE", str(tmp_path / "old.yaml"))
+
+    assert vasptools._potcar_root() == potcars
 
 
 def test_prepare_vasp_inputs_uses_configurable_input_set(monkeypatch, tmp_path):

@@ -60,22 +60,17 @@ def _resolve_vasp_executable() -> str:
 
 def _resolve_vasp_potcar_dir() -> str:
     """Return a POTCAR root without requiring POTCAR files in the repo."""
-    for env_name in (
-        VASP_POTCAR_DIR_ENV,
-        "AIRSSPY_POTCAR_DIR",
-        "PMG_VASP_PSP_DIR",
-        "VASP_PSP_DIR",
-    ):
-        value = os.environ.get(env_name)
-        if not value:
-            continue
-        path = Path(value).expanduser()
+    from airsspy.vasptools import _potcar_root
+
+    root = _potcar_root(os.environ.get(VASP_POTCAR_DIR_ENV))
+    if root is not None:
+        path = root.expanduser()
         if path.is_dir():
             return str(path)
-        pytest.skip(f"{env_name} does not point to a directory: {value}")
+        pytest.skip(f"Configured VASP POTCAR root does not point to a directory: {root}")
     pytest.skip(
         f"{VASP_POTCAR_DIR_ENV}, AIRSSPY_POTCAR_DIR, PMG_VASP_PSP_DIR, "
-        "or VASP_PSP_DIR must be set for VASP e2e tests"
+        "VASP_PSP_DIR, or pymatgen .pmgrc must be set for VASP e2e tests"
     )
 
 

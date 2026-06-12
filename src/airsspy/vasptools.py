@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib
 import os
@@ -113,9 +114,61 @@ def structure_from_res(path: str | Path):
 def _potcar_root(potcar_dir: str | None = None) -> Path | None:
     if potcar_dir:
         return Path(potcar_dir)
-    env = os.environ.get("AIRSSPY_POTCAR_DIR")
-    if env:
-        return Path(env)
+    for env_name in ("AIRSSPY_POTCAR_DIR",):
+        env = os.environ.get(env_name)
+        if env:
+            return Path(env)
+    try:
+        import pymatgen.core as pmg_core
+    except Exception:
+        pmg_core = None
+    for setting_name in ("PMG_VASP_PSP_DIR", "PMG_VAP_PSP_DIR"):
+        value = _pymatgen_setting(pmg_core, setting_name)
+        if value:
+            return Path(str(value))
+    for env_name in ("PMG_VASP_PSP_DIR", "VASP_PSP_DIR"):
+        env = os.environ.get(env_name)
+        if env:
+            return Path(env)
+    return None
+
+
+def _pymatgen_setting(pmg_core, setting_name: str) -> Any:
+    """Read pymatgen settings, including .pmgrc.yml compatibility."""
+    if pmg_core is None:
+        return None
+    settings = getattr(pmg_core, "SETTINGS", {})
+    value = settings.get(setting_name)
+    if value:
+        return value
+
+    load_settings = getattr(pmg_core, "_load_pmg_settings", None)
+    if not callable(load_settings):
+        return None
+
+    candidate_paths = []
+    for attr in ("SETTINGS_FILE", "OLD_SETTINGS_FILE"):
+        path = getattr(pmg_core, attr, None)
+        if path:
+            candidate_paths.append(Path(path).with_suffix(".yml"))
+
+    original_config = os.environ.get("PMG_CONFIG_FILE")
+    try:
+        for path in candidate_paths:
+            if not path.is_file():
+                continue
+            os.environ["PMG_CONFIG_FILE"] = str(path)
+            try:
+                value = load_settings().get(setting_name)
+            except Exception:
+                value = None
+            if value:
+                return value
+    finally:
+        if original_config is None:
+            os.environ.pop("PMG_CONFIG_FILE", None)
+        else:
+            os.environ["PMG_CONFIG_FILE"] = original_config
     return None
 
 
@@ -148,14 +201,27 @@ def _input_set_potcar_symbol_map(input_set, fallback_structure) -> dict[str, str
 def _find_potcar_file(root: Path, symbol: str) -> Path:
     candidates = [
         root / symbol / "POTCAR",
+        root / symbol / "POTCAR.gz",
         root / f"{symbol}.POTCAR",
+        root / f"{symbol}.POTCAR.gz",
         root / f"POTCAR.{symbol}",
+        root / f"POTCAR.{symbol}.gz",
         root / "potpaw_PBE" / symbol / "POTCAR",
+        root / "potpaw_PBE" / symbol / "POTCAR.gz",
         root / "potpaw_PBE" / f"{symbol}.POTCAR",
+        root / "potpaw_PBE" / f"{symbol}.POTCAR.gz",
         root / "potpaw_PBE" / f"POTCAR.{symbol}",
+        root / "potpaw_PBE" / f"POTCAR.{symbol}.gz",
         root / "POT_GGA_PAW_PBE" / symbol / "POTCAR",
+        root / "POT_GGA_PAW_PBE" / symbol / "POTCAR.gz",
         root / "POT_GGA_PAW_PBE" / f"{symbol}.POTCAR",
+        root / "POT_GGA_PAW_PBE" / f"{symbol}.POTCAR.gz",
         root / "POT_GGA_PAW_PBE" / f"POTCAR.{symbol}",
+        root / "POT_GGA_PAW_PBE" / f"POTCAR.{symbol}.gz",
+        root / "POT_PAW_PBE_64" / f"POTCAR.{symbol}",
+        root / "POT_PAW_PBE_64" / f"POTCAR.{symbol}.gz",
+        root / "POT_GGA_PAW_PBE_54" / f"POTCAR.{symbol}",
+        root / "POT_GGA_PAW_PBE_54" / f"POTCAR.{symbol}.gz",
     ]
     for candidate in candidates:
         if candidate.is_file():
@@ -172,6 +238,14 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             hsh.update(chunk)
     return hsh.hexdigest()
+
+
+def _read_potcar_bytes(path: Path) -> bytes:
+    """Read a POTCAR file, transparently handling pymatgen-style gzip files."""
+    if path.suffix == ".gz":
+        with gzip.open(path, "rb") as handle:
+            return handle.read()
+    return path.read_bytes()
 
 
 def assemble_potcar(
@@ -193,7 +267,7 @@ def assemble_potcar(
         for element in _unique_species(structure):
             symbol = resolved_symbols.get(element, potcar_map.get(element, element))
             source = _find_potcar_file(root, symbol)
-            content = source.read_bytes()
+            content = _read_potcar_bytes(source)
             out.write(content)
             if not content.endswith(b"\n"):
                 out.write(b"\n")

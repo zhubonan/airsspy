@@ -14,6 +14,14 @@ SUFFIX_MAP = {
     "vasp": ".INCAR",
     "ml": None,
 }
+DEPLOY_CODES = tuple(code for code, suffix in SUFFIX_MAP.items() if suffix is not None)
+
+
+def _load_paraminput(path: str | Path):
+    """Load non-VASP deploy parameter files using the existing CASTEP parser."""
+    from castepinput.inputs import ParamInput
+
+    return ParamInput.from_file(path)
 
 
 @click.group("deploy")
@@ -55,7 +63,11 @@ def deploy():
     help="Buildcell timeout in seconds",
 )
 @click.option(
-    "--code", default="castep", show_default=True, help="Code to use: castep, gulp, pp3"
+    "--code",
+    default="castep",
+    show_default=True,
+    type=click.Choice(DEPLOY_CODES),
+    help="Code to use",
 )
 @click.option("--dryrun", is_flag=True, help="Print configuration without submitting")
 @click.pass_context
@@ -73,8 +85,6 @@ def deploy_search(
     dryrun,
 ):
     """Deploy an AIRSS search using jobflow."""
-    from castepinput.inputs import ParamInput
-
     seed_content = Path(seed + ".cell").read_text()
     param_content = Path(seed + SUFFIX_MAP[code]).read_text()
 
@@ -85,6 +95,8 @@ def deploy_search(
         exe = "pp3"
     elif code == "abacus" and "castep" in exe:
         exe = "abacus"
+    elif code == "vasp" and "castep" in exe:
+        exe = "vasp_std"
 
     if dryrun:
         click.echo(f"Project: {project}, Seed: {seed}")
@@ -132,7 +144,9 @@ def deploy_search(
         job = maker_i.make(
             seed_name=seed,
             seed_content=seed_content,
-            paraminput=ParamInput.from_file(seed + SUFFIX_MAP[code]),
+            paraminput=param_content
+            if code == "vasp"
+            else _load_paraminput(seed + SUFFIX_MAP[code]),
             project_name=project,
         )
         jobs.append(job)
@@ -167,7 +181,12 @@ def deploy_search(
 @click.option("--exe", default="castep.mpi", show_default=True, help="Executable name")
 @click.option("--cycles", default=4, type=int, show_default=True)
 @click.option("--max-iterations", default=200, type=int, show_default=True)
-@click.option("--code", default="castep", show_default=True)
+@click.option(
+    "--code",
+    default="castep",
+    show_default=True,
+    type=click.Choice(DEPLOY_CODES),
+)
 @click.option("--dryrun", is_flag=True)
 @click.pass_context
 def deploy_relax(
@@ -185,7 +204,7 @@ def deploy_relax(
 ):
     """Deploy relaxation of existing structures using jobflow."""
     from ase.io import read as ase_read
-    from castepinput.inputs import CellInput, ParamInput
+    from castepinput.inputs import CellInput
     from pymatgen.io.ase import AseAtomsAdaptor
 
     from airsspy.jf.jobs import AirssRelaxMaker
@@ -197,8 +216,12 @@ def deploy_relax(
         exe = "pp3"
     elif code == "abacus" and "castep" in exe:
         exe = "abacus"
+    elif code == "vasp" and "castep" in exe:
+        exe = "vasp_std"
 
-    paraminput = ParamInput.from_file(param)
+    paraminput = (
+        Path(param).read_text() if code == "vasp" else _load_paraminput(param)
+    )
 
     cell_files = list(Path(".").glob(cell))
     if not cell_files:

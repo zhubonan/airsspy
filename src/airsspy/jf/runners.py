@@ -649,6 +649,7 @@ class AirssVaspRelaxRunner:
         self.max_fails = max_fails
         self.max_iterations = max_iterations
         self.last_metadata: dict | None = None
+        self.last_outputs_fresh = False
 
     def clean_failed(self, struct_name: str) -> None:
         clean_files(
@@ -700,14 +701,49 @@ class AirssVaspRelaxRunner:
             )
         return output.returncode
 
-    def _read_vasp_status(self, workdir: Path) -> tuple[bool, int] | None:
+    def _output_mtimes(self, workdir: Path) -> dict[str, int | None]:
+        """Return nanosecond mtimes for outputs that identify a VASP cycle."""
+        mtimes: dict[str, int | None] = {}
+        for name in ("vasprun.xml", "CONTCAR"):
+            path = workdir / name
+            mtimes[name] = path.stat().st_mtime_ns if path.is_file() else None
+        return mtimes
+
+    def _vasprun_updated(
+        self,
+        workdir: Path,
+        before: dict[str, int | None],
+    ) -> bool:
+        """Return True if the current VASP cycle produced a fresh vasprun.xml."""
+        after = self._output_mtimes(workdir)
+        return (
+            after["vasprun.xml"] is not None
+            and after["vasprun.xml"] != before.get("vasprun.xml")
+        )
+
+    def _read_vasp_status(
+        self,
+        workdir: Path,
+        before_mtimes: dict[str, int | None] | None = None,
+    ) -> tuple[bool, int] | None:
         """Return ``(converged, ionic_steps)`` for the latest VASP run."""
+        if before_mtimes is not None and not self._vasprun_updated(
+            workdir, before_mtimes
+        ):
+            logger.warning("VASP did not update vasprun.xml in %s", workdir)
+            return None
         try:
             from ..vasptools import _parse_vasprun
 
             data = _parse_vasprun(workdir)
         except Exception as exc:
             logger.warning("Unable to parse VASP status in %s: %s", workdir, exc)
+            return None
+
+        if not data:
+            logger.warning(
+                "Unable to parse VASP status in %s: missing vasprun.xml", workdir
+            )
             return None
 
         if "parse_error" in data:
@@ -747,6 +783,7 @@ class AirssVaspRelaxRunner:
         metadata = self.prepare_inputs(
             struct_name, cell_content, incar_content, kpoints_path=kpoints_path
         )
+        self.last_outputs_fresh = False
         workdir = Path(metadata["workdir"])
         fail_counter = 0
         success_counter = 0
@@ -760,8 +797,11 @@ class AirssVaspRelaxRunner:
 
             cycle += 1
             logger.info("Starting VASP relaxation cycle %d for %s", cycle, struct_name)
+            before_mtimes = self._output_mtimes(workdir)
             return_code = self._run_vasp_process(workdir, cycle)
             if return_code != 0:
+                if self._read_vasp_status(workdir, before_mtimes) is not None:
+                    self.last_outputs_fresh = True
                 fail_counter += 1
                 logger.warning(
                     "VASP cycle %d exited with return code %d",
@@ -771,10 +811,11 @@ class AirssVaspRelaxRunner:
                 continue
 
             fail_counter = 0
-            status = self._read_vasp_status(workdir)
+            status = self._read_vasp_status(workdir, before_mtimes)
             if status is None:
                 fail_counter += 1
                 continue
+            self.last_outputs_fresh = True
 
             converged, ionic_steps = status
             iter_counter += max(ionic_steps, 1)

@@ -1,7 +1,7 @@
 """Tests for jobflow Makers (AirssSearchMaker, AirssRelaxMaker, AirssValidateMaker)."""
 
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -245,8 +245,115 @@ def test_search_maker_abacus_success():
     assert output.n_finished == 1
 
 
-def test_search_maker_invalid_code():
+def test_search_maker_vasp_success():
     maker = AirssSearchMaker(n_structures=1, code="vasp")
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput="ENCUT = 400\n",
+        project_name="test",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssVaspRelaxRunner") as mock_runner_cls,
+        patch("airsspy.vasptools.compose_vasp_task_doc") as mock_compose,
+        patch("pathlib.Path.read_text", return_value="cell content"),
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner.last_metadata = {"input_set": "MPRelaxSet"}
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
+    mock_runner.run.assert_called_once_with("Si-001", "cell content", "ENCUT = 400\n")
+    mock_compose.assert_called_once_with(
+        "Si-001", metadata={"input_set": "MPRelaxSet"}
+    )
+
+
+def test_search_maker_vasp_skips_stale_failed_output():
+    maker = AirssSearchMaker(n_structures=1, code="vasp")
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput="ENCUT = 400\n",
+        project_name="test",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssVaspRelaxRunner") as mock_runner_cls,
+        patch("airsspy.vasptools.compose_vasp_task_doc") as mock_compose,
+        patch("pathlib.Path.read_text", return_value="cell content"),
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 1
+        mock_runner.last_outputs_fresh = False
+        mock_runner_cls.return_value = mock_runner
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_failed == 1
+    assert output.results[0].relax_status == RelaxOutcome.FAILED
+    assert "fresh parseable output" in output.results[0].error_message
+    mock_compose.assert_not_called()
+
+
+def test_search_maker_vasp_collects_fresh_errored_output():
+    maker = AirssSearchMaker(n_structures=1, code="vasp")
+    job = maker.make(
+        seed_name="Si",
+        seed_content="seed",
+        paraminput="ENCUT = 400\n",
+        project_name="test",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.run_buildcell") as mock_buildcell,
+        patch("airsspy.jf.jobs.AirssVaspRelaxRunner") as mock_runner_cls,
+        patch("airsspy.vasptools.compose_vasp_task_doc") as mock_compose,
+        patch("pathlib.Path.read_text", return_value="cell content"),
+    ):
+        mock_buildcell.return_value = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell",
+        }
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 1
+        mock_runner.last_outputs_fresh = True
+        mock_runner.last_metadata = {"input_set": "MPRelaxSet"}
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_errored == 1
+    assert output.results[0].relax_status == RelaxOutcome.ERRORED
+    mock_compose.assert_called_once_with(
+        "Si-001", metadata={"input_set": "MPRelaxSet"}
+    )
+
+
+def test_search_maker_invalid_code():
+    maker = AirssSearchMaker(n_structures=1, code="unknown")
     job = maker.make(
         seed_name="Si",
         seed_content="seed",
@@ -419,8 +526,100 @@ def test_relax_maker_abacus_success():
     assert output.n_finished == 1
 
 
-def test_relax_maker_invalid_code():
+def test_relax_maker_vasp_success():
     maker = AirssRelaxMaker(code="vasp")
+    job = maker.make(
+        structures=[_make_si_structure()],
+        struct_names=["Si-001"],
+        cellinputs=[_make_cellinput()],
+        paraminput="ENCUT = 400\n",
+        project_name="test",
+        seed_name="Si",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.AirssVaspRelaxRunner") as mock_runner_cls,
+        patch("airsspy.vasptools.compose_vasp_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 0
+        mock_runner.last_metadata = {"input_set": "MPRelaxSet"}
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_finished == 1
+    mock_runner.run.assert_called_once_with("Si-001", ANY, "ENCUT = 400\n")
+    mock_compose.assert_called_once_with(
+        "Si-001", metadata={"input_set": "MPRelaxSet"}
+    )
+
+
+def test_relax_maker_vasp_skips_stale_failed_output():
+    maker = AirssRelaxMaker(code="vasp")
+    job = maker.make(
+        structures=[_make_si_structure()],
+        struct_names=["Si-001"],
+        cellinputs=[_make_cellinput()],
+        paraminput="ENCUT = 400\n",
+        project_name="test",
+        seed_name="Si",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.AirssVaspRelaxRunner") as mock_runner_cls,
+        patch("airsspy.vasptools.compose_vasp_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 1
+        mock_runner.last_outputs_fresh = False
+        mock_runner_cls.return_value = mock_runner
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_failed == 1
+    assert output.results[0].relax_status == RelaxOutcome.FAILED
+    assert "fresh parseable output" in output.results[0].error_message
+    mock_compose.assert_not_called()
+
+
+def test_relax_maker_vasp_collects_fresh_errored_output():
+    maker = AirssRelaxMaker(code="vasp")
+    job = maker.make(
+        structures=[_make_si_structure()],
+        struct_names=["Si-001"],
+        cellinputs=[_make_cellinput()],
+        paraminput="ENCUT = 400\n",
+        project_name="test",
+        seed_name="Si",
+    )
+
+    with (
+        patch("airsspy.jf.jobs.AirssVaspRelaxRunner") as mock_runner_cls,
+        patch("airsspy.vasptools.compose_vasp_task_doc") as mock_compose,
+    ):
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = 1
+        mock_runner.last_outputs_fresh = True
+        mock_runner.last_metadata = {"input_set": "MPRelaxSet"}
+        mock_runner_cls.return_value = mock_runner
+        mock_compose.return_value = _make_task_doc()
+
+        responses = run_locally(job, ensure_success=True)
+
+    output = responses[job.uuid][1].output
+    assert output.n_errored == 1
+    assert output.results[0].relax_status == RelaxOutcome.ERRORED
+    mock_compose.assert_called_once_with(
+        "Si-001", metadata={"input_set": "MPRelaxSet"}
+    )
+
+
+def test_relax_maker_invalid_code():
+    maker = AirssRelaxMaker(code="unknown")
     job = maker.make(
         structures=[_make_si_structure()],
         struct_names=["Si-001"],
