@@ -1,6 +1,7 @@
 """Tests for scheduler module."""
 
 import os
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -51,6 +52,22 @@ def test_slurm_get_remaining_seconds_not_in_job():
     """Test remaining seconds is 0 when not in a job."""
     slurm = Slurm()
     assert slurm.get_remaining_seconds() == 0
+
+
+def test_slurm_remaining_seconds_uses_compatible_datetimes(monkeypatch):
+    """Slurm end times are parsed with local timezone information."""
+    future = (datetime.now().astimezone() + timedelta(minutes=10)).strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    Slurm._task_info = {"EndTime": future}
+
+    try:
+        slurm = Slurm()
+        assert slurm.get_end_time().tzinfo is not None
+        assert slurm.get_remaining_seconds() > 0
+    finally:
+        Slurm._task_info = None
 
 
 def test_scheduler_base_not_implemented():

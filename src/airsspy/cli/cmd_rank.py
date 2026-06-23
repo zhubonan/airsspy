@@ -375,6 +375,7 @@ def rank(
         sys.exit(1)
 
     records = []
+    keep_res_raw = unite is not None or bool(unite_output)
 
     # Read from file arguments
     for fpath in files:
@@ -395,11 +396,11 @@ def rank(
                 )
             )
         else:
-            records.extend(read_res_file(fpath))
+            records.extend(read_res_file(fpath, keep_raw=keep_res_raw))
 
     # Read from stdin (if not a terminal)
     if not sys.stdin.isatty():
-        records.extend(read_res_stream(sys.stdin))
+        records.extend(read_res_stream(sys.stdin, keep_raw=keep_res_raw))
 
     if not records:
         click.echo("No structures found.", err=True)

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, develop ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, develop ]
   release:
     types: [published]
 
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
@@ -42,7 +42,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install .[test]
+        pip install .[dev]
     - name: Run tests
       run: |
         pytest tests/ --cov=src/airsspy --cov-report=xml
@@ -55,7 +55,7 @@ jobs:
 
   build-test-with-buildcell:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'release' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop'))
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python
@@ -69,10 +69,10 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install .[test]
+        pip install .[dev]
     - name: Build and install AIRSS
       run: |
-        curl -L -o AIRSS.tgz http://bit.ly/2KtvEWU
+        curl -L -o AIRSS.tgz https://bit.ly/2KtvEWU
         tar zxf AIRSS.tgz
         cd airss-0.9.1
         export FC=gfortran

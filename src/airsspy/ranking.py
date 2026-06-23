@@ -633,7 +633,9 @@ def _parse_res_fast(lines: list[str]) -> StructureRecord | None:
 # ---------------------------------------------------------------------------
 
 
-def _read_res_from_lines_iter(line_iter) -> list[StructureRecord]:
+def _read_res_from_lines_iter(
+    line_iter, keep_raw: bool = True
+) -> list[StructureRecord]:
     """Read concatenated RES structures from an iterable of lines."""
     records: list[StructureRecord] = []
     current: list[str] = []
@@ -645,6 +647,8 @@ def _read_res_from_lines_iter(line_iter) -> list[StructureRecord]:
             if current:
                 rec = _parse_res_fast(current)
                 if rec is not None:
+                    if not keep_raw:
+                        rec._raw_lines = []
                     records.append(rec)
             current = []
         else:
@@ -654,23 +658,25 @@ def _read_res_from_lines_iter(line_iter) -> list[StructureRecord]:
     if current:
         rec = _parse_res_fast(current)
         if rec is not None:
+            if not keep_raw:
+                rec._raw_lines = []
             records.append(rec)
 
     return records
 
 
-def read_res_stream(stream: TextIO) -> list[StructureRecord]:
+def read_res_stream(stream: TextIO, keep_raw: bool = True) -> list[StructureRecord]:
     """Read concatenated RES structures from a text stream (stdin or file)."""
-    records = _read_res_from_lines_iter(stream)
+    records = _read_res_from_lines_iter(stream, keep_raw=keep_raw)
     for rec in records:
         rec.source = "stdin"
     return records
 
 
-def read_res_file(path: str) -> list[StructureRecord]:
+def read_res_file(path: str, keep_raw: bool = True) -> list[StructureRecord]:
     """Read RES structures from a file (may be packed)."""
     with open(path) as fh:
-        records = _read_res_from_lines_iter(fh)
+        records = _read_res_from_lines_iter(fh, keep_raw=keep_raw)
     for rec in records:
         rec.source = path
     return records

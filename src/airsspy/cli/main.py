@@ -11,17 +11,37 @@ import click
 
 from airsspy.log import setup_logging
 
-from .cmd_check import check
-from .cmd_convert import convert
-from .cmd_db import db
-from .cmd_deploy import deploy
-from .cmd_pack import pack, unpack
-from .cmd_rank import rank
-from .cmd_run import run
-from .cmd_tools import tools
+_COMMANDS = {
+    "check": (".cmd_check", "check"),
+    "convert": (".cmd_convert", "convert"),
+    "db": (".cmd_db", "db"),
+    "deploy": (".cmd_deploy", "deploy"),
+    "pack": (".cmd_pack", "pack"),
+    "rank": (".cmd_rank", "rank"),
+    "run": (".cmd_run", "run"),
+    "tools": (".cmd_tools", "tools"),
+    "unpack": (".cmd_pack", "unpack"),
+}
 
 
-@click.group("airss")
+class LazyGroup(click.Group):
+    """A Click group that imports command modules only when needed."""
+
+    def list_commands(self, ctx):
+        return sorted(_COMMANDS)
+
+    def get_command(self, ctx, cmd_name):
+        import importlib
+
+        try:
+            module_name, attr = _COMMANDS[cmd_name]
+        except KeyError:
+            return None
+        module = importlib.import_module(module_name, __package__)
+        return getattr(module, attr)
+
+
+@click.group("airss", cls=LazyGroup)
 @click.version_option(version="0.1.4", prog_name="airsspy")
 @click.pass_context
 @click.option("-v", "--verbose", count=True, help="Increase verbosity (-v debug, -vv trace).")
@@ -56,14 +76,3 @@ def cli(ctx, verbose, quiet, db_host, db_port, db_name):
     ctx.obj["db_host"] = db_host
     ctx.obj["db_port"] = db_port
     ctx.obj["db_name"] = db_name
-
-
-cli.add_command(deploy)
-cli.add_command(db)
-cli.add_command(check)
-cli.add_command(convert)
-cli.add_command(pack)
-cli.add_command(rank)
-cli.add_command(run)
-cli.add_command(tools)
-cli.add_command(unpack)

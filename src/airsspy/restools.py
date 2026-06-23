@@ -23,6 +23,7 @@ Tools for handling res files
 import os
 import re
 from collections import namedtuple
+from collections.abc import Iterator
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -233,22 +234,20 @@ def _read_res(lines: list[str]) -> dict[str, Any]:
 
         elif tokens[0] == "SFAC":
             for atom_line in lines[line_no:]:
-                if atom_line.strip() == "END":
+                atom_tokens = atom_line.split()
+                if not atom_tokens:
+                    line_no += 1
+                    continue
+                if atom_tokens[0] == "END":
                     break
-
-                match = RES_COORD_PATT_WITH_SPIN.search(atom_line)
-                if match:
-                    has_spin = True
-                else:
-                    has_spin = False
-                    match = RES_COORD_PATT.search(atom_line)
-
-                if match:
-                    species.append(match.group(1))
-                    xyz = match.groups()[2:5]
-                    coords.append([float(c) for c in xyz])
-                    if has_spin:
-                        spins.append(float(match.group(7)))
+                if atom_tokens[0] in ("SFAC", "LATT"):
+                    line_no += 1
+                    continue
+                if len(atom_tokens) >= 6 and atom_tokens[0][0].isalpha():
+                    species.append(atom_tokens[0])
+                    coords.append([float(c) for c in atom_tokens[2:5]])
+                    if len(atom_tokens) == 7 or len(atom_tokens) >= 10:
+                        spins.append(float(atom_tokens[6]))
                 line_no += 1
 
         elif tokens[0] == "REM":
@@ -264,6 +263,18 @@ def _read_res(lines: list[str]) -> dict[str, Any]:
         "rem_lines": rem_lines,
         "spins": spins,
     }
+
+
+def iter_res_blocks(stream) -> Iterator[list[str]]:
+    """Yield RES blocks from a packed stream, preserving ``END`` when present."""
+    lines: list[str] = []
+    for line in stream:
+        lines.append(line)
+        if line.strip() == "END":
+            yield lines
+            lines = []
+    if any(line.strip() for line in lines):
+        yield lines
 
 
 def _get_res_lines(
@@ -564,14 +575,7 @@ class RESFile:
         cls, lines: list[str], include_structure: bool = True, only_titl: bool = False
     ) -> "RESFile":
         """Construct from lines"""
-        if include_structure:
-            titls, rem_lines, structure, spins = read_res_pmg(lines)
-            data = {
-                "rem": rem_lines,
-                "spins": spins,
-                **titls._asdict(),
-            }
-        elif only_titl:
+        if only_titl:
             for line in lines:
                 if "TITL" in line:
                     titls = parse_titl(line)
@@ -580,6 +584,13 @@ class RESFile:
                 titls = None
             structure = None
             data = titls._asdict() if titls else {}
+        elif include_structure:
+            titls, rem_lines, structure, spins = read_res_pmg(lines)
+            data = {
+                "rem": rem_lines,
+                "spins": spins,
+                **titls._asdict(),
+            }
         else:
             output = _read_res(lines)
             data = {
@@ -633,19 +644,14 @@ class RESFile:
         """
         res_objs = []
         with open(fname) as stream:
-            lines = []
-            for line in stream:
-                if line.startswith("END"):
-                    res_objs.append(
-                        cls.from_lines(
-                            lines,
-                            include_structure=include_structure,
-                            only_titl=only_titl,
-                        )
+            for lines in iter_res_blocks(stream):
+                res_objs.append(
+                    cls.from_lines(
+                        lines,
+                        include_structure=include_structure,
+                        only_titl=only_titl,
                     )
-                    lines = []
-                else:
-                    lines.append(line)
+                )
         return res_objs
 
     @property

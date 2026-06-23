@@ -29,6 +29,7 @@ from airsspy.restools import (
     extract_res,
     format_minsep,
     get_minsep,
+    iter_res_blocks,
     parse_titl,
     read_res_atoms,
     save_airss_res,
@@ -193,6 +194,43 @@ def test_resfile_from_file(tmpfile):
 
     assert res_obj.label == "Al-574-3531-1"
     assert res_obj.natoms == 8
+
+
+def test_resfile_only_titl_does_not_load_structure():
+    """only_titl should take precedence over include_structure."""
+    res_obj = RESFile.from_string(res_example)
+    titl_only = RESFile.from_lines(
+        res_obj.lines,
+        include_structure=True,
+        only_titl=True,
+    )
+
+    assert titl_only.label == "Al-574-3531-1"
+    assert titl_only.structure is None
+
+
+def test_iter_res_blocks_keeps_trailing_unterminated_block():
+    """Packed streams may end without a final END line."""
+    stream = [
+        "TITL A 0 1 -1 0 0 1 (P1) n - 1\n",
+        "END\n",
+        "TITL B 0 1 -2 0 0 1 (P1) n - 1\n",
+    ]
+    blocks = list(iter_res_blocks(stream))
+
+    assert len(blocks) == 2
+    assert blocks[0][-1] == "END\n"
+    assert blocks[1][0].startswith("TITL B")
+
+
+def test_resfile_from_packed_keeps_trailing_unterminated_block(tmp_path):
+    packed = tmp_path / "packed.res"
+    packed.write_text(res_example.strip() + "\n" + res_example.replace("END", ""))
+
+    records = RESFile.from_packed(str(packed), include_structure=False, only_titl=True)
+
+    assert len(records) == 2
+    assert records[0].label == "Al-574-3531-1"
 
 
 def test_resfile_properties():

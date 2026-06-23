@@ -16,41 +16,47 @@
 # with this program; if not, write to the Free Software Foundation, Inc., #
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.             #
 ###########################################################################
-"""
-Import common used stuff to the model namespace
-"""
+"""Compatibility exports for commonly used airsspy objects."""
 
+from importlib import import_module
 from typing import Final
 
-from .build import Buildcell
-from .restools import (
-    RESFile,
-    TitlInfo,
-    extract_res,
-    format_minsep,
-    get_minsep,
-    get_spacegroup_atoms,
-    parse_titl,
-    read_res_atoms,
-    read_res_pmg,
-    save_airss_res,
-)
-from .seed import SeedAtoms
-from .utils import (
-    calc_kpt_tuple_recip,
-    count_pattern_in_file,
-    extract_number_from_string,
-    filter_out_stream,
-    find_pattern_in_file,
-    format_time_elapsed,
-    safe_cast_float,
-    safe_cast_int,
-    stream_to_list,
-    trim_stream,
-    unique,
-)
-
 __version__: Final = "0.1.4"
+
+_LAZY_EXPORTS = {
+    "Buildcell": ".build",
+    "SeedAtoms": ".seed",
+    "RESFile": ".restools",
+    "TitlInfo": ".restools",
+    "extract_res": ".restools",
+    "format_minsep": ".restools",
+    "get_minsep": ".restools",
+    "get_spacegroup_atoms": ".restools",
+    "parse_titl": ".restools",
+    "read_res_atoms": ".restools",
+    "read_res_pmg": ".restools",
+    "save_airss_res": ".restools",
+    "calc_kpt_tuple_recip": ".utils",
+    "count_pattern_in_file": ".utils",
+    "extract_number_from_string": ".utils",
+    "filter_out_stream": ".utils",
+    "find_pattern_in_file": ".utils",
+    "format_time_elapsed": ".utils",
+    "safe_cast_float": ".utils",
+    "safe_cast_int": ".utils",
+    "stream_to_list": ".utils",
+    "trim_stream": ".utils",
+    "unique": ".utils",
+}
+
+
+def __getattr__(name: str):
+    if name not in _LAZY_EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(_LAZY_EXPORTS[name], __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
 
 __all__ = [
     # Core classes

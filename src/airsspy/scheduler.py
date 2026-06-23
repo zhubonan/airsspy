@@ -229,7 +229,10 @@ class Slurm(Scheduler):
     def get_end_time(self) -> Optional[datetime]:
         """Return the end time of this job."""
         if self.task_info:
-            return datetime.strptime(self.task_info["EndTime"], "%Y-%m-%dT%H:%M:%S")
+            end_time = datetime.strptime(
+                self.task_info["EndTime"], "%Y-%m-%dT%H:%M:%S"
+            )
+            return end_time.astimezone()
         return None
 
     def get_remaining_seconds(self) -> int:

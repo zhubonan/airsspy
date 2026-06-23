@@ -230,6 +230,48 @@ def test_rank_from_file(tmp_path):
     assert "Si-001" in result.output
 
 
+def test_rank_res_file_drops_raw_lines_when_not_merging(tmp_path, monkeypatch):
+    """Plain ranking avoids retaining full RES blocks in memory."""
+    from airsspy.ranking import read_res_file as real_read_res_file
+
+    seen_keep_raw = []
+
+    def fake_read_res_file(path, keep_raw=True):
+        seen_keep_raw.append(keep_raw)
+        return real_read_res_file(path, keep_raw=keep_raw)
+
+    monkeypatch.setattr("airsspy.ranking.read_res_file", fake_read_res_file)
+    res_file = tmp_path / "test.res"
+    res_file.write_text(_single_atom_res("Si-001", -1.0))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rank", str(res_file)])
+
+    assert result.exit_code == 0
+    assert seen_keep_raw == [False]
+
+
+def test_rank_keeps_raw_lines_for_unite(tmp_path, monkeypatch):
+    """Fingerprint merging still keeps raw RES blocks."""
+    from airsspy.ranking import read_res_file as real_read_res_file
+
+    seen_keep_raw = []
+
+    def fake_read_res_file(path, keep_raw=True):
+        seen_keep_raw.append(keep_raw)
+        return real_read_res_file(path, keep_raw=keep_raw)
+
+    monkeypatch.setattr("airsspy.ranking.read_res_file", fake_read_res_file)
+    res_file = tmp_path / "test.res"
+    res_file.write_text(_single_atom_res("Si-001", -1.0))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rank", "-u", "0.1", str(res_file)])
+
+    assert result.exit_code == 0
+    assert seen_keep_raw == [True]
+
+
 def test_rank_summary_mode():
     """Test -s summary flag."""
     runner = CliRunner()
@@ -669,6 +711,24 @@ def test_convert_extract_by_label(tmp_path):
     assert "Si-001" not in content
 
 
+def test_convert_res_to_res_directory_handles_missing_final_end(tmp_path):
+    """RES directory conversion splits raw blocks without full structure parsing."""
+    runner = CliRunner()
+    packed = tmp_path / "packed.res"
+    out_dir = tmp_path / "res_out"
+    packed.write_text(
+        _single_atom_res("Si-001", -1.0)
+        + _single_atom_res("Si-002", -2.0).replace("END\n", "")
+    )
+
+    result = runner.invoke(cli, ["convert", str(packed), str(out_dir)])
+
+    assert result.exit_code == 0
+    assert "Unpacked 2 structures" in result.output
+    assert (out_dir / "Si-001.res").exists()
+    assert (out_dir / "Si-002.res").read_text().rstrip().endswith("END")
+
+
 def test_convert_extract_not_found(tmp_path):
     """Test extracting a nonexistent label."""
     runner = CliRunner()
@@ -714,6 +774,43 @@ def test_convert_xyz_to_res(tmp_path):
     assert result.exit_code == 0
     assert "Converted 1 structures" in result.output
     assert (out_dir / "Si-test.res").exists()
+
+
+def test_pack_and_unpack_res_roundtrip(tmp_path):
+    runner = CliRunner()
+    src_dir = tmp_path / "src"
+    out_dir = tmp_path / "out"
+    src_dir.mkdir()
+    (src_dir / "a.res").write_text(_single_atom_res("Si-001", -1.0))
+    (src_dir / "b.res").write_text(_single_atom_res("Si-002", -2.0).rstrip("\n"))
+    packed = tmp_path / "packed.res"
+
+    pack_result = runner.invoke(cli, ["pack", "--from-dir", str(src_dir), str(packed)])
+    unpack_result = runner.invoke(cli, ["unpack", str(packed), str(out_dir)])
+
+    assert pack_result.exit_code == 0
+    assert unpack_result.exit_code == 0
+    assert (out_dir / "Si-001.res").exists()
+    assert (out_dir / "Si-002.res").exists()
+
+
+def test_unpack_extxyz_writes_each_structure(tmp_path):
+    from ase.io import write
+
+    runner = CliRunner()
+    xyz = tmp_path / "packed.xyz"
+    out_dir = tmp_path / "xyz_out"
+    atoms_a = Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True)
+    atoms_a.info["label"] = "Si-a"
+    atoms_b = Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True)
+    atoms_b.info["label"] = "Si-b"
+    write(str(xyz), [atoms_a, atoms_b], format="extxyz")
+
+    result = runner.invoke(cli, ["unpack", str(xyz), str(out_dir)])
+
+    assert result.exit_code == 0
+    assert (out_dir / "Si-a.xyz").exists()
+    assert (out_dir / "Si-b.xyz").exists()
 
 
 def test_run_help():
@@ -1273,7 +1370,7 @@ def test_run_relax_torchsim_chunks_and_skips_packed_res():
 
         def fake_batch(names, structures, **kwargs):
             calls.append((names, structures, kwargs))
-            return {name: 0 for name in names}
+            return dict.fromkeys(names, 0)
 
         fake_torchsim = MagicMock()
         fake_torchsim.relax_batch.side_effect = fake_batch
