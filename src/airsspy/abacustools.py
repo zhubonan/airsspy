@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 # Conversion constants
 BOHR_TO_ANG = 0.529177249
 BOHR3_TO_ANG3 = 0.148184743
-GPA_KBAR_TO_EV_PER_ANG3 = 0.006241510219780177
+GPA_TO_EV_PER_ANG3 = 0.006241510219780177
+GPA_KBAR_TO_EV_PER_ANG3 = GPA_TO_EV_PER_ANG3
 
 
 def parse_abacus_log(logfile: str) -> dict:
@@ -424,6 +425,36 @@ def detect_logfile(workdir: str, input_path: str) -> Optional[str]:
     return None
 
 
+def _parse_external_pressure_gpa(input_path: str) -> Optional[float]:
+    """Parse hydrostatic external pressure from ABACUS INPUT press1/2/3.
+
+    ABACUS takes ``press1``, ``press2`` and ``press3`` in kbar.  The AIRSS
+    result line stores scalar pressure in GPa.
+    """
+    path = Path(input_path)
+    if not path.is_file():
+        return None
+
+    values: list[float] = []
+    with open(path) as fh:
+        for line in fh:
+            stripped = line.split("#", 1)[0].strip()
+            if not stripped:
+                continue
+            parts = stripped.split()
+            if len(parts) < 2:
+                continue
+            if parts[0].lower() in ("press1", "press2", "press3"):
+                try:
+                    values.append(float(parts[1]))
+                except ValueError:
+                    pass
+
+    if not values:
+        return None
+    return sum(values) / len(values) / 10.0
+
+
 def extract_abacus_rem(struct_name: str) -> dict:
     """Extract quality-affecting computational parameters from ABACUS output.
 
@@ -595,7 +626,9 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
     from .restools import save_airss_res
 
     energy = log_data.get("energy")
-    pressure = log_data.get("pressure")
+    logged_pressure = log_data.get("pressure")
+    external_pressure = _parse_external_pressure_gpa(input_path)
+    pressure = external_pressure if external_pressure is not None else logged_pressure
     volume = log_data.get("volume")
 
     # Read relaxed structure from STRU_ION_D
@@ -627,7 +660,7 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
     # Compute enthalpy for pressure results
     enthalpy = energy
     if energy is not None and pressure is not None and volume is not None:
-        enthalpy = energy + pressure * volume * GPA_KBAR_TO_EV_PER_ANG3
+        enthalpy = energy + pressure * volume * GPA_TO_EV_PER_ANG3
 
     # Build REM lines from ABACUS metadata
     rem_lines = build_abacus_rem_lines(struct_name)

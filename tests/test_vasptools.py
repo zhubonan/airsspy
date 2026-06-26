@@ -252,3 +252,42 @@ def test_compose_vasp_task_doc_requires_energy(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="No VASP energy"):
         vasptools.compose_vasp_task_doc("Si-001")
+
+
+def test_compose_vasp_task_doc_adds_pv_to_vasprun_energy(monkeypatch, tmp_path):
+    from ase import Atoms
+    from pymatgen.io.ase import AseAtomsAdaptor
+    from airsspy import restools
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "Si-001.vasp").mkdir()
+    (tmp_path / "Si-001.vasp" / "INCAR").write_text("PSTRESS = 50\n")
+    atoms = Atoms(
+        "Si2",
+        positions=[[0, 0, 0], [1.25, 1.25, 1.25]],
+        cell=[[5, 0, 0], [0, 5, 0], [0, 0, 5]],
+        pbc=True,
+    )
+    structure = AseAtomsAdaptor.get_structure(atoms)
+    saved = {}
+
+    monkeypatch.setattr(
+        vasptools,
+        "_parse_vasprun",
+        lambda workdir: {"energy": -10.5, "structure": structure, "converged": True},
+    )
+    monkeypatch.setattr(vasptools, "_parse_text_outputs", lambda workdir: {"pressure": 1.0})
+    monkeypatch.setattr(vasptools, "build_vasp_rem_lines", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        restools,
+        "save_airss_res",
+        lambda atoms, info, **kwargs: saved.setdefault("info", info),
+    )
+
+    doc = vasptools.compose_vasp_task_doc("Si-001")
+
+    assert doc["energy"] == pytest.approx(-10.5)
+    assert saved["info"]["H"] == pytest.approx(
+        -10.5 + 5.0 * structure.volume / vasptools.EV_PER_ANG3_TO_GPA
+    )
+    assert saved["info"]["P"] == pytest.approx(5.0)

@@ -974,6 +974,11 @@ class AirssAbacusRelaxRunner:
 
         # Copy INPUT to workdir
         Path(f"{workdir}/INPUT").write_text(input_content)
+        pressure_kbar = self.pressure * 10.0
+        for input_file in (input_path, f"{workdir}/INPUT"):
+            self._set_input_param(input_file, "press1", str(pressure_kbar))
+            self._set_input_param(input_file, "press2", str(pressure_kbar))
+            self._set_input_param(input_file, "press3", str(pressure_kbar))
 
     def _run_single(
         self,
@@ -1233,8 +1238,9 @@ class AirssAbacusSinglePointRunner:
 
     _cleanup_extensions = [".cell", ".INPUT", "-orig.cell", ".res", ".err"]
 
-    def __init__(self, executable: str = "abacus") -> None:
+    def __init__(self, executable: str = "abacus", pressure: float = 0.0) -> None:
         self.executable = executable
+        self.pressure = pressure
 
     def clean_failed(self, struct_name: str) -> None:
         clean_files(
@@ -1274,6 +1280,16 @@ class AirssAbacusSinglePointRunner:
                 new_lines.append(line)
         if not found:
             new_lines.append("calculation scf")
+        pressure_kbar = self.pressure * 10.0
+        for key in ("press1", "press2", "press3"):
+            found_pressure = False
+            for index, line in enumerate(new_lines):
+                if re.match(rf"^\s*{key}\s+", line):
+                    new_lines[index] = f"{key} {pressure_kbar}"
+                    found_pressure = True
+                    break
+            if not found_pressure:
+                new_lines.append(f"{key} {pressure_kbar}")
         input_content = "\n".join(new_lines)
 
         # Write INPUT file (both in cwd and in workdir)

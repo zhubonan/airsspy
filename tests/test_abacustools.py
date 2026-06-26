@@ -383,7 +383,7 @@ Ga
 def test_compose_abacus_task_doc(
     mock_detect, mock_parse_log, mock_parse_stru, mock_save, tmp_path, monkeypatch
 ):
-    from airsspy.abacustools import compose_abacus_task_doc
+    from airsspy.abacustools import GPA_TO_EV_PER_ANG3, compose_abacus_task_doc
 
     monkeypatch.chdir(tmp_path)
 
@@ -408,14 +408,57 @@ def test_compose_abacus_task_doc(
     out_dir.mkdir(parents=True)
     (out_dir / "STRU_ION_D").write_text("dummy")
     (workdir / "abacus_out").write_text("TOTAL  Time : 120.3")
+    (tmp_path / "test.INPUT").write_text("calculation cell-relax\npress1 50\npress2 50\npress3 50\n")
 
     doc = compose_abacus_task_doc("test")
 
     assert doc["energy"] == pytest.approx(-197.1286)
-    assert doc["pressure"] == pytest.approx(2.09)
+    assert doc["pressure"] == pytest.approx(5.0)
     assert doc["natoms"] == 2
     assert doc["total_time"] == pytest.approx(120.3)
+    info = mock_save.call_args.args[1]
+    assert info["P"] == pytest.approx(5.0)
+    assert info["H"] == pytest.approx(-197.1286 + 5.0 * 47.5648 * GPA_TO_EV_PER_ANG3)
     mock_save.assert_called_once()
+
+
+@patch("airsspy.restools.save_airss_res")
+@patch("airsspy.abacustools.parse_abacus_stru")
+@patch("airsspy.abacustools.parse_abacus_log")
+@patch("airsspy.abacustools.detect_logfile")
+def test_compose_abacus_task_doc_falls_back_to_logged_pressure(
+    mock_detect, mock_parse_log, mock_parse_stru, mock_save, tmp_path, monkeypatch
+):
+    from airsspy.abacustools import GPA_TO_EV_PER_ANG3, compose_abacus_task_doc
+
+    monkeypatch.chdir(tmp_path)
+
+    mock_detect.return_value = str(tmp_path / "test.abacus" / "OUT.ABACUS" / "running.log")
+    mock_parse_log.return_value = {
+        "energy": -197.1286,
+        "pressure": 2.09,
+        "volume": 47.5648,
+        "converged": True,
+        "scf_converged": True,
+        "n_ionic_steps": 2,
+    }
+    mock_parse_stru.return_value = (
+        ["Si", "Si"],
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]]),
+        np.eye(3) * 5.43,
+    )
+
+    workdir = tmp_path / "test.abacus"
+    out_dir = workdir / "OUT.ABACUS"
+    out_dir.mkdir(parents=True)
+    (out_dir / "STRU_ION_D").write_text("dummy")
+
+    doc = compose_abacus_task_doc("test")
+
+    info = mock_save.call_args.args[1]
+    assert doc["pressure"] == pytest.approx(2.09)
+    assert info["P"] == pytest.approx(2.09)
+    assert info["H"] == pytest.approx(-197.1286 + 2.09 * 47.5648 * GPA_TO_EV_PER_ANG3)
 
 
 @patch("airsspy.abacustools.detect_logfile")

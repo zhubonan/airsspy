@@ -167,6 +167,7 @@ class TestMlSinglePointRunner:
             runner = AirssMlSinglePointRunner("fake:Calc@medium")
             rc = runner.run(name, cell_content)
             assert rc == 0
+            assert atoms.info["extern_pressure"] == pytest.approx(0.0)
             mock_write.assert_called()
         finally:
             os.chdir(orig)
@@ -391,7 +392,12 @@ def test_torchsim_relax_converts_pressure_gpa_to_ev_ang3(monkeypatch, tmp_path):
         "_cell_to_atoms",
         lambda path: Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True),
     )
-    monkeypatch.setattr(ml_runners, "ase_write", lambda *a, **k: None)
+    written = {}
+    monkeypatch.setattr(
+        ml_runners,
+        "ase_write",
+        lambda filename, atoms_obj, format: written.setdefault(filename, atoms_obj),
+    )
 
     rc = ml_runners._torchsim_relax_batch(
         "mace:medium-mpa-0",
@@ -405,6 +411,7 @@ def test_torchsim_relax_converts_pressure_gpa_to_ev_ang3(monkeypatch, tmp_path):
     assert captured["kwargs"]["init_kwargs"]["scalar_pressure"] == pytest.approx(
         10.0 / EV_PER_ANG3_TO_GPA
     )
+    assert written["Si-001.extxyz"].info["extern_pressure"] == pytest.approx(10.0)
 
 
 def test_torchsim_relax_atoms_input_skips_cell_parser(monkeypatch, tmp_path):
@@ -511,6 +518,7 @@ def test_torchsim_static_batch_preserves_per_structure_forces(monkeypatch, tmp_p
         "mace:medium-mpa-0",
         ["Si-001", "Si2-001"],
         atoms,
+        scalar_pressure=10.0,
     )
 
     assert rc == {"Si-001": 0, "Si2-001": 0}
@@ -522,6 +530,8 @@ def test_torchsim_static_batch_preserves_per_structure_forces(monkeypatch, tmp_p
         written["Si2-001.extxyz"].calc.results["stress"],
         np.eye(3) * 2.0,
     )
+    assert written["Si-001.extxyz"].info["extern_pressure"] == pytest.approx(10.0)
+    assert written["Si2-001.extxyz"].info["extern_pressure"] == pytest.approx(10.0)
 
 
 # ---------------------------------------------------------------------------
@@ -568,6 +578,42 @@ class TestComposeMlTaskDoc:
             assert result["volume"] == pytest.approx(125.0)
             assert "Si" in result["formula"]
             assert (tmp_path / (name + ".res")).is_file()
+        finally:
+            os.chdir(orig)
+
+    @patch("airsspy.restools.save_airss_res")
+    def test_compose_prefers_external_pressure_for_enthalpy(self, mock_save, tmp_path):
+        from airsspy.jf.ml_runners import EV_PER_ANG3_TO_GPA, compose_ml_task_doc
+
+        atoms = Atoms(
+            "Si2",
+            positions=[[0, 0, 0], [1.25, 1.25, 1.25]],
+            cell=[[5, 0, 0], [0, 5, 0], [0, 0, 5]],
+            pbc=True,
+        )
+        atoms.info["extern_pressure"] = 10.0
+        atoms.calc = SinglePointCalculator(
+            atoms,
+            energy=-10.5,
+            forces=np.zeros((2, 3)),
+            stress=np.zeros(6),
+        )
+
+        import os
+
+        orig = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            from ase.io import write as ase_write
+
+            name = "test-ml-pressure"
+            ase_write(name + ".extxyz", atoms, format="extxyz")
+
+            compose_ml_task_doc(name, calculator_spec="fake:Calc@medium")
+
+            info = mock_save.call_args.args[1]
+            assert info["P"] == pytest.approx(10.0)
+            assert info["H"] == pytest.approx(-10.5 + 10.0 * 125.0 / EV_PER_ANG3_TO_GPA)
         finally:
             os.chdir(orig)
 
@@ -649,6 +695,9 @@ class TestAbacusSinglePointRunner:
             assert "calculation scf" in content
             assert "cell-relax" not in content
             assert "ecutwfc 50" in content
+            assert "press1 0.0" in content
+            assert "press2 0.0" in content
+            assert "press3 0.0" in content
 
             # Check that ABACUS workdir and STRU exist
             assert (tmp_path / (name + ".abacus")).is_dir()
@@ -684,6 +733,39 @@ class TestAbacusSinglePointRunner:
             input_path = tmp_path / (name + ".INPUT")
             content = input_path.read_text()
             assert "calculation scf" in content
+        finally:
+            os.chdir(orig)
+
+    def test_prepare_inputs_writes_external_pressure_in_kbar(self, tmp_path):
+        from airsspy.jf.runners import AirssAbacusSinglePointRunner
+
+        cell_content = (
+            "%BLOCK LATTICE_CART\n"
+            "  5.0  0.0  0.0\n"
+            "  0.0  5.0  0.0\n"
+            "  0.0  0.0  5.0\n"
+            "%ENDBLOCK LATTICE_CART\n"
+            "%BLOCK POSITIONS_FRAC\n"
+            "Si  0.0  0.0  0.0\n"
+            "%ENDBLOCK POSITIONS_FRAC\n"
+        )
+        input_content = "calculation cell-relax\necutwfc 50\npress1 1.0\n"
+
+        import os
+
+        orig = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            name = "test-abacus-sp-pressure"
+            runner = AirssAbacusSinglePointRunner(pressure=5.0)
+            runner.prepare_inputs(name, cell_content, input_content)
+
+            content = (tmp_path / (name + ".INPUT")).read_text()
+            assert "calculation scf" in content
+            assert "press1 50.0" in content
+            assert "press2 50.0" in content
+            assert "press3 50.0" in content
+            assert "press1 1.0" not in content
         finally:
             os.chdir(orig)
 

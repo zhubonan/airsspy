@@ -57,6 +57,18 @@ class TestPrepareInputs:
         with pytest.raises(ValueError, match="Expected 3 lattice vectors"):
             runner.prepare_inputs("Si-001", bad_cell, INPUT_CONTENT)
 
+    def test_writes_external_pressure_in_kbar(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        runner = AirssAbacusRelaxRunner(pressure=5.0)
+        runner.prepare_inputs("Si-001", CELL_CONTENT, INPUT_CONTENT)
+
+        for input_file in ("Si-001.INPUT", "Si-001.abacus/INPUT"):
+            content = Path(input_file).read_text()
+            assert "press1 50.0" in content
+            assert "press2 50.0" in content
+            assert "press3 50.0" in content
+
 
 class TestSetInputParam:
     def test_set_existing_param(self, tmp_path, monkeypatch):

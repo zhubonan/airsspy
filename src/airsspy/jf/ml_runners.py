@@ -43,6 +43,19 @@ EV_PER_ANG3_TO_GPA = 160.21766208
 StructureInput = Union[str, Atoms]
 
 
+def _enthalpy_from_energy_pressure_volume(
+    energy: float | None,
+    pressure: float | None,
+    volume: float | None,
+) -> float | None:
+    """Return E + P*V with pressure in GPa and volume in Angstrom^3."""
+    if energy is None:
+        return None
+    if pressure is None or volume is None:
+        return energy
+    return energy + pressure * volume / EV_PER_ANG3_TO_GPA
+
+
 def _resolve_calculator(calculator_spec: str, **kwargs):
     """Import and instantiate an ASE calculator from a spec string.
 
@@ -182,9 +195,11 @@ class AirssMlSinglePointRunner:
         self,
         calculator_spec: str,
         calculator_kwargs: Optional[dict] = None,
+        pressure: float = 0.0,
     ) -> None:
         self.calculator_spec = calculator_spec
         self.calculator_kwargs = calculator_kwargs or {}
+        self.pressure = pressure
 
     def clean_failed(self, struct_name: str) -> None:
         from .runners import clean_files
@@ -220,6 +235,7 @@ class AirssMlSinglePointRunner:
             if stress is not None:
                 sp_kwargs["stress"] = stress
             atoms.calc = SinglePointCalculator(atoms, **sp_kwargs)
+            atoms.info["extern_pressure"] = self.pressure
 
             # Write output with attached calculator results
             ase_write(struct_name + ".extxyz", atoms, format="extxyz")
@@ -311,6 +327,7 @@ class AirssMlRelaxRunner:
             atoms.info["relax_steps"] = getattr(dyn, "nsteps", None)
             atoms.info["relax_fmax"] = self.fmax
             atoms.info["relax_max_steps"] = self.max_steps
+            atoms.info["extern_pressure"] = self.pressure
 
             # Store final results as SinglePointCalculator
             try:
@@ -361,7 +378,7 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
     atoms = ase_read(extxyz_path)
 
     energy = None
-    pressure = 0.0
+    pressure = None
     forces = None
 
     if atoms.calc is not None:
@@ -373,7 +390,11 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
             forces = atoms.get_forces()
         except Exception:
             pass
-        pressure = _get_pressure_gpa(atoms)
+        pressure = atoms.info.get("extern_pressure", atoms.info.get("pressure"))
+        if pressure is None:
+            pressure = _get_pressure_gpa(atoms)
+        else:
+            pressure = float(pressure)
 
     volume = atoms.get_volume()
 
@@ -404,13 +425,11 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
         rem_lines.append(f"ML Relax steps {atoms.info['relax_steps']}")
     rem_lines.append("")
 
-    enthalpy = energy
-    if energy is not None and pressure is not None and volume is not None:
-        enthalpy = energy + pressure * volume / EV_PER_ANG3_TO_GPA
+    enthalpy = _enthalpy_from_energy_pressure_volume(energy, pressure, volume)
 
     info = {
         "uid": struct_name,
-        "P": pressure,
+        "P": pressure if pressure is not None else 0.0,
         "V": volume,
         "H": enthalpy if enthalpy is not None else 0.0,
         "nat": len(atoms),
@@ -572,6 +591,7 @@ class TorchSimRunner:
             if stress_values is not None and index < len(stress_values):
                 calc_kwargs["stress"] = stress_values[index]
             atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+            atoms.info["extern_pressure"] = scalar_pressure
 
             ase_write(name + ".extxyz", atoms, format="extxyz")
             results[name] = 0
@@ -582,6 +602,8 @@ class TorchSimRunner:
         self,
         struct_names: list[str],
         structures: list[StructureInput],
+        *,
+        scalar_pressure: float = 0.0,
     ) -> dict[str, int]:
         """Run one static batch using the loaded model."""
         import torch_sim as ts
@@ -610,6 +632,7 @@ class TorchSimRunner:
                 calc_kwargs["stress"] = _normalize_static_stress(stress, index)
 
             atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+            atoms.info["extern_pressure"] = scalar_pressure
             ase_write(name + ".extxyz", atoms, format="extxyz")
             results[name] = 0
 
@@ -648,11 +671,13 @@ def _torchsim_static_batch(
     structures: list[StructureInput],
     *,
     device: Optional[str] = None,
+    scalar_pressure: float = 0.0,
 ) -> dict[str, int]:
     """Run single-point calculations on a batch of structures using torchsim."""
     return TorchSimRunner(model_spec, device=device).static_batch(
         struct_names,
         structures,
+        scalar_pressure=scalar_pressure,
     )
 
 

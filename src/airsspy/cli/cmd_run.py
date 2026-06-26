@@ -602,7 +602,11 @@ def _run_torchsim_batch(
 ) -> tuple[int, int, list[Path]]:
     """Run and collect one torch-sim batch."""
     if singlepoint:
-        batch_results = torchsim_runner.static_batch(struct_names, structures)
+        batch_results = torchsim_runner.static_batch(
+            struct_names,
+            structures,
+            scalar_pressure=pressure,
+        )
     else:
         batch_results = torchsim_runner.relax_batch(
             struct_names,
@@ -849,7 +853,7 @@ def _create_sp_runner(
     elif code == "abacus":
         from airsspy.jf.runners import AirssAbacusSinglePointRunner
 
-        return AirssAbacusSinglePointRunner(executable=exe)
+        return AirssAbacusSinglePointRunner(executable=exe, pressure=pressure)
     elif code == "vasp":
         from airsspy.jf.runners import AirssVaspSinglePointRunner
 
@@ -865,6 +869,7 @@ def _create_sp_runner(
         return AirssMlSinglePointRunner(
             calculator_spec=_normalize_ml_ase_spec(calculator_spec),
             calculator_kwargs=calculator_kwargs,
+            pressure=pressure,
         )
     else:
         raise click.ClickException(f"Single-point not supported for code: {code}")
@@ -2316,6 +2321,7 @@ def run_sp(
                     batch_results = torchsim_runner.static_batch(
                         batch_names,
                         batch_structures,
+                        scalar_pressure=pressure,
                     )
                 except Exception:
                     logger.error(
