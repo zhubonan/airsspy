@@ -329,6 +329,38 @@ class TestParseAbacusStru:
         assert np.all(positions >= -0.01)
         assert np.all(positions <= 1.01)
 
+    def test_stru_cartesian_skew_cell_matches_row_vector_conversion(self, tmp_path):
+        from airsspy.abacustools import parse_abacus_stru
+
+        stru = tmp_path / "STRU"
+        stru.write_text(
+            """\
+ATOMIC_SPECIES
+Ga 69.723 Ga.UPF
+
+LATTICE_CONSTANT
+1.0
+
+LATTICE_VECTORS
+3.2459100000 0.0000000000 0.0000000000
+-0.2621630475 4.5544108663 0.0000000000
+-0.8895542149 -2.3255978880 5.9584787154
+
+ATOMIC_POSITIONS
+Cartesian
+
+Ga
+0.0
+1
+0.5392494814 -1.1326931555 3.5297265225 1 1 1
+"""
+        )
+
+        _, positions, cell = parse_abacus_stru(str(stru))
+        expected = np.array([[0.3328221, 0.0537855, 0.5923872]])
+        assert np.allclose(positions, expected, atol=1e-7)
+        assert np.allclose(positions @ cell, [[0.5392494814, -1.1326931555, 3.5297265225]])
+
     def test_stru_direct_positions(self, tmp_path):
         from airsspy.abacustools import parse_abacus_stru
 
@@ -384,3 +416,40 @@ def test_compose_abacus_task_doc(
     assert doc["natoms"] == 2
     assert doc["total_time"] == pytest.approx(120.3)
     mock_save.assert_called_once()
+
+
+@patch("airsspy.abacustools.detect_logfile")
+def test_compose_abacus_task_doc_requires_log(mock_detect, tmp_path, monkeypatch):
+    from airsspy.abacustools import compose_abacus_task_doc
+
+    monkeypatch.chdir(tmp_path)
+    mock_detect.return_value = None
+
+    with pytest.raises(RuntimeError, match="ABACUS log file not found"):
+        compose_abacus_task_doc("test")
+
+    assert not (tmp_path / "test.res").exists()
+
+
+@patch("airsspy.abacustools.parse_abacus_log")
+@patch("airsspy.abacustools.detect_logfile")
+def test_compose_abacus_task_doc_rejects_unconverged_scf(
+    mock_detect, mock_parse_log, tmp_path, monkeypatch
+):
+    from airsspy.abacustools import compose_abacus_task_doc
+
+    monkeypatch.chdir(tmp_path)
+    mock_detect.return_value = str(tmp_path / "test.abacus" / "OUT.ABACUS" / "running.log")
+    mock_parse_log.return_value = {
+        "energy": -197.1286,
+        "pressure": 2.09,
+        "volume": 47.5648,
+        "converged": False,
+        "scf_converged": False,
+        "n_ionic_steps": 2,
+    }
+
+    with pytest.raises(RuntimeError, match="ABACUS SCF did not converge"):
+        compose_abacus_task_doc("test")
+
+    assert not (tmp_path / "test.res").exists()

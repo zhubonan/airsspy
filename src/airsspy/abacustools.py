@@ -382,7 +382,7 @@ def parse_abacus_stru(stru_path: str):
     # Convert Cartesian to fractional if needed
     if coord_type.lower() == "cartesian" and lattice_vectors is not None:
         inv_cell = np.linalg.inv(lattice_vectors)
-        positions = positions @ inv_cell.T
+        positions = positions @ inv_cell
 
     return elements, positions, lattice_vectors
 
@@ -574,19 +574,25 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
     Returns:
         Dictionary with energy, structure, volume, formula, etc.
     """
-    from ase import Atoms
-    from pymatgen.io.ase import AseAtomsAdaptor
-
-    from .restools import save_airss_res
-
     workdir = f"{struct_name}.abacus"
     input_path = f"{struct_name}.INPUT"
 
     # Detect and parse log file
     logfile = detect_logfile(workdir, input_path)
-    log_data = {}
-    if logfile:
-        log_data = parse_abacus_log(logfile)
+    if not logfile:
+        raise RuntimeError(
+            f"ABACUS log file not found for {struct_name}; refusing to collect result"
+        )
+    log_data = parse_abacus_log(logfile)
+    if not log_data.get("scf_converged", False):
+        raise RuntimeError(
+            f"ABACUS SCF did not converge for {struct_name}; refusing to collect result"
+        )
+
+    from ase import Atoms
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .restools import save_airss_res
 
     energy = log_data.get("energy")
     pressure = log_data.get("pressure")
