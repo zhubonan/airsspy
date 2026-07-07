@@ -838,6 +838,7 @@ def test_run_search_help():
     assert "--oxidation-state" in result.output
     assert "--formula-elements" not in result.output
     assert "--prune" in result.output
+    assert "--cell-axis-map" in result.output
 
 
 def test_run_crud_help():
@@ -1806,6 +1807,16 @@ def test_run_relax_help():
     result = runner.invoke(cli, ["run", "relax", "--help"])
     assert result.exit_code == 0
     assert "--cell" in result.output
+    assert "--cell-axis-map" in result.output
+
+
+def test_run_sp_help():
+    """Test 'run sp --help'."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "sp", "--help"])
+    assert result.exit_code == 0
+    assert "--cell" in result.output
+    assert "--cell-axis-map" in result.output
 
 
 def test_run_search_missing_seed():

@@ -1,7 +1,6 @@
 """Tests for ABACUS output parsing and result composition."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -297,6 +296,73 @@ Si Si.UPF
 
         assert "ATOMIC_POSITIONS\nDirect" in stru
         assert "0.2500000000 0.0000000000 0.0000000000 1 1 1" in stru
+
+    def test_cell_axis_map_moves_z_vacuum_to_x(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_CART
+2.0 0.0 0.0
+0.0 3.0 0.0
+0.0 0.0 9.0
+%ENDBLOCK LATTICE_CART
+%BLOCK POSITIONS_FRAC
+Ga 0.10 0.20 0.30
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Ga Ga.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        stru = cell_to_stru(cell, cell_axis_map="z:x")
+
+        lines = stru.splitlines()
+        start = lines.index("LATTICE_VECTORS") + 1
+        assert lines[start:start + 3] == [
+            "9.0000000000  0.0000000000  0.0000000000",
+            "0.0000000000  2.0000000000  0.0000000000",
+            "0.0000000000  0.0000000000  3.0000000000",
+        ]
+        assert "0.3000000000 0.1000000000 0.2000000000 1 1 1" in stru
+
+    def test_cell_axis_map_rejects_lattice_abc(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_ABC
+2.0 3.0 9.0
+90.0 90.0 90.0
+%ENDBLOCK LATTICE_ABC
+%BLOCK POSITIONS_FRAC
+Ga 0.10 0.20 0.30
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Ga Ga.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        with pytest.raises(ValueError, match="LATTICE_ABC"):
+            cell_to_stru(cell, cell_axis_map="z:x")
+
+    def test_cell_axis_map_rejects_duplicate_target_axes(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_CART
+2.0 0.0 0.0
+0.0 3.0 0.0
+0.0 0.0 9.0
+%ENDBLOCK LATTICE_CART
+%BLOCK POSITIONS_FRAC
+Ga 0.10 0.20 0.30
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Ga Ga.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        with pytest.raises(ValueError, match="Duplicate target axis"):
+            cell_to_stru(cell, cell_axis_map="x:y z:y")
 
 
 class TestParseAbacusStru:

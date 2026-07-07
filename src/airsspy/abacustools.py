@@ -104,7 +104,146 @@ def parse_abacus_log(logfile: str) -> dict:
     return result
 
 
-def cell_to_stru(cell_content: str) -> str:
+_AXES = {"x": 0, "y": 1, "z": 2}
+_VECTOR_INPUT_KEYS = {"kspacing", "press", "force", "stress"}
+
+
+def _axis_permutation(axis_map: Optional[str]) -> list[int]:
+    """Return old-axis indices ordered by new x,y,z axes."""
+    if axis_map is None or not str(axis_map).strip():
+        return [0, 1, 2]
+
+    text = str(axis_map).strip().lower()
+    if text in ("identity", "none"):
+        return [0, 1, 2]
+
+    mapping: dict[int, int] = {}
+    for item in text.replace(",", " ").split():
+        if ":" not in item:
+            raise ValueError(
+                "cell_axis_map entries must use old:new syntax, e.g. 'z:x'"
+            )
+        old, new = [part.strip() for part in item.split(":", 1)]
+        if old not in _AXES or new not in _AXES:
+            raise ValueError(f"Invalid axis in cell_axis_map entry: {item!r}")
+        new_axis = _AXES[new]
+        if new_axis in mapping:
+            raise ValueError(f"Duplicate target axis in cell_axis_map: {new!r}")
+        mapping[new_axis] = _AXES[old]
+
+    remaining_old = [axis for axis in range(3) if axis not in mapping.values()]
+    for new_axis in range(3):
+        if new_axis not in mapping:
+            mapping[new_axis] = remaining_old.pop(0)
+    perm = [mapping[i] for i in range(3)]
+    if sorted(perm) != [0, 1, 2]:
+        raise ValueError(f"cell_axis_map is not one-to-one: {axis_map!r}")
+    return perm
+
+
+def apply_cell_axis_map_to_cell_text(
+    cell_content: str,
+    cell_axis_map: Optional[str] = None,
+) -> str:
+    """Permute lattice and coordinates in CASTEP cell text.
+
+    The map uses ``old:new`` axis names.  For example ``z:x`` makes the old
+    AIRSS slab-normal/vacuum axis become the new ABACUS x axis, while the
+    unspecified old x/y axes fill new y/z in order.
+    """
+    perm = _axis_permutation(cell_axis_map)
+    if perm == [0, 1, 2]:
+        return cell_content
+    if any(
+        line.strip().upper().startswith("%BLOCK LATTICE_ABC")
+        for line in cell_content.splitlines()
+    ):
+        raise ValueError("cell_axis_map requires LATTICE_CART, not LATTICE_ABC")
+
+    lines = cell_content.splitlines()
+    out: list[str] = []
+    in_block: Optional[str] = None
+    lattice_rows: list[list[float]] = []
+
+    def _flush_lattice() -> None:
+        if not lattice_rows:
+            return
+        lattice = np.asarray(lattice_rows, dtype=float)
+        mapped = lattice[perm, :][:, perm]
+        for vec in mapped:
+            out.append("  " + "  ".join(f"{v:.10f}" for v in vec))
+        lattice_rows.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("%BLOCK LATTICE_CART"):
+            in_block = "lattice_cart"
+            out.append(line)
+            continue
+        if upper.startswith("%BLOCK POSITIONS_FRAC"):
+            in_block = "positions_frac"
+            out.append(line)
+            continue
+        if upper.startswith("%BLOCK POSITIONS_ABS"):
+            in_block = "positions_abs"
+            out.append(line)
+            continue
+        if upper.startswith("%ENDBLOCK"):
+            if in_block == "lattice_cart":
+                _flush_lattice()
+            in_block = None
+            out.append(line)
+            continue
+
+        if in_block == "lattice_cart" and stripped and not stripped.startswith("#"):
+            lattice_rows.append([float(x) for x in line.split()[:3]])
+            continue
+        if in_block in ("positions_frac", "positions_abs") and stripped:
+            parts = line.split()
+            if len(parts) >= 4 and parts[0][0].isalpha():
+                coords = np.asarray([float(x) for x in parts[1:4]], dtype=float)[perm]
+                rest = " " + " ".join(parts[4:]) if len(parts) > 4 else ""
+                out.append(
+                    f"{parts[0]} {coords[0]:.10f} {coords[1]:.10f} {coords[2]:.10f}{rest}"
+                )
+                continue
+        out.append(line)
+    return "\n".join(out) + ("\n" if cell_content.endswith("\n") else "")
+
+
+def apply_cell_axis_map_to_abacus_input(
+    input_content: str,
+    cell_axis_map: Optional[str] = None,
+) -> str:
+    """Permute direction-vector ABACUS INPUT values to match a cell axis map."""
+    perm = _axis_permutation(cell_axis_map)
+    if perm == [0, 1, 2]:
+        return input_content
+
+    out: list[str] = []
+    for line in input_content.splitlines():
+        data, sep, comment = line.partition("#")
+        parts = data.split()
+        if len(parts) >= 4 and parts[0].lower() in _VECTOR_INPUT_KEYS:
+            try:
+                for value in parts[1:4]:
+                    float(value)
+            except ValueError:
+                out.append(line)
+                continue
+            mapped = [parts[1:4][old] for old in perm]
+            trailing = parts[4:]
+            new_data = " ".join([parts[0], *mapped, *trailing])
+            if sep:
+                new_data += " #" + comment
+            out.append(new_data)
+        else:
+            out.append(line)
+    return "\n".join(out) + ("\n" if input_content.endswith("\n") else "")
+
+
+def cell_to_stru(cell_content: str, cell_axis_map: Optional[str] = None) -> str:
     """Convert CASTEP .cell content to ABACUS STRU format.
 
     Parses the LATTICE_CART, POSITIONS_FRAC, and SPECIES_POT blocks
@@ -112,10 +251,12 @@ def cell_to_stru(cell_content: str) -> str:
 
     Args:
         cell_content: Content of the .cell file.
+        cell_axis_map: Optional ``old:new`` axis map applied before conversion.
 
     Returns:
         STRU file content as a string.
     """
+    cell_content = apply_cell_axis_map_to_cell_text(cell_content, cell_axis_map)
     lines = cell_content.splitlines()
 
     # Parse lattice (LATTICE_CART or LATTICE_ABC)

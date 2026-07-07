@@ -556,6 +556,7 @@ def _create_task_runner(
     fmax=0.05,
     potcar_dir=None,
     potcar_map=None,
+    cell_axis_map=None,
     *,
     singlepoint: bool = False,
 ):
@@ -574,6 +575,7 @@ def _create_task_runner(
             fmax=fmax,
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
+            cell_axis_map=cell_axis_map,
         )
     exe = _apply_mpinp(exe, code, mpinp)
     return _create_sp_runner(
@@ -584,6 +586,7 @@ def _create_task_runner(
         pressure=pressure,
         potcar_dir=potcar_dir,
         potcar_map=potcar_map,
+        cell_axis_map=cell_axis_map,
     )
 
 
@@ -780,6 +783,7 @@ def _create_runner(
     fmax=0.05,
     potcar_dir=None,
     potcar_map=None,
+    cell_axis_map=None,
 ):
     """Create the appropriate relaxation runner for the given *code*."""
     from airsspy.jf.runners import (
@@ -812,6 +816,7 @@ def _create_runner(
             executable=exe,
             max_iterations=max_iterations,
             pressure=pressure,
+            cell_axis_map=cell_axis_map,
         )
     elif code == "vasp":
         return AirssVaspRelaxRunner(
@@ -844,6 +849,7 @@ def _create_sp_runner(
     pressure=0.0,
     potcar_dir=None,
     potcar_map=None,
+    cell_axis_map=None,
 ):
     """Create the appropriate single-point runner for the given *code*."""
     if code == "castep":
@@ -853,7 +859,11 @@ def _create_sp_runner(
     elif code == "abacus":
         from airsspy.jf.runners import AirssAbacusSinglePointRunner
 
-        return AirssAbacusSinglePointRunner(executable=exe, pressure=pressure)
+        return AirssAbacusSinglePointRunner(
+            executable=exe,
+            pressure=pressure,
+            cell_axis_map=cell_axis_map,
+        )
     elif code == "vasp":
         from airsspy.jf.runners import AirssVaspSinglePointRunner
 
@@ -1097,6 +1107,11 @@ def run():
     multiple=True,
     help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
 )
+@click.option(
+    "--cell-axis-map",
+    default=None,
+    help="ABACUS-only cell axis permutation, e.g. z:x to make old z become new x.",
+)
 def run_search(
     seed,
     nmax,
@@ -1131,6 +1146,7 @@ def run_search(
     prune_keep_rejected,
     potcar_dir,
     potcar_map_values,
+    cell_axis_map,
 ):
     """Run an AIRSS random structure search locally."""
     from airsspy.jf.runners import run_buildcell
@@ -1324,6 +1340,7 @@ def run_search(
                 mpinp,
                 potcar_dir=potcar_dir,
                 potcar_map=potcar_map,
+                cell_axis_map=cell_axis_map,
             )
 
             try:
@@ -1531,6 +1548,11 @@ def run_search(
     multiple=True,
     help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
 )
+@click.option(
+    "--cell-axis-map",
+    default=None,
+    help="ABACUS-only cell axis permutation, e.g. z:x to make old z become new x.",
+)
 def run_crud(
     code,
     exe,
@@ -1552,6 +1574,7 @@ def run_crud(
     batch_size,
     potcar_dir,
     potcar_map_values,
+    cell_axis_map,
 ):
     """Consume hopper/*.res jobs locally, like crud.pl."""
     if code == "ml" and not calculator_spec:
@@ -1588,6 +1611,7 @@ def run_crud(
             fmax=fmax,
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
+            cell_axis_map=cell_axis_map,
             singlepoint=singlepoint,
         )
     torchsim_runner = None
@@ -1721,10 +1745,12 @@ def run_crud(
                         code,
                         calculator_spec=runner if code == "vasp" else calculator_spec,
                     )
-                except Exception:
+                except Exception as exc:
                     if rc == 0:
                         raise
-                    raise RuntimeError("calculation did not produce collectable output")
+                    raise RuntimeError(
+                        "calculation did not produce collectable output"
+                    ) from exc
 
                 finalize_success(seed, rc)
                 n_done += 1
@@ -1853,6 +1879,11 @@ def run_crud(
     multiple=True,
     help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
 )
+@click.option(
+    "--cell-axis-map",
+    default=None,
+    help="ABACUS-only cell axis permutation, e.g. z:x to make old z become new x.",
+)
 def run_relax(
     cell,
     seed,
@@ -1875,6 +1906,7 @@ def run_relax(
     debug,
     potcar_dir,
     potcar_map_values,
+    cell_axis_map,
 ):
     """Relax existing cell files locally."""
     if debug:
@@ -1954,6 +1986,7 @@ def run_relax(
             fmax=fmax,
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
+            cell_axis_map=cell_axis_map,
             singlepoint=singlepoint,
         )
 
@@ -2191,6 +2224,11 @@ def run_relax(
     multiple=True,
     help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
 )
+@click.option(
+    "--cell-axis-map",
+    default=None,
+    help="ABACUS-only cell axis permutation, e.g. z:x to make old z become new x.",
+)
 def run_sp(
     cell,
     seed,
@@ -2206,6 +2244,7 @@ def run_sp(
     pressure,
     potcar_dir,
     potcar_map_values,
+    cell_axis_map,
 ):
     """Run single-point calculations on existing cell files."""
     if code == "ml" and not calculator_spec:
@@ -2279,6 +2318,7 @@ def run_sp(
             pressure=pressure,
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
+            cell_axis_map=cell_axis_map,
         )
 
     orig_dir = os.getcwd()

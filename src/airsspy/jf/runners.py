@@ -908,11 +908,13 @@ class AirssAbacusRelaxRunner:
         max_fails: int = 2,
         max_iterations: int = 200,
         pressure: float = 0.0,
+        cell_axis_map: str | None = None,
     ) -> None:
         self.executable = executable
         self.max_fails = max_fails
         self.max_iterations = max_iterations
         self.pressure = pressure
+        self.cell_axis_map = cell_axis_map
 
     def clean_failed(self, struct_name: str) -> None:
         clean_files(
@@ -958,6 +960,17 @@ class AirssAbacusRelaxRunner:
         workdir = f"{struct_name}.abacus"
         Path(workdir).mkdir(parents=True, exist_ok=True)
 
+        from ..abacustools import (
+            apply_cell_axis_map_to_abacus_input,
+            apply_cell_axis_map_to_cell_text,
+            cell_to_stru,
+        )
+
+        cell_content = apply_cell_axis_map_to_cell_text(cell_content, self.cell_axis_map)
+        input_content = apply_cell_axis_map_to_abacus_input(
+            input_content, self.cell_axis_map
+        )
+
         # Write .cell file
         cell_path = struct_name + ".cell"
         Path(cell_path).write_text(cell_content)
@@ -965,9 +978,6 @@ class AirssAbacusRelaxRunner:
         # Write INPUT file
         input_path = struct_name + ".INPUT"
         Path(input_path).write_text(input_content)
-
-        # Convert .cell to STRU
-        from ..abacustools import cell_to_stru
 
         stru_content = cell_to_stru(cell_content)
         Path(f"{workdir}/STRU").write_text(stru_content)
@@ -1238,9 +1248,15 @@ class AirssAbacusSinglePointRunner:
 
     _cleanup_extensions = [".cell", ".INPUT", "-orig.cell", ".res", ".err"]
 
-    def __init__(self, executable: str = "abacus", pressure: float = 0.0) -> None:
+    def __init__(
+        self,
+        executable: str = "abacus",
+        pressure: float = 0.0,
+        cell_axis_map: str | None = None,
+    ) -> None:
         self.executable = executable
         self.pressure = pressure
+        self.cell_axis_map = cell_axis_map
 
     def clean_failed(self, struct_name: str) -> None:
         clean_files(
@@ -1260,10 +1276,19 @@ class AirssAbacusSinglePointRunner:
         Forces ``calculation scf`` in the INPUT file regardless of what
         the user specified.
         """
-        from ..abacustools import cell_to_stru
+        from ..abacustools import (
+            apply_cell_axis_map_to_abacus_input,
+            apply_cell_axis_map_to_cell_text,
+            cell_to_stru,
+        )
 
         workdir = f"{struct_name}.abacus"
         Path(workdir).mkdir(parents=True, exist_ok=True)
+
+        cell_content = apply_cell_axis_map_to_cell_text(cell_content, self.cell_axis_map)
+        input_content = apply_cell_axis_map_to_abacus_input(
+            input_content, self.cell_axis_map
+        )
 
         # Write .cell file
         Path(struct_name + ".cell").write_text(cell_content)
