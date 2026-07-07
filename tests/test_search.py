@@ -8,6 +8,7 @@ from airsspy.search import (
     RssCandidate,
     RssPruneOptions,
     build_formula_sampling_context,
+    inject_buildcell_estimate_directives,
     inject_formula_directive,
     make_seed_text_transform,
     pool_statistics,
@@ -36,6 +37,37 @@ def test_inject_formula_directive_removes_conflicts():
     assert "#SPECIES=" not in out
     assert "#NATOM=" not in out
     assert "#FORMULA=SiO\n" not in out
+    assert "#SLACK=0.25" in out
+
+
+def test_inject_buildcell_estimate_directives_removes_estimate_conflicts():
+    seed = "\n".join(
+        [
+            "#SPECIES=Si,O",
+            "#FORMULA=Si",
+            "#VARVOL=999",
+            "#MINSEP=9",
+            "#NFORM=1",
+            "#SLACK=0.25",
+        ]
+    )
+
+    out = inject_buildcell_estimate_directives(
+        seed,
+        formula="SiO2",
+        varvol=49.5,
+        minsep={"O-O": (2.25, 2.75), "O-Si": (1.44, 1.76), "Si-Si": (2.7, 3.3)},
+        nform={"random": [2, 3]},
+    )
+
+    assert "#FORMULA=SiO2" in out
+    assert "#VARVOL=49.5" in out
+    assert "#MINSEP=0.5-1 O-O=2.25-2.75 O-Si=1.44-1.76 Si-Si=2.7-3.3" in out
+    assert "#NFORM={2,3}" in out
+    assert "#SPECIES=" not in out
+    assert "#VARVOL=999" not in out
+    assert "#MINSEP=9" not in out
+    assert "#NFORM=1" not in out
     assert "#SLACK=0.25" in out
 
 

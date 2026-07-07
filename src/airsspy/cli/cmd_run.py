@@ -1040,6 +1040,67 @@ def run():
     type=int,
     help="Print N sampled buildcell inputs and exit.",
 )
+@click.option(
+    "--volume-minsep-source",
+    default="none",
+    show_default=True,
+    type=click.Choice(["none", "dataset", "baseline", "reference"]),
+    help="Auto-configure #VARVOL, #MINSEP, and #NFORM from a volume/minsep estimate.",
+)
+@click.option(
+    "--volume-minsep-dataset",
+    default=None,
+    type=click.Path(exists=True),
+    help="Curated minsep/volume dataset JSON for --volume-minsep-source dataset.",
+)
+@click.option(
+    "--volume-minsep-bundle",
+    default=None,
+    type=click.Path(exists=True),
+    help="Baseline bundle JSON for --volume-minsep-source baseline.",
+)
+@click.option(
+    "--reference-structure",
+    "reference_structures",
+    multiple=True,
+    type=click.Path(exists=True),
+    help="Reference structure for --volume-minsep-source reference. Repeat as needed.",
+)
+@click.option(
+    "--volume-scale",
+    default=1.1,
+    type=float,
+    show_default=True,
+    help="Scale estimated formula-unit volume before writing #VARVOL.",
+)
+@click.option(
+    "--minsep-scale-low",
+    default=0.9,
+    type=float,
+    show_default=True,
+    help="Lower scale for generated #MINSEP pair ranges.",
+)
+@click.option(
+    "--minsep-scale-high",
+    default=1.1,
+    type=float,
+    show_default=True,
+    help="Upper scale for generated #MINSEP pair ranges.",
+)
+@click.option(
+    "--max-atoms",
+    default=80,
+    type=int,
+    show_default=True,
+    help="Maximum atoms per generated structure for automatic #NFORM.",
+)
+@click.option(
+    "--max-nform",
+    default=8,
+    type=int,
+    show_default=True,
+    help="Maximum formula-unit multiplier for automatic #NFORM.",
+)
 @click.option("--prune", is_flag=True, help="Enable post-relax RSS pruning.")
 @click.option(
     "--prune-pool-size",
@@ -1134,6 +1195,15 @@ def run_search(
     formula_oxidation_states,
     no_formula_charge_neutral,
     formula_diagnose,
+    volume_minsep_source,
+    volume_minsep_dataset,
+    volume_minsep_bundle,
+    reference_structures,
+    volume_scale,
+    minsep_scale_low,
+    minsep_scale_high,
+    max_atoms,
+    max_nform,
     prune,
     prune_pool_size,
     prune_keep_fraction,
@@ -1151,6 +1221,7 @@ def run_search(
     """Run an AIRSS random structure search locally."""
     from airsspy.jf.runners import run_buildcell
     from airsspy.search import (
+        DEFAULT_ESTIMATE_REMOVE_DIRECTIVES,
         FormulaSamplingOptions,
         RssPruneOptions,
         build_formula_sampling_context,
@@ -1158,9 +1229,19 @@ def run_search(
         make_seed_text_transform,
         parse_key_float,
         pool_statistics,
+        remove_buildcell_directives,
         select_pruned_candidates,
         should_flush_prune_pool,
         validate_prune_options,
+    )
+    from airsspy.volume_minsep import (
+        apply_minsep_headroom,
+        build_seed_text_from_estimate,
+        lookup_exact_volume_minsep_estimate,
+        predict_baseline_volume_minsep_estimate,
+        reference_volume_minsep_estimate,
+        resolve_nform,
+        validate_estimate_options,
     )
 
     if prune and build_only:
@@ -1176,6 +1257,40 @@ def run_search(
     seed_content = seed_cell.read_text()
 
     seed_text_transform = None
+    use_volume_minsep = volume_minsep_source != "none"
+    if use_volume_minsep:
+        try:
+            validate_estimate_options(
+                volume_scale=volume_scale,
+                minsep_scale_low=minsep_scale_low,
+                minsep_scale_high=minsep_scale_high,
+                max_atoms=max_atoms,
+                max_nform=max_nform,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+        if not formulas and not formula_elements:
+            raise click.ClickException(
+                "--volume-minsep-source requires --formula or --elements"
+            )
+        if volume_minsep_source == "dataset" and volume_minsep_dataset is None:
+            raise click.ClickException(
+                "--volume-minsep-source dataset requires --volume-minsep-dataset"
+            )
+        if volume_minsep_source == "baseline" and volume_minsep_bundle is None:
+            raise click.ClickException(
+                "--volume-minsep-source baseline requires --volume-minsep-bundle"
+            )
+        if volume_minsep_source == "reference" and not reference_structures:
+            raise click.ClickException(
+                "--volume-minsep-source reference requires --reference-structure"
+            )
+        volume_minsep_dataset = _resolve_optional_path(volume_minsep_dataset)
+        volume_minsep_bundle = _resolve_optional_path(volume_minsep_bundle)
+        reference_structures = tuple(
+            _resolve_optional_path(path) for path in reference_structures
+        )
+
     if formulas or formula_elements:
         elements = [
             item.strip() for item in formula_elements.split(",") if item.strip()
@@ -1186,6 +1301,11 @@ def run_search(
             "--target-volume",
         )
         oxidation_states = _parse_oxidation_state_options(formula_oxidation_states)
+        seed_text_for_formula_filter = (
+            remove_buildcell_directives(seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES)
+            if use_volume_minsep
+            else seed_content
+        )
         try:
             formula_context = build_formula_sampling_context(
                 FormulaSamplingOptions(
@@ -1196,20 +1316,108 @@ def run_search(
                     oxidation_states=oxidation_states,
                     require_charge_neutral=not no_formula_charge_neutral,
                 ),
-                seed_text=seed_content,
+                seed_text=seed_text_for_formula_filter,
             )
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
 
+        reference_atoms_by_formula = None
+        if volume_minsep_source == "reference":
+            from ase.io import read
+
+            from airsspy.volume_minsep import normalize_formula
+
+            reference_atoms_by_formula = {}
+            for path in reference_structures:
+                atoms = read(path)
+                formula = normalize_formula(atoms.get_chemical_formula())
+                reference_atoms_by_formula.setdefault(formula, []).append(atoms)
+
+        def resolve_estimate_for_formula(formula: str):
+            if not use_volume_minsep:
+                return None
+            try:
+                if volume_minsep_source == "dataset":
+                    return lookup_exact_volume_minsep_estimate(
+                        formula=formula,
+                        dataset_path=volume_minsep_dataset,
+                    )
+                if volume_minsep_source == "baseline":
+                    return predict_baseline_volume_minsep_estimate(
+                        formula=formula,
+                        bundle_path=volume_minsep_bundle,
+                    )
+                if volume_minsep_source == "reference":
+                    from airsspy.volume_minsep import normalize_formula
+
+                    reduced_formula = normalize_formula(formula)
+                    references = (reference_atoms_by_formula or {}).get(
+                        reduced_formula,
+                        [],
+                    )
+                    return reference_volume_minsep_estimate(
+                        formula=formula,
+                        references=references,
+                    )
+            except ValueError as exc:
+                raise click.ClickException(str(exc)) from exc
+            raise click.ClickException(
+                f"Unsupported volume/minsep source: {volume_minsep_source}"
+            )
+
+        def build_sample_seed(seed_text: str):
+            sampled_seed, formula, varvol = formula_context.sample(seed_text)
+            estimate = resolve_estimate_for_formula(formula)
+            nform = None
+            if estimate is not None:
+                try:
+                    nform = resolve_nform(
+                        atoms_per_formula_unit=estimate.atoms_per_formula_unit,
+                        max_atoms=max_atoms,
+                        max_nform=max_nform,
+                    )
+                except ValueError as exc:
+                    raise click.ClickException(str(exc)) from exc
+                sampled_seed = build_seed_text_from_estimate(
+                    seed_text,
+                    estimate=estimate,
+                    volume_scale=volume_scale,
+                    minsep_scale_low=minsep_scale_low,
+                    minsep_scale_high=minsep_scale_high,
+                    nform=nform,
+                )
+                varvol = estimate.total_volume * volume_scale
+            return sampled_seed, formula, varvol, estimate, nform
+
         if formula_diagnose > 0:
             for i in range(formula_diagnose):
-                sampled_seed, formula, varvol = formula_context.sample(seed_content)
+                sampled_seed, formula, varvol, estimate, nform = build_sample_seed(
+                    seed_content
+                )
                 click.echo(f"Sample {i + 1}")
                 click.echo("----------------------------------------")
                 click.echo("User settings")
                 click.echo(f"formula = {formula}")
                 if varvol is not None:
                     click.echo(f"varvol = {varvol:g}")
+                if estimate is not None:
+                    minsep_ranges = apply_minsep_headroom(
+                        estimate.canonical_minsep,
+                        low_scale=minsep_scale_low,
+                        high_scale=minsep_scale_high,
+                    )
+                    click.echo(f"volume_minsep_source = {volume_minsep_source}")
+                    click.echo(f"reduced_formula = {estimate.reduced_formula}")
+                    click.echo(f"volume_per_atom = {estimate.volume_per_atom:g}")
+                    click.echo(f"total_volume = {estimate.total_volume:g}")
+                    click.echo(f"nform = {nform}")
+                    click.echo(
+                        "minsep = "
+                        + ", ".join(
+                            f"{pair}={low:g}-{high:g}"
+                            for pair, (low, high) in sorted(minsep_ranges.items())
+                        )
+                    )
                 click.echo(f"seedfile = {seed_cell}")
                 click.echo("----------------------------------------")
                 click.echo("buildcell input")
@@ -1218,7 +1426,14 @@ def run_search(
                 click.echo("----------------------------------------")
             return
 
-        seed_text_transform = make_seed_text_transform(formula_context)
+        if use_volume_minsep:
+
+            def seed_text_transform(text: str) -> str:
+                sampled_seed, _, _, _, _ = build_sample_seed(text)
+                return sampled_seed
+
+        else:
+            seed_text_transform = make_seed_text_transform(formula_context)
     elif formula_diagnose > 0:
         raise click.ClickException("--diagnose requires --formula or --elements")
 

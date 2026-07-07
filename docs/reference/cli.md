@@ -29,6 +29,7 @@ Use `-v` or `-vv` for more logging, and `-q`, `-qq`, or `-qqq` for less.
 | `ap deploy` | Build jobflow search or relaxation flows and store results in MongoDB. |
 | `ap db` | Query and retrieve jobflow results from MongoDB. |
 | `ap tools modcell` | Replace the structure in a CASTEP `.cell` template with an ASE-readable structure. |
+| `ap tools volume-minsep-*` | Build/curate volume-minsep datasets and train the lightweight baseline predictor. |
 
 ## Environment Checks
 
@@ -79,9 +80,41 @@ ap run search --seed seed --elements Li,P,O --max-coeff 4 --oxidation-state Li=1
 ap run search --seed seed --elements Li,P,O --diagnose 3
 ```
 
+Volume/minsep estimates can additionally inject `#MINSEP` and automatic
+`#NFORM` directives. The large curated dataset is user-supplied or generated
+offline; airsspy does not bundle it by default.
+
+```bash
+ap run search --seed seed --formula SiO2 \
+  --volume-minsep-source dataset \
+  --volume-minsep-dataset generation/minsep_vol_dataset_curated.json \
+  --diagnose 1
+
+ap run search --seed seed --formula SiO2 \
+  --volume-minsep-source baseline \
+  --volume-minsep-bundle formula_model_artifacts/baseline/baseline_bundle.json
+```
+
+Use `--volume-scale`, `--minsep-scale-low`, `--minsep-scale-high`,
+`--max-atoms`, and `--max-nform` to tune generated directives.
+
 Post-relax RSS pruning is available with `--prune`. The main controls are
 `--prune-pool-size`, `--prune-keep-fraction`, `--prune-dedup-tol`,
 `--prune-fingerprint-cutoff`, and `--prune-zweight`.
+
+### Volume/Minsep Dataset Tools
+
+The volume/minsep tools are offline utilities for reproducing a curated dataset
+and training the small non-torch baseline bundle:
+
+```bash
+ap tools volume-minsep-build-dataset --mp-docs mp-stable-docs.json --output minsep_vol_dataset.json
+ap tools volume-minsep-curate-dataset --dataset minsep_vol_dataset.json --mp-docs mp-stable-docs.json --output minsep_vol_dataset_curated.json
+ap tools volume-minsep-train-baseline --dataset minsep_vol_dataset_curated.json --output-dir formula_model_artifacts
+```
+
+The curation step selects one row per reduced formula by lowest
+`energy_above_hull`.
 
 ### Relax Existing Structures
 

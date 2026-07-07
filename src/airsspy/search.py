@@ -31,6 +31,16 @@ DEFAULT_FORMULA_REMOVE_DIRECTIVES = (
     "TARGVOL",
 )
 
+DEFAULT_ESTIMATE_REMOVE_DIRECTIVES = (
+    "NATOM",
+    "SPECIES",
+    "FORMULA",
+    "VARVOL",
+    "TARGVOL",
+    "MINSEP",
+    "NFORM",
+)
+
 
 @dataclass
 class FormulaSamplingOptions:
@@ -148,6 +158,44 @@ def inject_formula_directive(
     lines = [f"#FORMULA={canonicalize_formula(formula)}"]
     if varvol is not None:
         lines.append(f"#VARVOL={_format_seed_number(varvol)}")
+    lines.extend(filtered)
+    return "\n".join(lines)
+
+
+def remove_buildcell_directives(
+    seed_text: str,
+    remove_directives: Sequence[str],
+) -> str:
+    """Return seed text without selected ``#KEY=`` directives."""
+    remove_patterns = [
+        re.compile(rf"^\s*#{re.escape(key)}\s*=", re.IGNORECASE)
+        for key in remove_directives
+    ]
+    return "\n".join(
+        line
+        for line in seed_text.splitlines()
+        if not any(pattern.search(line) for pattern in remove_patterns)
+    )
+
+
+def inject_buildcell_estimate_directives(
+    seed_text: str,
+    *,
+    formula: str,
+    varvol: float,
+    minsep: dict[str, tuple[float, float] | float],
+    nform: str | dict[str, list[int]] | int,
+    remove_directives: Sequence[str] = DEFAULT_ESTIMATE_REMOVE_DIRECTIVES,
+) -> str:
+    """Inject formula, volume, minsep, and nform directives into seed text."""
+    filtered = remove_buildcell_directives(seed_text, remove_directives).splitlines()
+
+    lines = [
+        f"#FORMULA={canonicalize_formula(formula)}",
+        f"#VARVOL={_format_seed_number(varvol)}",
+        _format_minsep_directive(minsep),
+        f"#NFORM={_format_nform_value(nform)}",
+    ]
     lines.extend(filtered)
     return "\n".join(lines)
 
@@ -355,6 +403,28 @@ def _format_seed_number(value: float) -> str:
     ):
         return str(int(nearest))
     return str(value)
+
+
+def _format_minsep_directive(
+    minsep: dict[str, tuple[float, float] | float],
+) -> str:
+    tokens = ["#MINSEP=0.5-1"]
+    for pair_key in sorted(minsep):
+        value = minsep[pair_key]
+        if isinstance(value, tuple):
+            rendered = "-".join(_format_seed_number(item) for item in value)
+        else:
+            rendered = _format_seed_number(value)
+        tokens.append(f"{pair_key}={rendered}")
+    return " ".join(tokens)
+
+
+def _format_nform_value(nform: str | dict[str, list[int]] | int) -> str:
+    if isinstance(nform, dict):
+        if list(nform.keys()) != ["random"]:
+            raise ValueError("NFORM dict value must have a single key 'random'")
+        return "{" + ",".join(str(int(value)) for value in nform["random"]) + "}"
+    return str(nform)
 
 
 def _resolve_formula_pool(

@@ -1,9 +1,11 @@
 """Tests for CLI commands."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ase import Atoms
+from ase.io import write
 from click.testing import CliRunner
 
 from airsspy.cli import cmd_run
@@ -836,6 +838,7 @@ def test_run_search_help():
     assert "--elements" in result.output
     assert "--max-coeff" in result.output
     assert "--oxidation-state" in result.output
+    assert "--volume-minsep-source" in result.output
     assert "--formula-elements" not in result.output
     assert "--prune" in result.output
     assert "--cell-axis-map" in result.output
@@ -1603,6 +1606,298 @@ def test_run_search_formula_diagnose():
     assert "#SLACK=0.25" in result.output
 
 
+def test_run_search_volume_minsep_dataset_diagnose():
+    """Test dataset-backed volume/minsep diagnosis prints generated directives."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text(
+            "#SPECIES=Si,O\n#FORMULA=Si\n#VARVOL=999\n#MINSEP=9\n#NFORM=1\n#SLACK=0.25\n"
+        )
+        dataset = Path("curated.json")
+        dataset.write_text(
+            json.dumps(
+                [
+                    {
+                        "material_id": "mp-sio2",
+                        "reduced_formula": "SiO2",
+                        "chemical_formula": "SiO2",
+                        "composition": {"Si": 1.0, "O": 2.0},
+                        "volume": 45.0,
+                        "minsep": {
+                            "Si-O": 1.6,
+                            "O-Si": 1.6,
+                            "O-O": 2.5,
+                            "Si-Si": 3.0,
+                        },
+                        "energy_above_hull": 0.0,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "SiO",
+                "--build-only",
+                "--formula",
+                "O2Si",
+                "--volume-minsep-source",
+                "dataset",
+                "--volume-minsep-dataset",
+                str(dataset),
+                "--volume-scale",
+                "1.1",
+                "--max-atoms",
+                "12",
+                "--max-nform",
+                "3",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "volume_minsep_source = dataset" in result.output
+    assert "volume_per_atom = 15" in result.output
+    assert "#FORMULA=SiO2" in result.output
+    assert "#VARVOL=49.5" in result.output
+    assert "#MINSEP=0.5-1 O-O=2.25-2.75 O-Si=1.44-1.76 Si-Si=2.7-3.3" in result.output
+    assert "#NFORM={2,3}" in result.output
+    assert "#SPECIES=" not in result.output
+    assert "#VARVOL=999" not in result.output
+    assert "#MINSEP=9" not in result.output
+    assert "#NFORM=1" not in result.output
+    assert "#SLACK=0.25" in result.output
+
+
+def test_run_search_volume_minsep_diagnose_ignores_superseded_seed_constraints():
+    """Estimator mode ignores old NATOM/NFORM constraints it replaces."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text("#SPECIES=Si,O\n#NATOM=1-2\n#NFORM=1\n")
+        dataset = Path("curated.json")
+        dataset.write_text(
+            json.dumps(
+                [
+                    {
+                        "material_id": "mp-sio2",
+                        "reduced_formula": "SiO2",
+                        "chemical_formula": "SiO2",
+                        "composition": {"Si": 1.0, "O": 2.0},
+                        "volume": 45.0,
+                        "minsep": {
+                            "Si-O": 1.6,
+                            "O-Si": 1.6,
+                            "O-O": 2.5,
+                            "Si-Si": 3.0,
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "SiO",
+                "--build-only",
+                "--formula",
+                "SiO2",
+                "--volume-minsep-source",
+                "dataset",
+                "--volume-minsep-dataset",
+                str(dataset),
+                "--max-atoms",
+                "12",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "#FORMULA=SiO2" in result.output
+    assert "#NATOM=1-2" not in result.output
+    assert "#NFORM={2,3,4}" in result.output
+
+
+def test_run_search_reference_source_filters_references_by_sampled_formula():
+    """Reference source can accept references for multiple sampled formulas."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("mix.cell").write_text("#SPECIES=Si,O,Na,Cl\n")
+        write(
+            "sio2.xyz",
+            Atoms(
+                symbols=["Si", "O", "O"],
+                positions=[[0, 0, 0], [1.6, 0, 0], [0, 2.5, 0]],
+                cell=[5, 5, 5],
+                pbc=True,
+            ),
+        )
+        write(
+            "nacl.xyz",
+            Atoms(
+                symbols=["Na", "Cl"],
+                positions=[[0, 0, 0], [2.8, 0, 0]],
+                cell=[5, 5, 5],
+                pbc=True,
+            ),
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "mix",
+                "--build-only",
+                "--formula",
+                "SiO2",
+                "--volume-minsep-source",
+                "reference",
+                "--reference-structure",
+                "sio2.xyz",
+                "--reference-structure",
+                "nacl.xyz",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "volume_minsep_source = reference" in result.output
+    assert "#FORMULA=SiO2" in result.output
+    assert "#MINSEP=" in result.output
+
+
+def test_tools_volume_minsep_curate_and_train_baseline(tmp_path):
+    """Test volume/minsep offline CLI curation and baseline training."""
+    runner = CliRunner()
+    raw_path = tmp_path / "raw.json"
+    mp_docs_path = tmp_path / "mp_docs.json"
+    curated_path = tmp_path / "curated.json"
+    output_dir = tmp_path / "artifacts"
+    raw_path.write_text(
+        json.dumps(
+            [
+                {
+                    "material_id": "toy-1",
+                    "reduced_formula": "SiO2",
+                    "chemical_formula": "SiO2",
+                    "composition": {"Si": 1.0, "O": 2.0},
+                    "volume": 45.0,
+                    "minsep": {
+                        "Si-O": 1.60,
+                        "O-Si": 1.60,
+                        "O-O": 2.55,
+                        "Si-Si": 3.05,
+                    },
+                },
+                {
+                    "material_id": "toy-2",
+                    "reduced_formula": "SiO2",
+                    "chemical_formula": "SiO2",
+                    "composition": {"Si": 2.0, "O": 4.0},
+                    "volume": 91.2,
+                    "minsep": {
+                        "Si-O": 1.58,
+                        "O-Si": 1.58,
+                        "O-O": 2.50,
+                        "Si-Si": 3.10,
+                    },
+                },
+                {
+                    "material_id": "toy-3",
+                    "reduced_formula": "MgO",
+                    "chemical_formula": "MgO",
+                    "composition": {"Mg": 1.0, "O": 1.0},
+                    "volume": 22.4,
+                    "minsep": {
+                        "Mg-O": 1.95,
+                        "O-Mg": 1.95,
+                        "Mg-Mg": 3.02,
+                        "O-O": 3.02,
+                    },
+                },
+                {
+                    "material_id": "toy-4",
+                    "reduced_formula": "NaCl",
+                    "chemical_formula": "NaCl",
+                    "composition": {"Na": 1.0, "Cl": 1.0},
+                    "volume": 34.0,
+                    "minsep": {
+                        "Na-Cl": 2.81,
+                        "Cl-Na": 2.81,
+                        "Na-Na": 3.95,
+                        "Cl-Cl": 3.95,
+                    },
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mp_docs_path.write_text(
+        json.dumps(
+            [
+                {"material_id": "toy-1", "energy_above_hull": 0.03},
+                {"material_id": "toy-2", "energy_above_hull": 0.0},
+                {"material_id": "toy-3", "energy_above_hull": 0.0},
+                {"material_id": "toy-4", "energy_above_hull": 0.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    curate = runner.invoke(
+        cli,
+        [
+            "tools",
+            "volume-minsep-curate-dataset",
+            "--dataset",
+            str(raw_path),
+            "--mp-docs",
+            str(mp_docs_path),
+            "--output",
+            str(curated_path),
+        ],
+    )
+
+    assert curate.exit_code == 0
+    assert curated_path.exists()
+    curated_rows = json.loads(curated_path.read_text(encoding="utf-8"))
+    sio2_row = next(row for row in curated_rows if row["reduced_formula"] == "SiO2")
+    assert sio2_row["material_id"] == "toy-2"
+
+    train = runner.invoke(
+        cli,
+        [
+            "tools",
+            "volume-minsep-train-baseline",
+            "--dataset",
+            str(raw_path),
+            "--output-dir",
+            str(output_dir),
+            "--volume-alpha-grid",
+            "1e-4,1e-2",
+            "--minsep-alpha-grid",
+            "1e-4,1e-2",
+        ],
+    )
+
+    assert train.exit_code == 0
+    assert (output_dir / "baseline" / "baseline_bundle.json").exists()
+
+
 def test_run_search_formula_accepts_comma_separated_values():
     """Test --formula accepts one comma-separated formula list."""
     runner = CliRunner()
@@ -1763,6 +2058,67 @@ def test_run_search_formula_transform_passed_to_buildcell():
     transformed = transform("#SPECIES=Si\n#NATOM=2\n")
     assert "#FORMULA=Si" in transformed
     assert "#SPECIES=Si" not in transformed
+
+
+def test_run_search_volume_minsep_transform_resolves_paths_before_chdir():
+    """Test estimator dataset paths still work after run_search enters workdir."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text("#SPECIES=Si,O\n#NFORM=1\n")
+        Path("work").mkdir()
+        dataset = Path("curated.json")
+        dataset.write_text(
+            json.dumps(
+                [
+                    {
+                        "material_id": "mp-sio2",
+                        "reduced_formula": "SiO2",
+                        "chemical_formula": "SiO2",
+                        "composition": {"Si": 1.0, "O": 2.0},
+                        "volume": 45.0,
+                        "minsep": {
+                            "Si-O": 1.6,
+                            "O-Si": 1.6,
+                            "O-O": 2.5,
+                            "Si-Si": 3.0,
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        with patch("airsspy.jf.runners.run_buildcell") as mock_buildcell:
+            mock_buildcell.return_value = {
+                "struct_name": "SiO-001",
+                "seed_name": "SiO",
+                "struct_content": "",
+            }
+            result = runner.invoke(
+                cli,
+                [
+                    "run",
+                    "search",
+                    "--seed",
+                    "SiO",
+                    "--nmax",
+                    "1",
+                    "--build-only",
+                    "--workdir",
+                    "work",
+                    "--formula",
+                    "SiO2",
+                    "--volume-minsep-source",
+                    "dataset",
+                    "--volume-minsep-dataset",
+                    str(dataset),
+                ],
+            )
+
+            assert result.exit_code == 0
+            transform = mock_buildcell.call_args.kwargs["seed_text_transform"]
+            transformed = transform("#SPECIES=Si,O\n#NFORM=1\n")
+            assert "#FORMULA=SiO2" in transformed
+            assert "#MINSEP=" in transformed
 
 
 def test_run_search_prune_rejects_build_only():
