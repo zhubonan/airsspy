@@ -47,12 +47,23 @@ airsspy has several optional dependency groups:
 - **`dev`**: Development and test tools (pytest, pytest-cov, ruff, mypy,
   pre-commit, twine)
 - **`ml`**: Optional machine-learning potential support through torch-sim-atomistic
+  for plain ML model specs such as `mace:medium`
+- **`mace`**: Optional MACE ASE-calculator support for `ase:mace:<model>`
+- **`symmetrix`**: Optional MACE-side dependencies for the Symmetrix backend
+  selected with `symmetrix:mace:<model>`
 - **`docs`**: Documentation building tools (Sphinx, themes, extensions)
+
+The Symmetrix ML backend is MACE-only and uses the external `symmetrix` Python
+package through ASE. Install the `symmetrix` extra when the package is available
+from your configured package index; otherwise install the local Symmetrix source
+checkout into the same environment.
 
 Install with optional dependencies:
 
 ```bash
 pip install "airsspy[ml]"
+pip install "airsspy[mace]"
+pip install "airsspy[symmetrix]"
 pip install "airsspy[docs]"
 ```
 

@@ -110,6 +110,144 @@ class TestResolveCalculator:
             _resolve_calculator("nocolonordot")
 
 
+def test_symmetrix_mace_spec_uses_symmetrix_calculator(monkeypatch, tmp_path):
+    """Symmetrix MACE specs instantiate Symmetrix with resolved model kwargs."""
+    from airsspy.jf import ml_runners
+
+    calls = []
+
+    class FakeSymmetrix:
+        def __init__(self, model_file, **kwargs):
+            calls.append((model_file, kwargs))
+
+    monkeypatch.setitem(sys.modules, "symmetrix", SimpleNamespace(Symmetrix=FakeSymmetrix))
+    monkeypatch.setitem(
+        sys.modules,
+        "symmetrix.extract_mace_data",
+        SimpleNamespace(
+            extract_mace_data=lambda model_file, **kwargs: {
+                "atomic_numbers": kwargs["species"],
+                "r_cut": 6.0,
+            }
+        ),
+    )
+    monkeypatch.setenv("AIRSSPY_SYMMETRIX_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        ml_runners,
+        "_resolve_mace_model_file",
+        lambda model_id: tmp_path / f"{model_id}.model",
+    )
+
+    calc = ml_runners._resolve_calculator(
+        "symmetrix:Symmetrix@medium-mpa-0",
+        species=[7, 13],
+    )
+
+    assert isinstance(calc, FakeSymmetrix)
+    model_file, kwargs = calls[0]
+    assert model_file.parent == tmp_path / "cache"
+    assert model_file.suffix == ".json"
+    assert kwargs == {"dtype": "float64", "use_kokkos": True, "species": [7, 13]}
+
+
+def test_symmetrix_mace_spec_caches_extracted_json(monkeypatch, tmp_path):
+    """Symmetrix conversion writes and reuses species-specific JSON."""
+    from airsspy.jf import ml_runners
+
+    model_path = tmp_path / "medium.model"
+    model_path.write_text("checkpoint", encoding="utf-8")
+    cache_dir = tmp_path / "cache"
+    calls = []
+    extractions = []
+
+    class FakeSymmetrix:
+        def __init__(self, model_file, **kwargs):
+            calls.append((model_file, kwargs))
+
+    def fake_extract(model_file, **kwargs):
+        extractions.append((model_file, kwargs))
+        return {"atomic_numbers": kwargs["species"], "r_cut": 6.0}
+
+    monkeypatch.setenv("AIRSSPY_SYMMETRIX_CACHE", str(cache_dir))
+    monkeypatch.setitem(sys.modules, "symmetrix", SimpleNamespace(Symmetrix=FakeSymmetrix))
+    monkeypatch.setitem(
+        sys.modules,
+        "symmetrix.extract_mace_data",
+        SimpleNamespace(extract_mace_data=fake_extract),
+    )
+    monkeypatch.setattr(ml_runners, "_resolve_mace_model_file", lambda model_id: model_path)
+
+    first = ml_runners._resolve_calculator(
+        "symmetrix:Symmetrix@medium",
+        species=[7, 13],
+        num_spline_points=32,
+    )
+    second = ml_runners._resolve_calculator(
+        "symmetrix:Symmetrix@medium",
+        species=[7, 13],
+        num_spline_points=32,
+    )
+
+    assert isinstance(first, FakeSymmetrix)
+    assert isinstance(second, FakeSymmetrix)
+    assert len(extractions) == 1
+    assert extractions[0] == (
+        model_path,
+        {"species": [7, 13], "num_spline_points": 32},
+    )
+    assert calls[0][0] == calls[1][0]
+    assert calls[0][0].parent == cache_dir
+    assert calls[0][0].suffix == ".json"
+    assert calls[0][0].is_file()
+
+
+def test_symmetrix_relax_runner_derives_species(monkeypatch, tmp_path):
+    """Symmetrix runners derive species from each input structure."""
+    from airsspy.jf import ml_runners
+    from airsspy.jf.ml_runners import AirssMlRelaxRunner
+
+    captured = {}
+    atoms = Atoms("AlN", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
+
+    class FakeDyn:
+        nsteps = 0
+
+        def __init__(self, atoms_obj, trajectory):
+            self.atoms = atoms_obj
+
+        def run(self, fmax, steps):
+            return True
+
+    class FakeCalc:
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def get_potential_energy(self, atoms=None, force_consistent=False):
+            return -1.0
+
+        def get_forces(self, atoms=None):
+            return np.zeros((2, 3))
+
+        def get_stress(self, atoms=None):
+            return np.zeros(6)
+
+    def fake_resolve(spec, **kwargs):
+        captured["spec"] = spec
+        captured["kwargs"] = kwargs
+        return FakeCalc()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ml_runners, "_structure_input_to_atoms", lambda _: atoms.copy())
+    monkeypatch.setattr(ml_runners, "_resolve_calculator", fake_resolve)
+    monkeypatch.setattr("ase.optimize.FIRE", FakeDyn)
+
+    runner = AirssMlRelaxRunner("symmetrix:Symmetrix@medium-mpa-0", max_steps=1)
+    rc = runner.run("AlN-001", atoms)
+
+    assert rc == 0
+    assert captured["spec"] == "symmetrix:Symmetrix@medium-mpa-0"
+    assert captured["kwargs"]["species"] == [7, 13]
+
+
 # ---------------------------------------------------------------------------
 # AirssMlSinglePointRunner tests
 # ---------------------------------------------------------------------------

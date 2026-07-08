@@ -24,8 +24,11 @@ ASE calculator specification format::
 For example ``mace.calculators:MACECalculator@medium``.
 """
 
+import hashlib
 import importlib
+import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional, Union
@@ -71,6 +74,9 @@ def _resolve_calculator(calculator_spec: str, **kwargs):
     Raises:
         ValueError: If the spec cannot be parsed.
     """
+    if calculator_spec.startswith("symmetrix:"):
+        return _resolve_symmetrix_calculator(calculator_spec, **kwargs)
+
     # Split off the @model suffix
     model = None
     if "@" in calculator_spec:
@@ -96,6 +102,119 @@ def _resolve_calculator(calculator_spec: str, **kwargs):
     if model is not None:
         return cls(model, **kwargs)
     return cls(**kwargs)
+
+
+def _resolve_symmetrix_calculator(calculator_spec: str, **kwargs):
+    """Instantiate the explicit Symmetrix MACE ASE calculator backend."""
+    spec = calculator_spec[len("symmetrix:") :]
+    if "@" not in spec:
+        raise ValueError(
+            "Cannot parse Symmetrix calculator spec. "
+            "Use 'symmetrix:Symmetrix@<mace-model>'."
+        )
+    class_name, model_id = spec.rsplit("@", 1)
+    if class_name != "Symmetrix":
+        raise ValueError(
+            f"Unsupported Symmetrix calculator: {class_name!r}. "
+            "Expected 'symmetrix:Symmetrix@<mace-model>'."
+        )
+
+    try:
+        module = importlib.import_module("symmetrix")
+    except ImportError as exc:
+        raise ImportError(
+            "Symmetrix is required for 'symmetrix:mace:<model>' ML specs. "
+            "Install the symmetrix Python package or use another ML backend."
+        ) from exc
+
+    calc_kwargs = {"dtype": "float64", "use_kokkos": True}
+    calc_kwargs.update(kwargs)
+    model_file = _symmetrix_model_file(model_id, calc_kwargs)
+    return module.Symmetrix(model_file, **calc_kwargs)
+
+
+def _resolve_mace_model_file(model_id: str) -> Path | str:
+    """Resolve a MACE model id or local path for torch-sim-compatible names."""
+    model_path = Path(model_id).expanduser()
+    if model_path.is_file():
+        return model_path
+
+    from mace.calculators.foundations_models import download_mace_mp_checkpoint
+
+    return Path(download_mace_mp_checkpoint(model=model_id))
+
+
+def _symmetrix_model_file(model_id: str, calc_kwargs: dict) -> Path | str:
+    """Return a cached Symmetrix JSON file for MACE models when possible."""
+    model_file = _resolve_mace_model_file(model_id)
+    extract_kwargs = {
+        key: calc_kwargs[key]
+        for key in ("species", "head", "num_spline_points")
+        if key in calc_kwargs
+    }
+    if not extract_kwargs:
+        return model_file
+
+    extract_mace_data = importlib.import_module(
+        "symmetrix.extract_mace_data"
+    ).extract_mace_data
+
+    cache_dir = _symmetrix_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / (
+        _symmetrix_cache_key(model_id, model_file, extract_kwargs) + ".json"
+    )
+    if not cache_path.is_file():
+        data = extract_mace_data(model_file, **extract_kwargs)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                suffix=".json",
+                prefix=cache_path.stem + "-",
+                dir=cache_dir,
+                delete=False,
+                encoding="utf-8",
+            ) as handle:
+                json.dump(data, handle)
+                tmp_path = Path(handle.name)
+            tmp_path.replace(cache_path)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink()
+    return cache_path
+
+
+def _symmetrix_cache_dir() -> Path:
+    """Return the cache directory for converted Symmetrix JSON models."""
+    env_path = os.environ.get("AIRSSPY_SYMMETRIX_CACHE")
+    if env_path:
+        return Path(env_path).expanduser()
+    return (
+        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        / "airsspy"
+        / "symmetrix"
+    )
+
+
+def _symmetrix_cache_key(model_id: str, model_file: Path | str, extract_kwargs: dict) -> str:
+    """Build a stable cache key for a Symmetrix model conversion."""
+    model_path = Path(model_file).expanduser()
+    identity: dict[str, object] = {"model_id": model_id}
+    if model_path.is_file():
+        stat = model_path.stat()
+        identity.update(
+            {
+                "path": str(model_path.resolve()),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    else:
+        identity["path"] = str(model_file)
+    identity["extract_kwargs"] = extract_kwargs
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _cell_to_atoms(cell_path: str):
@@ -127,6 +246,18 @@ def _structure_input_to_atoms(structure_input: StructureInput):
         atoms.pbc = True
         return atoms
     return _cell_content_to_atoms(structure_input)
+
+
+def _calculator_kwargs_for_atoms(
+    calculator_spec: str,
+    calculator_kwargs: Optional[dict],
+    atoms: Atoms,
+) -> dict:
+    """Return calculator kwargs augmented with structure-specific metadata."""
+    kwargs = dict(calculator_kwargs or {})
+    if calculator_spec.startswith("symmetrix:") and "species" not in kwargs:
+        kwargs["species"] = sorted({int(z) for z in atoms.get_atomic_numbers()})
+    return kwargs
 
 
 def _get_pressure_gpa(atoms) -> float:
@@ -218,7 +349,14 @@ class AirssMlSinglePointRunner:
         """
         try:
             atoms = _structure_input_to_atoms(structure_input)
-            calc = _resolve_calculator(self.calculator_spec, **self.calculator_kwargs)
+            calc = _resolve_calculator(
+                self.calculator_spec,
+                **_calculator_kwargs_for_atoms(
+                    self.calculator_spec,
+                    self.calculator_kwargs,
+                    atoms,
+                ),
+            )
             atoms.calc = calc
 
             energy = atoms.get_potential_energy()
@@ -294,7 +432,14 @@ class AirssMlRelaxRunner:
 
         try:
             atoms = _structure_input_to_atoms(structure_input)
-            calc = _resolve_calculator(self.calculator_spec, **self.calculator_kwargs)
+            calc = _resolve_calculator(
+                self.calculator_spec,
+                **_calculator_kwargs_for_atoms(
+                    self.calculator_spec,
+                    self.calculator_kwargs,
+                    atoms,
+                ),
+            )
             atoms.calc = calc
 
             # Choose optimizer

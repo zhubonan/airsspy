@@ -123,6 +123,7 @@ ap run relax --cell "*.cell" --seed Si --code castep --pack
 ap run relax --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
 ap run relax --cell "*.res" --code ml --calculator mace:medium --device cuda --batch-size 16
 ap run relax --cell "*.cell" --code ml --calculator ase:mace:medium --optimizer BFGS
+ap run relax --cell "*.cell" --code ml --calculator symmetrix:mace:medium-mpa-0 --optimizer FIRE
 ```
 
 `run relax` accepts single-structure `.cell` and `.res` inputs. Packed `.res`
@@ -139,6 +140,7 @@ where supported: `castep`, `abacus`, `vasp`, and `ml`.
 ```bash
 ap run sp --cell "*.cell" --seed Si --code castep
 ap run sp --cell "*.res" --code ml --calculator mace:medium --batch-size 32
+ap run sp --cell "*.res" --code ml --calculator symmetrix:mace:medium
 ap run sp --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
 ```
 
@@ -151,12 +153,20 @@ supported for VASP and ML single-points.
 ap run crud --workdir . --code castep
 ap run crud --workdir . --code vasp --singlepoint --potcar-dir /path/to/potpaw
 ap run crud --workdir . --code ml --calculator mace:medium --batch-size 8 --nostop
+ap run crud --workdir . --code ml --calculator symmetrix:mace:medium --nostop
 ```
 
 The CRUD worker consumes queued `hopper/*-*.res` files, converts each claimed
 RES structure into backend inputs, and moves outputs into `good_castep/` or
 `bad_castep/`. Use `STOP_CRUD` to stop a long-running worker. `--cycle` can
 requeue CASTEP-like electronic-minimisation failures.
+
+For ML runs, plain `mace:<model>` uses the torch-sim backend and supports
+`--device`/`--batch-size`; `ase:mace:<model>` uses the generic ASE MACE
+calculator fallback; and `symmetrix:mace:<model>` uses the Symmetrix ASE
+calculator path. The Symmetrix backend is MACE-only, accepts the same MACE model
+names as `mace:<model>`, and uses ASE optimizer controls such as `--optimizer`,
+`--fmax`, `--max-iterations`, and `--pressure` rather than torch-sim batching.
 
 ## Ranking And Hull Analysis
 

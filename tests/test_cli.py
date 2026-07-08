@@ -1211,14 +1211,30 @@ def test_ml_model_backend_resolution():
     """ML model specs default to torch-sim and use ase: for ASE fallback."""
     assert cmd_run._is_torchsim_model("mace:medium")
     assert not cmd_run._is_torchsim_model("ase:mace:medium")
+    assert cmd_run._is_symmetrix_model("symmetrix:mace:medium")
+    assert not cmd_run._is_torchsim_model("symmetrix:mace:medium")
     assert (
         cmd_run._normalize_ml_ase_spec("ase:mace:medium")
         == "mace.calculators:MACECalculator@medium"
     )
     assert (
+        cmd_run._normalize_ml_ase_spec("symmetrix:mace:medium")
+        == "symmetrix:Symmetrix@medium"
+    )
+    assert (
         cmd_run._normalize_ml_ase_spec("ase:my.module:Calc@model")
         == "my.module:Calc@model"
     )
+
+
+def test_symmetrix_rejects_non_mace_models():
+    """Symmetrix backend is intentionally limited to MACE models."""
+    try:
+        cmd_run._normalize_ml_ase_spec("symmetrix:sevennet:sevennet-mf-ompa")
+    except ValueError as exc:
+        assert "symmetrix:mace:<model>" in str(exc)
+    else:
+        raise AssertionError("Expected Symmetrix non-MACE model to fail")
 
 
 def test_plain_ml_model_fails_clearly_without_torchsim():
@@ -1251,6 +1267,115 @@ def test_plain_ml_model_fails_clearly_without_torchsim():
 
         assert result.exit_code != 0
         assert "torch-sim is required" in result.output
+
+
+def test_run_relax_symmetrix_uses_ase_runner_without_torchsim():
+    """Symmetrix MACE specs use ASE runner routing, not torch-sim batching."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "relax",
+                            "--cell",
+                            "*.res",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "symmetrix:mace:medium-mpa-0",
+                            "--keep",
+                        ],
+                    )
+
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        collect.assert_called_once()
+
+
+def test_run_sp_symmetrix_uses_ase_runner_without_torchsim():
+    """Symmetrix MACE single-points use the normal ML SP runner path."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "sp",
+                            "--cell",
+                            "*.res",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "symmetrix:mace:medium",
+                        ],
+                    )
+
+    assert result.exit_code == 0
+    fake_runner.run.assert_called_once()
+    collect.assert_called_once()
+
+
+def test_run_crud_symmetrix_uses_ase_runner_without_torchsim():
+    """Symmetrix MACE CRUD work is handled by the non-batch ML runner."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        Path("hopper/LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_task_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "crud",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "symmetrix:mace:medium",
+                        ],
+                    )
+
+    assert result.exit_code == 0
+    fake_runner.run.assert_called_once()
+    collect.assert_called_once()
 
 
 def test_run_relax_accepts_res_input_for_ase_ml():
@@ -1318,7 +1443,7 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
 
         fake_torchsim = MagicMock()
         fake_torchsim.relax_batch.side_effect = fake_batch
-        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+        with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
             with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
                 with patch(
                     "airsspy.jf.ml_runners.TorchSimRunner",
@@ -1378,7 +1503,7 @@ def test_run_relax_torchsim_chunks_and_skips_packed_res():
 
         fake_torchsim = MagicMock()
         fake_torchsim.relax_batch.side_effect = fake_batch
-        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+        with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
             with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
                 with patch(
                     "airsspy.jf.ml_runners.TorchSimRunner",

@@ -739,12 +739,19 @@ def _walltime_remaining_ok(sched, walltime_buffer: int) -> bool:
 
 def _is_torchsim_model(calculator_spec: str) -> bool:
     """Return whether a model spec should use the torch-sim backend."""
+    if _is_symmetrix_model(calculator_spec):
+        return False
     if calculator_spec.startswith("ase:"):
         return False
     if ":" not in calculator_spec:
         return False
     backend = calculator_spec.split(":", 1)[0]
     return "." not in backend
+
+
+def _is_symmetrix_model(calculator_spec: str) -> bool:
+    """Return whether a model spec should use the Symmetrix ASE backend."""
+    return bool(calculator_spec and calculator_spec.startswith("symmetrix:"))
 
 
 def _ensure_torchsim_available() -> None:
@@ -759,8 +766,25 @@ def _ensure_torchsim_available() -> None:
         )
 
 
+def _validate_ml_calculator_spec(calculator_spec: str) -> None:
+    """Validate ML calculator syntax and raise a Click-friendly error."""
+    if _is_symmetrix_model(calculator_spec):
+        try:
+            _normalize_ml_ase_spec(calculator_spec)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+
 def _normalize_ml_ase_spec(model_spec: str) -> str:
     """Convert an explicit ``ase:`` model spec into an ASE calculator spec."""
+    if _is_symmetrix_model(model_spec):
+        parts = model_spec.split(":", 2)
+        if len(parts) != 3 or parts[1] != "mace" or not parts[2]:
+            raise ValueError(
+                "Symmetrix ML specs must use 'symmetrix:mace:<model>'. "
+                "Only MACE models are supported by the Symmetrix backend."
+            )
+        return f"symmetrix:Symmetrix@{parts[2]}"
     if not model_spec.startswith("ase:"):
         return model_spec
     ase_spec = model_spec[4:]
@@ -1794,6 +1818,8 @@ def run_crud(
     """Consume hopper/*.res jobs locally, like crud.pl."""
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
+    if code == "ml":
+        _validate_ml_calculator_spec(calculator_spec)
     if singlepoint and code not in ("castep", "abacus", "vasp", "ml"):
         raise click.ClickException(f"Single-point not supported for code: {code}")
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
@@ -2131,6 +2157,8 @@ def run_relax(
 
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
+    if code == "ml":
+        _validate_ml_calculator_spec(calculator_spec)
     if singlepoint and code not in ("castep", "abacus", "vasp", "ml"):
         raise click.ClickException(f"Single-point not supported for code: {code}")
     potcar_dir = _resolve_optional_path(potcar_dir)
@@ -2464,6 +2492,8 @@ def run_sp(
     """Run single-point calculations on existing cell files."""
     if code == "ml" and not calculator_spec:
         raise click.ClickException("--calculator is required when --code ml")
+    if code == "ml":
+        _validate_ml_calculator_spec(calculator_spec)
 
     workdir = Path(workdir).resolve()
     cell_files = sorted(workdir.glob(cell))
