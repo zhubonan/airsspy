@@ -2,17 +2,26 @@
 CLI commands for running AIRSS searches locally (non-jobflow, like airss.pl).
 """
 
+import csv
 import logging
 import os
 import random
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
 from airsspy.cli.cmd_deploy import SUFFIX_MAP
+from airsspy.restools import RESFile
 from airsspy.scheduler import Scheduler
+from airsspy.shake import (
+    ShakeRecord,
+    collect_shake_input_paths,
+    prepare_shaken_inputs,
+    write_shake_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +34,29 @@ EXE_DEFAULTS = {
     "abacus": "abacus",
     "vasp": "vasp_std",
 }
+
+
+@dataclass
+class LocalRelaxInput:
+    """Prepared input for local relax/SP execution."""
+
+    input_path: Path
+    cell_path: Path
+    struct_name: str
+    cell_content: str
+    template_param: Path | None = None
+    template_kpoints: Path | None = None
+
+
+@dataclass
+class LocalRelaxResult:
+    """Result summary from local relax/SP execution."""
+
+    n_succeeded: int
+    n_failed: int
+    total: int
+    collected_res_files: list[Path]
+    statuses: dict[str, str]
 
 
 def _check_stop_file(workdir: Path) -> bool:
@@ -96,6 +128,175 @@ def _pack_res_files(
             out.write(res_file.read_text())
             out.write("\n")
     return packed
+
+
+def _read_res_enthalpy_per_atom(path: Path) -> float | None:
+    """Read enthalpy per atom from a RES file if available."""
+    try:
+        res = RESFile.from_file(str(path))
+    except Exception:
+        return None
+    if res.enthalpy is None or not res.natoms:
+        return None
+    return float(res.enthalpy) / int(res.natoms)
+
+
+def _write_shake_relax_summary(
+    records: list[ShakeRecord],
+    relax_dir: Path,
+    summary_path: Path,
+    statuses: dict[str, str],
+) -> None:
+    """Write a post-relax summary for `ap run shake`."""
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=[
+                "source_path",
+                "source_label",
+                "shake_label",
+                "shake_index",
+                "input_path",
+                "relaxed_path",
+                "source_enthalpy_per_atom",
+                "relaxed_enthalpy_per_atom",
+                "delta_mev_per_atom",
+                "status",
+            ],
+        )
+        writer.writeheader()
+        for record in records:
+            status = statuses.get(record.shake_label, "failed")
+            relaxed_path = relax_dir / f"{record.shake_label}.res"
+            final_epa = (
+                _read_res_enthalpy_per_atom(relaxed_path)
+                if status in {"relaxed", "not_converged"} and relaxed_path.exists()
+                else None
+            )
+            delta = (
+                (final_epa - record.source_enthalpy_per_atom) * 1000.0
+                if final_epa is not None
+                and record.source_enthalpy_per_atom is not None
+                else None
+            )
+            writer.writerow(
+                {
+                    "source_path": str(record.source_path),
+                    "source_label": record.source_label,
+                    "shake_label": record.shake_label,
+                    "shake_index": record.shake_index,
+                    "input_path": str(record.input_path),
+                    "relaxed_path": str(relaxed_path)
+                    if status in {"relaxed", "not_converged"} and relaxed_path.exists()
+                    else "",
+                    "source_enthalpy_per_atom": _format_optional_float(
+                        record.source_enthalpy_per_atom
+                    ),
+                    "relaxed_enthalpy_per_atom": _format_optional_float(final_epa),
+                    "delta_mev_per_atom": _format_optional_float(delta),
+                    "status": status,
+                }
+            )
+
+
+def _format_optional_float(value: float | None) -> str:
+    return "" if value is None else f"{value:.12g}"
+
+
+def _clear_shake_stale_artifacts(
+    relax_dir: Path,
+    label: str,
+    *,
+    archive_dir: Path | None = None,
+) -> None:
+    """Remove stale artifacts for a deterministic shake label before rerun."""
+    stale_paths = list(relax_dir.glob(label + ".*"))
+    out_cell = relax_dir / f"{label}-out.cell"
+    if out_cell.exists():
+        stale_paths.append(out_cell)
+    if not stale_paths:
+        return
+    target_dir = None
+    if archive_dir is not None:
+        label_dir = archive_dir / label
+        generation = 1
+        while (label_dir / f"{generation:04d}").exists():
+            generation += 1
+        target_dir = label_dir / f"{generation:04d}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+    for stale_path in stale_paths:
+        if target_dir is None:
+            if stale_path.is_dir():
+                shutil.rmtree(stale_path)
+            else:
+                stale_path.unlink(missing_ok=True)
+            continue
+        target = target_dir / stale_path.name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        shutil.move(str(stale_path), str(target))
+
+
+def _shake_seed_prefix(record: ShakeRecord) -> str:
+    """Return the AIRSS seed prefix for a shaken source structure."""
+    return _crud_root_from_seed(record.source_path.stem)
+
+
+def _resolve_shake_template_cell(
+    record: ShakeRecord,
+    *,
+    template_cell: Path | None,
+    fallback_dir: Path,
+) -> Path | None:
+    """Resolve the template cell for a shaken structure."""
+    if template_cell is not None:
+        return template_cell
+    filename = f"{_shake_seed_prefix(record)}.cell"
+    for directory in (record.source_path.parent, fallback_dir):
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _resolve_shake_template_param(
+    record: ShakeRecord,
+    code: str,
+    *,
+    template_param: Path | None,
+    fallback_dir: Path,
+) -> Path | None:
+    """Resolve the backend parameter file for a shaken structure."""
+    if template_param is not None:
+        return template_param
+    suffix = SUFFIX_MAP[code]
+    filename = f"{_shake_seed_prefix(record)}{suffix}"
+    for directory in (record.source_path.parent, fallback_dir):
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _resolve_shake_template_kpoints(
+    record: ShakeRecord,
+    *,
+    template_kpoints: Path | None,
+    fallback_dir: Path,
+) -> Path | None:
+    """Resolve optional VASP KPOINTS for a shaken structure."""
+    if template_kpoints is not None:
+        return template_kpoints
+    filename = f"{_shake_seed_prefix(record)}.KPOINTS"
+    for directory in (record.source_path.parent, fallback_dir):
+        candidate = directory / filename
+        if candidate.exists():
+            return candidate.resolve()
+    return None
 
 
 def _is_packed_res_input(path: Path) -> bool:
@@ -400,6 +601,7 @@ def _prepare_relax_input(
     *,
     write_res_cell: bool = True,
     convert_res_cell: bool = True,
+    template_cell: Path | None = None,
 ) -> tuple[Path, str, str]:
     """Return cell path/name/content for a relax input, converting RES if needed."""
     suffix = input_path.suffix.lower()
@@ -415,8 +617,8 @@ def _prepare_relax_input(
     if not convert_res_cell:
         return cell_path, cell_path.stem, ""
 
-    template_cell = _resolve_relax_template_cell(input_path, workdir)
-    cell_content = "\n".join(_res_to_cell_lines(input_path, template_cell)) + "\n"
+    root_cell = template_cell or _resolve_relax_template_cell(input_path, workdir)
+    cell_content = "\n".join(_res_to_cell_lines(input_path, root_cell)) + "\n"
     if write_res_cell:
         cell_path.write_text(cell_content)
     return cell_path, cell_path.stem, cell_content
@@ -443,8 +645,11 @@ def _resolve_relax_param_file(
     seed: str,
     workdir: Path,
     param_suffix: str,
+    template_param: Path | None = None,
 ) -> Path:
     """Find the parameter file for a relax input."""
+    if template_param is not None:
+        return template_param
     if input_path.suffix.lower() == ".res":
         candidates = [workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"]
     else:
@@ -471,20 +676,22 @@ def _run_local_structure_one(
     workdir: Path,
     *,
     singlepoint: bool = False,
+    template_param: Path | None = None,
+    template_kpoints: Path | None = None,
 ) -> int:
     """Run one local relax/SP structure with an existing runner."""
     if code == "castep":
         from castepinput.inputs import ParamInput
 
         param_file = _resolve_relax_param_file(
-            input_path, cell_path, seed, workdir, param_suffix
+            input_path, cell_path, seed, workdir, param_suffix, template_param
         )
         return runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
     if code in ("gulp", "pp3"):
         if singlepoint:
             raise click.ClickException(f"Single-point not supported for code: {code}")
         param_file = _resolve_relax_param_file(
-            input_path, cell_path, seed, workdir, param_suffix
+            input_path, cell_path, seed, workdir, param_suffix, template_param
         )
         return runner.run(
             struct_name,
@@ -494,14 +701,14 @@ def _run_local_structure_one(
         )
     if code == "abacus":
         param_file = _resolve_relax_param_file(
-            input_path, cell_path, seed, workdir, param_suffix
+            input_path, cell_path, seed, workdir, param_suffix, template_param
         )
         return runner.run(struct_name, cell_content, param_file.read_text())
     if code == "vasp":
         param_file = _resolve_relax_param_file(
-            input_path, cell_path, seed, workdir, param_suffix
+            input_path, cell_path, seed, workdir, param_suffix, template_param
         )
-        kpoints_path = param_file.with_suffix(".KPOINTS")
+        kpoints_path = template_kpoints or param_file.with_suffix(".KPOINTS")
         if not kpoints_path.exists():
             kpoints_path = workdir / f"{seed}.KPOINTS"
         return runner.run(
@@ -941,6 +1148,263 @@ def _collect_result(struct_name: str, code: str, calculator_spec: str = None) ->
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
+
+
+def _run_local_relax_inputs(
+    relax_inputs: list[LocalRelaxInput],
+    *,
+    code: str,
+    exe: str,
+    seed: str,
+    workdir: Path,
+    keep: bool,
+    pack: bool,
+    singlepoint: bool,
+    pressure: float,
+    max_iterations: int,
+    cluster: bool,
+    mpinp: int | None,
+    walltime_buffer: int,
+    calculator_spec: str | None,
+    optimizer: str,
+    fmax: float,
+    device: str | None,
+    batch_size: int,
+    potcar_dir: str | None,
+    potcar_map: dict[str, str] | None,
+    cell_axis_map: str | None,
+    template_param: Path | None = None,
+    template_kpoints: Path | None = None,
+) -> LocalRelaxResult:
+    """Run prepared local relaxation inputs through the normal runner stack."""
+    param_suffix = None
+    if code != "ml":
+        param_suffix = SUFFIX_MAP[code]
+        for relax_input in relax_inputs:
+            _resolve_relax_param_file(
+                relax_input.input_path,
+                relax_input.cell_path,
+                seed,
+                workdir,
+                param_suffix,
+                relax_input.template_param or template_param,
+            )
+
+    use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
+    if use_torchsim:
+        _ensure_torchsim_available()
+
+    sched = _get_scheduler_for_walltime()
+    runner = None
+    if code != "ml" or not use_torchsim:
+        logger.debug(
+            "Creating %s runner for code=%s exe=%s backend=%s",
+            "single-point" if singlepoint else "relax",
+            code,
+            exe,
+            "ase" if code == "ml" else "external",
+        )
+        runner = _create_task_runner(
+            code,
+            exe,
+            max_iterations,
+            cluster,
+            pressure,
+            mpinp,
+            calculator_spec=calculator_spec,
+            optimizer=optimizer,
+            fmax=fmax,
+            potcar_dir=potcar_dir,
+            potcar_map=potcar_map,
+            cell_axis_map=cell_axis_map,
+            singlepoint=singlepoint,
+        )
+
+    orig_dir = os.getcwd()
+    os.chdir(workdir)
+    try:
+        n_succeeded = 0
+        n_failed = 0
+        total = len(relax_inputs)
+        collected_res_files: list[Path] = []
+        statuses = {relax_input.struct_name: "pending" for relax_input in relax_inputs}
+
+        if use_torchsim:
+            from airsspy.jf.ml_runners import TorchSimRunner
+
+            struct_names = [relax_input.struct_name for relax_input in relax_inputs]
+            structures = [
+                _prepare_ml_structure_input(
+                    relax_input.input_path,
+                    relax_input.cell_content,
+                )
+                for relax_input in relax_inputs
+            ]
+            logger.debug(
+                "Prepared ML structures: total_atoms=%d, first_batch=%s",
+                sum(len(structure) for structure in structures),
+                ", ".join(struct_names[:batch_size]),
+            )
+
+            mode_label = "SP" if singlepoint else "relaxing"
+            logger.info(
+                "TorchSim batch %s %d structures with %s (batch size %d)",
+                mode_label,
+                total,
+                calculator_spec,
+                batch_size,
+            )
+            torchsim_runner = TorchSimRunner(calculator_spec, device=device)
+            for start in range(0, total, batch_size):
+                end = min(start + batch_size, total)
+                batch_names = struct_names[start:end]
+                batch_structures = structures[start:end]
+                logger.info("TorchSim batch [%d-%d/%d]", start + 1, end, total)
+                try:
+                    done, failed, collected = _run_torchsim_batch(
+                        torchsim_runner,
+                        batch_names,
+                        batch_structures,
+                        code,
+                        calculator_spec,
+                        singlepoint=singlepoint,
+                        max_iterations=max_iterations,
+                        fmax=fmax,
+                        optimizer=optimizer,
+                        pressure=pressure,
+                    )
+                    collected_res_files.extend(workdir / path.name for path in collected)
+                    for path in collected:
+                        statuses[path.stem] = "relaxed"
+                    n_succeeded += done
+                    n_failed += failed
+                    for pending_name in batch_names:
+                        if statuses[pending_name] == "pending":
+                            statuses[pending_name] = "failed"
+                except Exception:
+                    logger.error(
+                        "TorchSim batch failed for structures %s",
+                        ", ".join(batch_names),
+                        exc_info=True,
+                    )
+                    for failed_name in batch_names:
+                        statuses[failed_name] = "failed"
+                    n_failed += len(batch_names)
+                    continue
+        else:
+            backend_label = "ASE ML" if code == "ml" else code
+            logger.info(
+                "%s %d structures with %s",
+                "Running single-point on" if singlepoint else "Relaxing",
+                total,
+                backend_label,
+            )
+            for i, relax_input in enumerate(relax_inputs, 1):
+                if not _walltime_remaining_ok(sched, walltime_buffer):
+                    break
+
+                try:
+                    rc = _run_local_structure_one(
+                        relax_input.input_path,
+                        relax_input.cell_path,
+                        relax_input.struct_name,
+                        relax_input.cell_content,
+                        code,
+                        runner,
+                        param_suffix,
+                        seed,
+                        workdir,
+                        singlepoint=singlepoint,
+                        template_param=relax_input.template_param or template_param,
+                        template_kpoints=relax_input.template_kpoints
+                        or template_kpoints,
+                    )
+                    try:
+                        _collect_result(
+                            relax_input.struct_name,
+                            code,
+                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                        )
+                        collected_res_files.append(
+                            workdir / f"{relax_input.struct_name}.res"
+                        )
+                        if rc == 0:
+                            n_succeeded += 1
+                            statuses[relax_input.struct_name] = "relaxed"
+                            logger.info(
+                                "[%d/%d] OK: %s",
+                                i,
+                                total,
+                                relax_input.struct_name,
+                            )
+                        else:
+                            n_failed += 1
+                            statuses[relax_input.struct_name] = "not_converged"
+                            logger.info(
+                                "[%d/%d] Not converged: %s",
+                                i,
+                                total,
+                                relax_input.struct_name,
+                            )
+                    except Exception:
+                        n_failed += 1
+                        statuses[relax_input.struct_name] = "failed"
+                        logger.info(
+                            "[%d/%d] FAILED: %s",
+                            i,
+                            total,
+                            relax_input.struct_name,
+                        )
+                        _emit_diagnostics(relax_input.struct_name, code)
+                        if not keep:
+                            runner.clean_failed(relax_input.struct_name)
+                except Exception:
+                    n_failed += 1
+                    statuses[relax_input.struct_name] = "failed"
+                    logger.error(
+                        "[%d/%d] %s crashed: %s",
+                        i,
+                        total,
+                        "SP" if singlepoint else "Relax",
+                        relax_input.struct_name,
+                        exc_info=True,
+                    )
+                    _emit_diagnostics(relax_input.struct_name, code)
+                    if not keep:
+                        runner.clean_failed(relax_input.struct_name)
+
+        for struct_name, status in list(statuses.items()):
+            if status == "pending":
+                statuses[struct_name] = "skipped"
+
+        logger.info(
+            "%s complete: %d/%d succeeded, %d failed",
+            "SP" if singlepoint else "Relaxation",
+            n_succeeded,
+            total,
+            n_failed,
+        )
+
+        if pack and n_succeeded > 0:
+            packed = _pack_res_files(workdir, files=collected_res_files)
+            logger.info("Packed into %s", packed)
+
+        if use_torchsim and n_succeeded == 0 and n_failed > 0:
+            raise click.ClickException(
+                f"TorchSim {'single-point' if singlepoint else 'relaxation'} "
+                "failed for all matched structures; "
+                "see verbose log above for the failing batch."
+            )
+
+        return LocalRelaxResult(
+            n_succeeded=n_succeeded,
+            n_failed=n_failed,
+            total=total,
+            collected_res_files=collected_res_files,
+            statuses=statuses,
+        )
+    finally:
+        os.chdir(orig_dir)
 
 
 @click.group("run")
@@ -2171,9 +2635,6 @@ def run_relax(
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
         raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
-    use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
-    if use_torchsim:
-        _ensure_torchsim_available()
     logger.debug(
         "run relax resolved %d single-structure input(s): %s",
         len(cell_files),
@@ -2181,7 +2642,7 @@ def run_relax(
         + (" ..." if len(cell_files) > 10 else ""),
     )
     relax_inputs = [
-        (
+        LocalRelaxInput(
             input_path,
             *_prepare_relax_input(
                 input_path,
@@ -2193,210 +2654,389 @@ def run_relax(
         for input_path in cell_files
     ]
 
-    # Read param file (not needed for ML)
-    param_suffix = None
-    if code != "ml":
-        param_suffix = SUFFIX_MAP[code]
-        for input_path, cell_path, _, _ in relax_inputs:
-            _resolve_relax_param_file(
-                input_path, cell_path, seed, workdir, param_suffix
-            )
-
     if exe is None:
         exe = EXE_DEFAULTS.get(code, "")
 
-    # Detect scheduler
-    sched = _get_scheduler_for_walltime()
+    _run_local_relax_inputs(
+        relax_inputs,
+        code=code,
+        exe=exe,
+        seed=seed,
+        workdir=workdir,
+        keep=keep,
+        pack=pack,
+        singlepoint=singlepoint,
+        pressure=pressure,
+        max_iterations=max_iterations,
+        cluster=cluster,
+        mpinp=mpinp,
+        walltime_buffer=walltime_buffer,
+        calculator_spec=calculator_spec,
+        optimizer=optimizer,
+        fmax=fmax,
+        device=device,
+        batch_size=batch_size,
+        potcar_dir=potcar_dir,
+        potcar_map=potcar_map,
+        cell_axis_map=cell_axis_map,
+    )
 
-    runner = None
-    if code != "ml" or not use_torchsim:
-        logger.debug(
-            "Creating %s runner for code=%s exe=%s backend=%s",
-            "single-point" if singlepoint else "relax",
-            code,
-            exe,
-            "ase" if code == "ml" else "external",
-        )
-        runner = _create_task_runner(
-            code,
-            exe,
-            max_iterations,
-            cluster,
-            pressure,
-            mpinp,
-            calculator_spec=calculator_spec,
-            optimizer=optimizer,
-            fmax=fmax,
-            potcar_dir=potcar_dir,
-            potcar_map=potcar_map,
-            cell_axis_map=cell_axis_map,
-            singlepoint=singlepoint,
-        )
 
-    orig_dir = os.getcwd()
-    os.chdir(workdir)
+@run.command("shake")
+@click.argument("files", nargs=-1, type=click.Path())
+@click.option(
+    "--filelist",
+    type=click.Path(),
+    help="Text file containing additional input structure paths, one per line.",
+)
+@click.option(
+    "--workdir",
+    default="shake",
+    show_default=True,
+    type=click.Path(),
+    help="Working directory for shaken inputs and relaxation outputs.",
+)
+@click.option(
+    "--code",
+    default="ml",
+    show_default=True,
+    type=click.Choice(["ml", "castep", "gulp", "pp3", "abacus", "vasp"]),
+    help="Relaxation backend for shaken structures.",
+)
+@click.option("--exe", default=None, help="Relaxation executable (default: auto).")
+@click.option(
+    "--template-cell",
+    type=click.Path(),
+    help="Template .cell file used to convert shaken RES inputs for DFT backends.",
+)
+@click.option(
+    "--template-param",
+    type=click.Path(),
+    help="Template backend parameter file, e.g. .param/.INPUT/.INCAR.",
+)
+@click.option(
+    "--template-kpoints",
+    type=click.Path(),
+    help="VASP KPOINTS file to use with --code vasp.",
+)
+@click.option(
+    "--rattles",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Number of shaken copies to generate per input structure.",
+)
+@click.option(
+    "--rattle-sigma",
+    default=0.05,
+    type=click.FloatRange(min=0.0),
+    show_default=True,
+    help="Cartesian atomic displacement standard deviation in Angstrom.",
+)
+@click.option(
+    "--strain-sigma",
+    default=0.0,
+    type=click.FloatRange(min=0.0),
+    show_default=True,
+    help="Symmetric random cell-strain standard deviation.",
+)
+@click.option(
+    "--seed",
+    default=1,
+    type=int,
+    show_default=True,
+    help="Base random seed for deterministic shaking.",
+)
+@click.option("--clean", is_flag=True, help="Remove old generated shake inputs first.")
+@click.option(
+    "--prepare-only",
+    is_flag=True,
+    help="Only write shaken inputs and manifests; do not run relaxation.",
+)
+@click.option("--pack", is_flag=True, help="Concatenate relaxed .res files.")
+@click.option("--cluster", is_flag=True, help="Use cluster boundary conditions (GULP).")
+@click.option(
+    "--mpinp",
+    default=None,
+    type=int,
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N.",
+)
+@click.option(
+    "--calculator",
+    "calculator_spec",
+    default=None,
+    help=(
+        "ML calculator spec for relaxing shaken inputs. Plain torch-sim specs, "
+        "'ase:...' specs, and 'symmetrix:mace:<model>' are supported."
+    ),
+)
+@click.option(
+    "--optimizer",
+    default="FIRE",
+    show_default=True,
+    type=click.Choice(["FIRE", "BFGS"]),
+    help="ASE optimizer for ML relaxation.",
+)
+@click.option(
+    "--fmax",
+    default=0.05,
+    type=float,
+    show_default=True,
+    help="Force convergence threshold (eV/Ang) for ML relaxation.",
+)
+@click.option(
+    "--max-iterations",
+    default=200,
+    type=int,
+    show_default=True,
+    help="Max total geometry iterations.",
+)
+@click.option(
+    "--pressure",
+    default=0.0,
+    type=float,
+    show_default=True,
+    help="External pressure (GPa).",
+)
+@click.option(
+    "--device",
+    default=None,
+    help="Torch device for torch-sim ML runs, e.g. cuda or cpu.",
+)
+@click.option(
+    "--batch-size",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Number of structures per torch-sim ML batch.",
+)
+@click.option(
+    "--walltime-buffer",
+    default=300,
+    type=int,
+    show_default=True,
+    help="Seconds before walltime to stop.",
+)
+@click.option("--keep", is_flag=True, help="Keep intermediate files from failed runs.")
+@click.option(
+    "--keep-stale",
+    is_flag=True,
+    help="Archive stale deterministic shake artifacts before rerun instead of deleting them.",
+)
+@click.option("--debug", is_flag=True, help="Print detailed run-shake logging.")
+@click.option("--potcar-dir", default=None, help="VASP POTCAR library directory.")
+@click.option(
+    "--potcar-map",
+    "potcar_map_values",
+    multiple=True,
+    help="VASP POTCAR mapping as Element=symbol. Repeat as needed.",
+)
+@click.option(
+    "--cell-axis-map",
+    default=None,
+    help="ABACUS-only cell axis permutation, e.g. z:x to make old z become new x.",
+)
+def run_shake(
+    files,
+    filelist,
+    workdir,
+    code,
+    exe,
+    template_cell,
+    template_param,
+    template_kpoints,
+    rattles,
+    rattle_sigma,
+    strain_sigma,
+    seed,
+    clean,
+    prepare_only,
+    pack,
+    cluster,
+    mpinp,
+    calculator_spec,
+    optimizer,
+    fmax,
+    max_iterations,
+    pressure,
+    device,
+    batch_size,
+    walltime_buffer,
+    keep,
+    keep_stale,
+    debug,
+    potcar_dir,
+    potcar_map_values,
+    cell_axis_map,
+):
+    """Shake candidate structures and optionally re-relax them."""
+    if debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
+
+    if not files and not filelist:
+        raise click.ClickException("Provide input files or --filelist")
 
     try:
-        n_relaxed = 0
-        n_failed = 0
-        collected_res_files: list[Path] = []
-        total = len(relax_inputs)
+        input_paths = collect_shake_input_paths(
+            files, filelist=filelist, base_dir=Path.cwd()
+        )
+    except (FileNotFoundError, IsADirectoryError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not input_paths:
+        raise click.ClickException("No input structures provided")
 
-        # TorchSim batch path: process all structures at once on GPU
-        if use_torchsim:
-            from airsspy.jf.ml_runners import TorchSimRunner
+    workdir_path = Path(workdir).resolve()
+    input_dir = workdir_path / "inputs"
+    relax_dir = workdir_path / "relax"
+    records = prepare_shaken_inputs(
+        input_paths,
+        input_dir,
+        rattles=rattles,
+        rattle_sigma=rattle_sigma,
+        strain_sigma=strain_sigma,
+        seed=seed,
+        clean=clean,
+    )
+    manifest = workdir_path / "shake_inputs.csv"
+    write_shake_manifest(records, manifest)
+    logger.info("Prepared %d shaken input(s) in %s", len(records), input_dir)
 
-            struct_names = [struct_name for _, _, struct_name, _ in relax_inputs]
-            structures = [
-                _prepare_ml_structure_input(input_path, cell_content)
-                for input_path, _, _, cell_content in relax_inputs
-            ]
-            logger.debug(
-                "Prepared ML structures: total_atoms=%d, first_batch=%s",
-                sum(len(structure) for structure in structures),
-                ", ".join(struct_names[:batch_size]),
+    if prepare_only:
+        click.echo(f"Prepared {len(records)} shaken input(s) in {input_dir}")
+        click.echo(f"Manifest: {manifest}")
+        return
+
+    if code == "ml" and not calculator_spec:
+        raise click.ClickException("--calculator is required when --code ml")
+    if code == "ml":
+        _validate_ml_calculator_spec(calculator_spec)
+    template_cell_path = Path(template_cell).resolve() if template_cell else None
+    template_param_path = Path(template_param).resolve() if template_param else None
+    template_kpoints_path = (
+        Path(template_kpoints).resolve() if template_kpoints else None
+    )
+    if template_cell_path is not None and not template_cell_path.exists():
+        raise click.ClickException(f"Template cell file not found: {template_cell}")
+    if template_param_path is not None and not template_param_path.exists():
+        raise click.ClickException(f"Template parameter file not found: {template_param}")
+    if template_kpoints_path is not None and not template_kpoints_path.exists():
+        raise click.ClickException(f"Template KPOINTS file not found: {template_kpoints}")
+    potcar_dir = _resolve_optional_path(potcar_dir)
+    potcar_map = _parse_potcar_map_options(potcar_map_values)
+    if exe is None:
+        exe = EXE_DEFAULTS.get(code, "")
+
+    source_dir = Path.cwd()
+    relax_dir.mkdir(parents=True, exist_ok=True)
+    if clean:
+        for old_file in relax_dir.glob("*.res"):
+            old_file.unlink()
+    relax_records: list[ShakeRecord] = []
+    for record in records:
+        target = relax_dir / record.input_path.name
+        _clear_shake_stale_artifacts(
+            relax_dir,
+            record.shake_label,
+            archive_dir=workdir_path / "stale" if keep_stale else None,
+        )
+        shutil.copy2(record.input_path, target)
+        relax_records.append(
+            ShakeRecord(
+                source_path=record.source_path,
+                source_label=record.source_label,
+                shake_label=record.shake_label,
+                shake_index=record.shake_index,
+                random_seed=record.random_seed,
+                input_path=target,
+                source_enthalpy=record.source_enthalpy,
+                source_enthalpy_per_atom=record.source_enthalpy_per_atom,
             )
-
-            mode_label = "SP" if singlepoint else "relaxing"
-            logger.info(
-                "TorchSim batch %s %d structures with %s (batch size %d)",
-                mode_label,
-                total,
-                calculator_spec,
-                batch_size,
-            )
-            torchsim_runner = TorchSimRunner(calculator_spec, device=device)
-            for start in range(0, total, batch_size):
-                end = min(start + batch_size, total)
-                batch_names = struct_names[start:end]
-                batch_structures = structures[start:end]
-                logger.info(
-                    "TorchSim batch [%d-%d/%d]",
-                    start + 1,
-                    end,
-                    total,
-                )
-                try:
-                    done, failed, collected = _run_torchsim_batch(
-                        torchsim_runner,
-                        batch_names,
-                        batch_structures,
-                        code,
-                        calculator_spec,
-                        singlepoint=singlepoint,
-                        max_iterations=max_iterations,
-                        fmax=fmax,
-                        optimizer=optimizer,
-                        pressure=pressure,
-                    )
-                    collected_res_files.extend(workdir / path.name for path in collected)
-                    n_relaxed += done
-                    n_failed += failed
-                except Exception:
-                    logger.error(
-                        "TorchSim batch failed for structures %s",
-                        ", ".join(batch_names),
-                        exc_info=True,
-                    )
-                    n_failed += len(batch_names)
-                    continue
-
-        else:
-            # Standard one-by-one loop (DFT codes or ASE fallback)
-            backend_label = "ASE ML" if code == "ml" else code
-            logger.info(
-                "%s %d structures with %s",
-                "Running single-point on" if singlepoint else "Relaxing",
-                total,
-                backend_label,
-            )
-
-            for i, (input_path, cell_path, struct_name, cell_content) in enumerate(
-                relax_inputs, 1
-            ):
-
-                # Check walltime
-                if not _walltime_remaining_ok(sched, walltime_buffer):
-                    break
-
-                try:
-                    rc = _run_local_structure_one(
-                        input_path,
-                        cell_path,
-                        struct_name,
-                        cell_content,
-                        code,
-                        runner,
-                        param_suffix,
-                        seed,
-                        workdir,
-                        singlepoint=singlepoint,
-                    )
-
-                    if rc == 0:
-                        _collect_result(
-                            struct_name,
-                            code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
-                        )
-                        collected_res_files.append(workdir / f"{struct_name}.res")
-                        n_relaxed += 1
-                        logger.info("[%d/%d] OK: %s", i, total, struct_name)
-                    else:
-                        try:
-                            _collect_result(
-                                struct_name,
-                                code,
-                                calculator_spec=runner
-                                if code == "vasp"
-                                else calculator_spec,
-                            )
-                            collected_res_files.append(workdir / f"{struct_name}.res")
-                            logger.info(
-                                "[%d/%d] Not converged: %s", i, total, struct_name
-                            )
-                        except Exception:
-                            logger.info("[%d/%d] FAILED: %s", i, total, struct_name)
-                            _emit_diagnostics(struct_name, code)
-                            if not keep:
-                                runner.clean_failed(struct_name)
-                        n_failed += 1
-
-                except Exception:
-                    logger.error(
-                        "[%d/%d] %s crashed: %s",
-                        i,
-                        total,
-                        "SP" if singlepoint else "Relax",
-                        struct_name,
-                        exc_info=True,
-                    )
-                    _emit_diagnostics(struct_name, code)
-                    if not keep:
-                        runner.clean_failed(struct_name)
-                    n_failed += 1
-
-        logger.info(
-            "%s complete: %d/%d succeeded, %d failed",
-            "SP" if singlepoint else "Relaxation",
-            n_relaxed,
-            total,
-            n_failed,
         )
 
-        if pack and n_relaxed > 0:
-            packed = _pack_res_files(workdir, files=collected_res_files)
-            logger.info("Packed into %s", packed)
-
-        if use_torchsim and n_relaxed == 0 and n_failed > 0:
+    relax_inputs = []
+    for record in relax_records:
+        record_template_cell = _resolve_shake_template_cell(
+            record,
+            template_cell=template_cell_path,
+            fallback_dir=source_dir,
+        )
+        if code != "ml" and record_template_cell is None:
             raise click.ClickException(
-                f"TorchSim {'single-point' if singlepoint else 'relaxation'} "
-                "failed for all matched structures; "
-                "see verbose log above for the failing batch."
+                f"Template cell file not found for {record.source_label}; "
+                f"looked for {_shake_seed_prefix(record)}.cell"
             )
+        record_template_param = None
+        record_template_kpoints = template_kpoints_path
+        if code != "ml":
+            record_template_param = _resolve_shake_template_param(
+                record,
+                code,
+                template_param=template_param_path,
+                fallback_dir=source_dir,
+            )
+            if record_template_param is None:
+                suffix = SUFFIX_MAP[code]
+                raise click.ClickException(
+                    f"Param file not found for {record.source_label}; "
+                    f"looked for {_shake_seed_prefix(record)}{suffix}"
+                )
+            if code == "vasp":
+                record_template_kpoints = _resolve_shake_template_kpoints(
+                    record,
+                    template_kpoints=template_kpoints_path,
+                    fallback_dir=source_dir,
+                )
+        cell_path, struct_name, cell_content = _prepare_relax_input(
+            record.input_path,
+            relax_dir,
+            write_res_cell=code == "castep",
+            convert_res_cell=code != "ml",
+            template_cell=record_template_cell,
+        )
+        relax_inputs.append(
+            LocalRelaxInput(
+                record.input_path,
+                cell_path,
+                struct_name,
+                cell_content,
+                template_param=record_template_param,
+                template_kpoints=record_template_kpoints,
+            )
+        )
+    result = _run_local_relax_inputs(
+        relax_inputs,
+        code=code,
+        exe=exe,
+        seed="USER-SHAKE",
+        workdir=relax_dir,
+        keep=keep,
+        pack=pack,
+        singlepoint=False,
+        pressure=pressure,
+        max_iterations=max_iterations,
+        cluster=cluster,
+        mpinp=mpinp,
+        walltime_buffer=walltime_buffer,
+        calculator_spec=calculator_spec,
+        optimizer=optimizer,
+        fmax=fmax,
+        device=device,
+        batch_size=batch_size,
+        potcar_dir=potcar_dir,
+        potcar_map=potcar_map,
+        cell_axis_map=cell_axis_map,
+    )
 
-    finally:
-        os.chdir(orig_dir)
+    summary = workdir_path / "shake_summary.csv"
+    _write_shake_relax_summary(relax_records, relax_dir, summary, result.statuses)
+
+    click.echo(
+        f"Shake relaxation complete: {result.n_succeeded}/{len(relax_records)} "
+        f"succeeded, {result.n_failed} failed"
+    )
+    click.echo(f"Summary: {summary}")
 
 
 @run.command("sp")
