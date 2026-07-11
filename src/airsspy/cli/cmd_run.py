@@ -204,6 +204,32 @@ def _parse_formula_option_callback(ctx, param, value):
     return _parse_formula_option(value[0])
 
 
+def _parse_composition_ratio_option(value: str) -> dict[int, float]:
+    """Parse arity weights from ``arity=weight`` comma-separated groups."""
+    parsed: dict[int, float] = {}
+    if not value:
+        return parsed
+    assignments = [item.strip() for item in value.split(",") if item.strip()]
+    for assignment in assignments:
+        try:
+            # Keep parsing lightweight here; semantic validation happens in
+            # build_formula_sampling_context once the available arities are known.
+            key, weight = assignment.split("=", 1)
+            arity = int(key.strip())
+            parsed[arity] = float(weight.strip())
+        except ValueError as exc:
+            raise click.ClickException(
+                f"Invalid --composition-ratio: expected arity=weight "
+                f"assignments, got {assignment!r}"
+            ) from exc
+    return parsed
+
+
+def _format_arity_map(values: dict[int, int | float]) -> str:
+    """Format arity-keyed values for CLI diagnostics."""
+    return ", ".join(f"{arity}:{value:g}" for arity, value in sorted(values.items()))
+
+
 def _move_pruned_file(candidate, workdir: Path) -> None:
     """Move a rejected candidate's RES file into ``workdir/pruned``."""
     if candidate.res_path is None or not candidate.res_path.exists():
@@ -1040,6 +1066,19 @@ def run():
     help="Maximum reduced-formula coefficient for formula enumeration.",
 )
 @click.option(
+    "--max-num-atoms",
+    "formula_max_num_atoms",
+    default=None,
+    type=int,
+    help="Maximum atoms in reduced formulas for atom-budget enumeration.",
+)
+@click.option(
+    "--composition-ratio",
+    "formula_composition_ratio",
+    default="",
+    help="Arity sampling weights such as 1=0.1,2=0.4,3=0.4,4=0.1.",
+)
+@click.option(
     "--target-volume",
     "formula_target_volumes",
     multiple=True,
@@ -1215,6 +1254,8 @@ def run_search(
     formulas,
     formula_elements,
     formula_max_coeff,
+    formula_max_num_atoms,
+    formula_composition_ratio,
     formula_target_volumes,
     formula_oxidation_states,
     no_formula_charge_neutral,
@@ -1324,6 +1365,9 @@ def run_search(
             parse_key_float,
             "--target-volume",
         )
+        composition_ratio = _parse_composition_ratio_option(
+            formula_composition_ratio
+        )
         oxidation_states = _parse_oxidation_state_options(formula_oxidation_states)
         seed_text_for_formula_filter = (
             remove_buildcell_directives(seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES)
@@ -1336,6 +1380,8 @@ def run_search(
                     formulas=formulas,
                     elements=elements,
                     max_coeff=formula_max_coeff,
+                    max_num_atoms=formula_max_num_atoms,
+                    composition_ratio=composition_ratio,
                     target_atom_volumes=target_volumes,
                     oxidation_states=oxidation_states,
                     require_charge_neutral=not no_formula_charge_neutral,
@@ -1422,6 +1468,24 @@ def run_search(
                 click.echo("----------------------------------------")
                 click.echo("User settings")
                 click.echo(f"formula = {formula}")
+                if formula_context.composition_ratio is not None:
+                    from pymatgen.core import Composition
+
+                    # These diagnostics make the two-stage sampler visible
+                    # before users commit a long search to the scheduler.
+                    click.echo(
+                        "formula_counts_by_arity = "
+                        + _format_arity_map(
+                            formula_context.formula_counts_by_arity
+                        )
+                    )
+                    click.echo(
+                        "composition_ratio = "
+                        + _format_arity_map(dict(formula_context.composition_ratio))
+                    )
+                    click.echo(
+                        f"formula_arity = {len(Composition(formula).as_dict())}"
+                    )
                 if varvol is not None:
                     click.echo(f"varvol = {varvol:g}")
                 if estimate is not None:

@@ -2,6 +2,7 @@ import random
 
 import pytest
 from ase import Atoms
+from pymatgen.core import Composition
 
 from airsspy.search import (
     FormulaSamplingOptions,
@@ -121,6 +122,92 @@ def test_formula_context_filters_by_seed_constraints_and_oxidation_states():
     assert "Li2TiO3" in context.formulas
     for formula in context.formulas:
         assert "O" in formula
+
+
+def test_formula_context_enumerates_reduced_formulas_by_atom_budget():
+    context = build_formula_sampling_context(
+        FormulaSamplingOptions(elements=["Li", "Na"], max_num_atoms=6)
+    )
+
+    expected = {
+        Composition({"Li": li, "Na": na}).reduced_formula
+        for li, na in (
+            (1, 1),
+            (1, 2),
+            (2, 1),
+            (1, 3),
+            (3, 1),
+            (1, 4),
+            (4, 1),
+            (1, 5),
+            (5, 1),
+            (2, 3),
+            (3, 2),
+        )
+    }
+    expected.update({"Li", "Na"})
+
+    assert set(context.formulas) == expected
+    assert context.formula_counts_by_arity == {1: 2, 2: 11}
+    assert Composition("Li2Na2").reduced_formula in context.formulas
+    assert context.formulas.count(Composition("Li2Na2").reduced_formula) == 1
+    assert context.formulas.count(Composition("Li3Na3").reduced_formula) == 1
+
+
+def test_formula_context_samples_arity_by_composition_ratio():
+    context = build_formula_sampling_context(
+        FormulaSamplingOptions(
+            elements=["Li", "Na"],
+            max_num_atoms=6,
+            composition_ratio={1: 0.0, 2: 1.0},
+        )
+    )
+
+    for seed in range(20):
+        _, formula, _ = context.sample("#SPECIES=Li,Na\n", rng=random.Random(seed))
+        assert formula not in {"Li", "Na"}
+
+
+def test_formula_context_does_not_default_to_arity_sampling_for_explicit_formulas():
+    context = build_formula_sampling_context(
+        FormulaSamplingOptions(
+            formulas=["Li", "Na", "LiNa"],
+            max_num_atoms=6,
+        )
+    )
+
+    assert context.composition_ratio is None
+
+
+@pytest.mark.parametrize(
+    "composition_ratio",
+    [
+        {0: 1.0},
+        {1: -1.0},
+        {1: float("nan")},
+        {1: 0.0, 2: 0.0},
+    ],
+)
+def test_formula_context_errors_on_invalid_composition_ratio(composition_ratio):
+    with pytest.raises(ValueError, match="composition ratio"):
+        build_formula_sampling_context(
+            FormulaSamplingOptions(
+                elements=["Li", "Na"],
+                max_num_atoms=6,
+                composition_ratio=composition_ratio,
+            )
+        )
+
+
+def test_formula_context_errors_when_composition_ratio_has_no_available_arity():
+    with pytest.raises(ValueError, match="composition ratio"):
+        build_formula_sampling_context(
+            FormulaSamplingOptions(
+                elements=["Li", "Na"],
+                max_num_atoms=6,
+                composition_ratio={3: 1.0},
+            )
+        )
 
 
 def test_formula_context_errors_on_missing_target_volume():

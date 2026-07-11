@@ -77,8 +77,18 @@ the seed sent to buildcell:
 ```bash
 ap run search --seed seed --formula SiO2,Si2O3 --target-volume Si=20 --target-volume O=12
 ap run search --seed seed --elements Li,P,O --max-coeff 4 --oxidation-state Li=1,P=5,O=-2
+ap run search --seed seed --elements Li,P,O,S --max-num-atoms 20 --composition-ratio 1=0.1,2=0.4,3=0.4,4=0.1
 ap run search --seed seed --elements Li,P,O --diagnose 3
 ```
+
+`--max-num-atoms` enumerates unique reduced formulas whose reduced formula
+contains at most that many atoms, using all non-empty subsets of `--elements`.
+This avoids over-sampling formulas such as `LiNa` just because `Li2Na2`,
+`Li3Na3`, and other unreduced atom-count tuples collapse to the same reduced
+formula. `--composition-ratio` optionally chooses the number of distinct
+elements first, for example `1=0.1,2=0.4,3=0.4,4=0.1` for 10% elemental, 40%
+binary, 40% ternary, and 10% quaternary sampling. Within each selected arity,
+the sampler chooses uniformly from the available reduced formulas.
 
 Volume/minsep estimates can additionally inject `#MINSEP` and automatic
 `#NFORM` directives. The large curated dataset is user-supplied or generated

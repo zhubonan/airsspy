@@ -837,6 +837,8 @@ def test_run_search_help():
     assert "--formula" in result.output
     assert "--elements" in result.output
     assert "--max-coeff" in result.output
+    assert "--max-num-atoms" in result.output
+    assert "--composition-ratio" in result.output
     assert "--oxidation-state" in result.output
     assert "--volume-minsep-source" in result.output
     assert "--formula-elements" not in result.output
@@ -2101,6 +2103,69 @@ def test_run_search_formula_diagnose_combined_oxidation_states():
 
     assert result.exit_code == 0
     assert "#FORMULA=" in result.output
+
+
+def test_run_search_formula_diagnose_atom_budget_and_composition_ratio():
+    """Test atom-budget formula sampling is exposed through run search."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiNa.cell").write_text("#SPECIES=Li,Na\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LiNa",
+                "--nmax",
+                "1",
+                "--build-only",
+                "--elements",
+                "Li,Na",
+                "--max-num-atoms",
+                "6",
+                "--composition-ratio",
+                "1=0,2=1",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "formula_arity = 2" in result.output
+    assert "formula_counts_by_arity = 1:2, 2:11" in result.output
+    assert "#FORMULA=Li\n" not in result.output
+    assert "#FORMULA=Na\n" not in result.output
+
+
+def test_run_search_formula_composition_ratio_rejects_unavailable_arity():
+    """Test composition ratio fails clearly when it cannot sample anything."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiNa.cell").write_text("#SPECIES=Li,Na\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LiNa",
+                "--nmax",
+                "1",
+                "--build-only",
+                "--elements",
+                "Li,Na",
+                "--max-num-atoms",
+                "6",
+                "--composition-ratio",
+                "3=1",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "composition ratio" in result.output
 
 
 def test_run_search_formula_oxidation_state_invalid_assignment():
