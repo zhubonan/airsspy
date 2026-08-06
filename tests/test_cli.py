@@ -825,6 +825,17 @@ def test_run_help():
     assert "crud" in result.output
 
 
+def test_all_run_workflows_expose_the_complete_backend_matrix():
+    """Search, relax, CRUD, and SP share the same complete backend choices."""
+    runner = CliRunner()
+    expected = "castep|gulp|pp3|abacus|vasp|ml"
+
+    for command in ("search", "relax", "crud", "sp"):
+        result = runner.invoke(cli, ["run", command, "--help"])
+        assert result.exit_code == 0
+        assert expected in result.output.replace("\n", "")
+
+
 def test_run_search_help():
     """Test 'run search --help'."""
     runner = CliRunner()
@@ -844,6 +855,101 @@ def test_run_search_help():
     assert "--formula-elements" not in result.output
     assert "--prune" in result.output
     assert "--cell-axis-map" in result.output
+    assert "--calculator" in result.output
+    assert "--device" in result.output
+
+
+def test_run_search_ml_uses_default_torchsim_driver():
+    """Random search can relax generated cells through the default ML driver."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n#NATOM=1\n")
+        Path("Si-001.cell").write_text(
+            "%BLOCK LATTICE_CART\n"
+            "3 0 0\n0 3 0\n0 0 3\n"
+            "%ENDBLOCK LATTICE_CART\n"
+            "%BLOCK POSITIONS_ABS\n"
+            "Si 0 0 0\n"
+            "%ENDBLOCK POSITIONS_ABS\n"
+        )
+        fake_torchsim = MagicMock()
+        fake_torchsim.relax_batch.return_value = {"Si-001": 0}
+        build_result = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": Path("Si-001.cell").read_text(),
+        }
+        with patch("airsspy.jf.runners.run_buildcell", return_value=build_result):
+            with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
+                with patch(
+                    "airsspy.jf.ml_runners.TorchSimRunner",
+                    return_value=fake_torchsim,
+                ) as torchsim_cls:
+                    with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                        result = runner.invoke(
+                            cli,
+                            [
+                                "run",
+                                "search",
+                                "--seed",
+                                "Si",
+                                "--nmax",
+                                "1",
+                                "--code",
+                                "ml",
+                                "--calculator",
+                                "mace:medium",
+                                "--device",
+                                "cpu",
+                            ],
+                        )
+
+    assert result.exit_code == 0
+    torchsim_cls.assert_called_once_with("mace:medium", device="cpu")
+    fake_torchsim.relax_batch.assert_called_once()
+    assert fake_torchsim.relax_batch.call_args.args[0] == ["Si-001"]
+    collect.assert_called_once_with(
+        "Si-001", "ml", calculator_spec="mace:medium"
+    )
+
+
+def test_run_search_ml_supports_explicit_ase_driver():
+    """Random search routes explicit ASE calculator specs through the ASE runner."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n#NATOM=1\n")
+        Path("Si-001.cell").write_text("cell content\n")
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        build_result = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell content\n",
+        }
+        with patch("airsspy.jf.runners.run_buildcell", return_value=build_result):
+            with patch(
+                "airsspy.cli.cmd_run._create_runner", return_value=fake_runner
+            ) as create:
+                with patch("airsspy.cli.cmd_run._collect_result"):
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "search",
+                            "--seed",
+                            "Si",
+                            "--nmax",
+                            "1",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "ase:my.module:Calculator",
+                        ],
+                    )
+
+    assert result.exit_code == 0
+    assert create.call_args.kwargs["calculator_spec"] == "ase:my.module:Calculator"
+    fake_runner.run.assert_called_once_with("Si-001", "cell content\n")
 
 
 def test_run_crud_help():
@@ -1066,6 +1172,21 @@ def test_create_runner_passes_max_iterations_to_vasp():
     )
 
 
+def test_create_sp_runner_supports_gulp_and_pp3():
+    """The SP factory constructs native no-relax runners for both engines."""
+    from airsspy.jf.runners import (
+        AirssGulpSinglePointRunner,
+        AirssPp3SinglePointRunner,
+    )
+
+    gulp = cmd_run._create_sp_runner("gulp", "ggulp", pressure=4.0)
+    pp3 = cmd_run._create_sp_runner("pp3", "pp3")
+
+    assert isinstance(gulp, AirssGulpSinglePointRunner)
+    assert gulp.pressure == 4.0
+    assert isinstance(pp3, AirssPp3SinglePointRunner)
+
+
 def test_run_crud_ml_torchsim_batches_claimed_jobs():
     """CRUD ML supports the same torch-sim model path as run relax."""
     runner = CliRunner()
@@ -1210,11 +1331,15 @@ def test_run_crud_singlepoint_uses_sp_runner():
 
 
 def test_ml_model_backend_resolution():
-    """ML model specs default to torch-sim and use ase: for ASE fallback."""
+    """ML model specs default to torch-sim and use ase: for the ASE driver."""
     assert cmd_run._is_torchsim_model("mace:medium")
+    assert cmd_run._is_torchsim_model("torch-sim:mace:medium")
     assert not cmd_run._is_torchsim_model("ase:mace:medium")
     assert cmd_run._is_symmetrix_model("symmetrix:mace:medium")
+    assert cmd_run._is_symmetrix_model("ase:symmetrics:medium")
+    assert cmd_run._is_symmetrix_model("ase:symmetrix:medium")
     assert not cmd_run._is_torchsim_model("symmetrix:mace:medium")
+    assert not cmd_run._is_torchsim_model("ase:symmetrics:medium")
     assert (
         cmd_run._normalize_ml_ase_spec("ase:mace:medium")
         == "mace.calculators:MACECalculator@medium"
@@ -1222,6 +1347,18 @@ def test_ml_model_backend_resolution():
     assert (
         cmd_run._normalize_ml_ase_spec("symmetrix:mace:medium")
         == "symmetrix:Symmetrix@medium"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:symmetrics:MACE-MH-1:matpes_r2scan")
+        == "symmetrix:Symmetrix@MACE-MH-1:matpes_r2scan"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:symmetrix:medium-mpa-0")
+        == "symmetrix:Symmetrix@medium-mpa-0"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:symmetrix:Symmetrix@mh-1")
+        == "symmetrix:Symmetrix@mh-1"
     )
     assert (
         cmd_run._normalize_ml_ase_spec("ase:my.module:Calc@model")
@@ -1234,7 +1371,7 @@ def test_symmetrix_rejects_non_mace_models():
     try:
         cmd_run._normalize_ml_ase_spec("symmetrix:sevennet:sevennet-mf-ompa")
     except ValueError as exc:
-        assert "symmetrix:mace:<model>" in str(exc)
+        assert "ase:symmetrix:<mace-model>" in str(exc)
     else:
         raise AssertionError("Expected Symmetrix non-MACE model to fail")
 
@@ -1271,7 +1408,7 @@ def test_plain_ml_model_fails_clearly_without_torchsim():
         assert "torch-sim is required" in result.output
 
 
-def test_run_relax_symmetrix_uses_ase_runner_without_torchsim():
+def test_run_relax_ase_symmetrics_uses_ase_runner_without_torchsim():
     """Symmetrix MACE specs use ASE runner routing, not torch-sim batching."""
     runner = CliRunner()
     with runner.isolated_filesystem():
@@ -1299,7 +1436,7 @@ def test_run_relax_symmetrix_uses_ase_runner_without_torchsim():
                             "--code",
                             "ml",
                             "--calculator",
-                            "symmetrix:mace:medium-mpa-0",
+                            "ase:symmetrics:medium-mpa-0",
                             "--keep",
                         ],
                     )
@@ -1381,7 +1518,7 @@ def test_run_crud_symmetrix_uses_ase_runner_without_torchsim():
 
 
 def test_run_relax_accepts_res_input_for_ase_ml():
-    """Explicit ase: model uses ASE fallback with in-memory RES parsing."""
+    """Explicit ase: model uses the ASE driver with in-memory RES parsing."""
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
@@ -1450,7 +1587,7 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
                 with patch(
                     "airsspy.jf.ml_runners.TorchSimRunner",
                     return_value=fake_torchsim,
-                ):
+                ) as torchsim_cls:
                     with patch("airsspy.cli.cmd_run._collect_result") as collect:
                         result = runner.invoke(
                             cli,
@@ -1462,7 +1599,7 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
                                 "--code",
                                 "ml",
                                 "--calculator",
-                                "mace:medium-mpa-0",
+                                "torch-sim:mace:medium-mpa-0",
                                 "--device",
                                 "cuda",
                                 "--keep",
@@ -1470,6 +1607,9 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
                         )
 
         assert result.exit_code == 0
+        torchsim_cls.assert_called_once_with(
+            "torch-sim:mace:medium-mpa-0", device="cuda"
+        )
         assert not Path("LiTaOCl-001.cell").exists()
         assert fake_torchsim.relax_batch.call_count == 1
         assert captured["args"][0] == ["LiTaOCl-001"]
@@ -1699,6 +1839,182 @@ def test_run_sp_accepts_res_input_for_vasp():
         assert fake_runner.run.call_args.args[0] == "Si-001"
         assert fake_runner.run.call_args.args[2] == "ENCUT = 400\n"
         collect.assert_called_once()
+
+
+def test_run_sp_accepts_res_input_for_all_other_external_backends():
+    """Standalone SP converts RES input for CASTEP, GULP, PP3, and ABACUS."""
+    runner = CliRunner()
+    input_files = {
+        "castep": (".param", "task : singlepoint\n"),
+        "gulp": (".lib", "species\n"),
+        "pp3": (".pp", "1.0 1.0\n"),
+        "abacus": (".INPUT", "calculation scf\n"),
+    }
+    for code, (suffix, param_content) in input_files.items():
+        with runner.isolated_filesystem():
+            Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+            Path("Si" + suffix).write_text(param_content)
+            Path("Si-001.res").write_text(
+                "TITL Si-001 0.000 27.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+                "CELL 1.0 3.000000 3.000000 3.000000 90.000000 90.000000 90.000000\n"
+                "LATT -1\n"
+                "SFAC Si\n"
+                "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+                "END\n"
+            )
+            fake_runner = MagicMock()
+            fake_runner.run.return_value = 0
+            with patch(
+                "airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner
+            ):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "sp",
+                            "--cell",
+                            "*.res",
+                            "--seed",
+                            "IGNORED",
+                            "--code",
+                            code,
+                        ],
+                    )
+
+            assert result.exit_code == 0, (code, result.output, result.exception)
+            fake_runner.run.assert_called_once()
+            assert fake_runner.run.call_args.args[0] == "Si-001"
+            assert "%BLOCK LATTICE_CART" in fake_runner.run.call_args.args[1]
+            collect.assert_called_once()
+
+
+def test_run_sp_res_input_uses_explicit_seed_as_lookup_fallback():
+    """An explicit seed supplies templates and parameters for arbitrary RES labels."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("Si.param").write_text("task : singlepoint\n")
+        Path("candidate.res").write_text(
+            "TITL candidate 0.000 27.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 3.000000 3.000000 3.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch(
+            "airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner
+        ):
+            with patch("airsspy.cli.cmd_run._collect_result"):
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "sp",
+                        "--cell",
+                        "candidate.res",
+                        "--seed",
+                        "Si",
+                        "--code",
+                        "castep",
+                    ],
+                )
+
+    assert result.exit_code == 0
+    fake_runner.run.assert_called_once()
+    assert "%BLOCK LATTICE_CART" in fake_runner.run.call_args.args[1]
+
+
+def test_collect_result_rejects_invalid_castep2res_output_without_clobbering():
+    """Failed external conversion preserves an existing RES input and raises."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si-001.res").write_text("original input\n")
+        Path("Si-001.castep").write_text("current calculation output\n")
+        failed = MagicMock(returncode=0)
+        with patch("subprocess.run", return_value=failed):
+            try:
+                cmd_run._collect_result("Si-001", "pp3")
+            except RuntimeError as exc:
+                assert "valid RES" in str(exc)
+            else:
+                raise AssertionError("Expected invalid castep2res output to fail")
+
+        assert Path("Si-001.res").read_text() == "original input\n"
+        assert not Path("Si-001.res.tmp").exists()
+
+
+def test_collect_result_rejects_castep2res_cell_only_fallback():
+    """A failed external calculation cannot become a zero-energy RES via .cell."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si-001.cell").write_text("fresh calculation input\n")
+        Path("Si-001.res").write_text("original input\n")
+        with patch("subprocess.run") as convert:
+            try:
+                cmd_run._collect_result("Si-001", "gulp")
+            except RuntimeError as exc:
+                assert "No CASTEP-like result" in str(exc)
+            else:
+                raise AssertionError("Expected missing calculation output to fail")
+
+        convert.assert_not_called()
+        assert Path("Si-001.res").read_text() == "original input\n"
+
+
+def test_failed_relax_and_sp_cleanup_restore_original_res_input():
+    """Default cleanup must not delete source RES files accepted by the CLI."""
+    runner = CliRunner()
+    original_res = (
+        "TITL candidate 0.000 27.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+        "CELL 1.0 3.000000 3.000000 3.000000 90.000000 90.000000 90.000000\n"
+        "LATT -1\n"
+        "SFAC Si\n"
+        "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+        "END\n"
+    )
+
+    for command, factory in (
+        ("relax", "_create_runner"),
+        ("sp", "_create_sp_runner"),
+    ):
+        with runner.isolated_filesystem():
+            Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+            Path("Si.lib").write_text("species\n")
+            Path("candidate.res").write_text(original_res)
+            fake_runner = MagicMock()
+            fake_runner.run.return_value = 1
+            fake_runner.clean_failed.side_effect = (
+                lambda name: Path(name + ".res").unlink(missing_ok=True)
+            )
+
+            with patch(
+                f"airsspy.cli.cmd_run.{factory}", return_value=fake_runner
+            ):
+                with patch(
+                    "airsspy.cli.cmd_run._collect_result",
+                    side_effect=RuntimeError("no current result"),
+                ):
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            command,
+                            "--cell",
+                            "candidate.res",
+                            "--seed",
+                            "Si",
+                            "--code",
+                            "gulp",
+                        ],
+                    )
+
+            assert result.exit_code == 0, (command, result.output, result.exception)
+            assert Path("candidate.res").read_text() == original_res
+            fake_runner.clean_failed.assert_called_once_with("candidate")
 
 
 def test_run_search_formula_diagnose():

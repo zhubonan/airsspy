@@ -47,10 +47,10 @@ airsspy has several optional dependency groups:
 - **`dev`**: Development and test tools (pytest, pytest-cov, ruff, mypy,
   pre-commit, twine)
 - **`ml`**: Optional machine-learning potential support through torch-sim-atomistic
-  for plain ML model specs such as `mace:medium`
+  for model specs such as `mace:medium` or explicit `torch-sim:mace:medium`
 - **`mace`**: Optional MACE ASE-calculator support for `ase:mace:<model>`
 - **`symmetrix`**: Optional MACE-side dependencies for the Symmetrix backend
-  selected with `symmetrix:mace:<model>`
+  selected with `ase:symmetrix:<full-mace-model-name>`
 - **`docs`**: Documentation building tools (Sphinx, themes, extensions)
 
 The Symmetrix ML backend is MACE-only and uses the external `symmetrix` Python

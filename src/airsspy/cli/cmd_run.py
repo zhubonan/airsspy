@@ -17,6 +17,7 @@ from airsspy.scheduler import Scheduler
 logger = logging.getLogger(__name__)
 
 STOP_FILE_NAME = "stop"
+RUN_BACKENDS = ("castep", "gulp", "pp3", "abacus", "vasp", "ml")
 
 EXE_DEFAULTS = {
     "castep": "castep.mpi",
@@ -130,6 +131,27 @@ def _cleanup_ml_transients(struct_name: str) -> None:
     """Remove transient ML outputs without deleting input/output RES files."""
     for suffix in (".extxyz", ".traj", ".err"):
         Path(struct_name + suffix).unlink(missing_ok=True)
+
+
+def _snapshot_res_input(input_path: Path) -> bytes | None:
+    """Capture an original RES input so failed-run cleanup cannot delete it."""
+    if input_path.suffix.lower() != ".res":
+        return None
+    return input_path.read_bytes()
+
+
+def _clean_failed_preserving_res(
+    runner,
+    struct_name: str,
+    input_path: Path,
+    original_res: bytes | None,
+) -> None:
+    """Clean calculation outputs, then restore an original RES input."""
+    try:
+        runner.clean_failed(struct_name)
+    finally:
+        if original_res is not None:
+            input_path.write_bytes(original_res)
 
 
 def _apply_mpinp(exe: str, code: str, mpinp: int | None) -> str:
@@ -406,10 +428,17 @@ def _prepare_crud_inputs(seed: str, code: str) -> tuple[str, str | None]:
     return root, param_suffix
 
 
-def _resolve_relax_template_cell(input_path: Path, workdir: Path) -> Path:
+def _resolve_relax_template_cell(
+    input_path: Path,
+    workdir: Path,
+    seed: str | None = None,
+) -> Path:
     """Find a template .cell file for converting a RES input to CASTEP cell text."""
     root = _crud_root_from_seed(input_path.stem)
     candidates = [workdir / f"{root}.cell"]
+    seed_candidate = workdir / f"{seed}.cell" if seed else None
+    if seed_candidate is not None and seed_candidate not in candidates:
+        candidates.append(seed_candidate)
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -424,6 +453,7 @@ def _prepare_relax_input(
     input_path: Path,
     workdir: Path,
     *,
+    seed: str | None = None,
     write_res_cell: bool = True,
     convert_res_cell: bool = True,
 ) -> tuple[Path, str, str]:
@@ -441,7 +471,7 @@ def _prepare_relax_input(
     if not convert_res_cell:
         return cell_path, cell_path.stem, ""
 
-    template_cell = _resolve_relax_template_cell(input_path, workdir)
+    template_cell = _resolve_relax_template_cell(input_path, workdir, seed)
     cell_content = "\n".join(_res_to_cell_lines(input_path, template_cell)) + "\n"
     if write_res_cell:
         cell_path.write_text(cell_content)
@@ -473,6 +503,9 @@ def _resolve_relax_param_file(
     """Find the parameter file for a relax input."""
     if input_path.suffix.lower() == ".res":
         candidates = [workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"]
+        seed_candidate = workdir / f"{seed}{param_suffix}"
+        if seed_candidate not in candidates:
+            candidates.append(seed_candidate)
     else:
         candidates = [
             workdir / f"{seed}{param_suffix}",
@@ -507,8 +540,6 @@ def _run_local_structure_one(
         )
         return runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
     if code in ("gulp", "pp3"):
-        if singlepoint:
-            raise click.ClickException(f"Single-point not supported for code: {code}")
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
@@ -777,7 +808,12 @@ def _is_torchsim_model(calculator_spec: str) -> bool:
 
 def _is_symmetrix_model(calculator_spec: str) -> bool:
     """Return whether a model spec should use the Symmetrix ASE backend."""
-    return bool(calculator_spec and calculator_spec.startswith("symmetrix:"))
+    return bool(
+        calculator_spec
+        and calculator_spec.startswith(
+            ("symmetrix:", "ase:symmetrics:", "ase:symmetrix:")
+        )
+    )
 
 
 def _ensure_torchsim_available() -> None:
@@ -786,8 +822,8 @@ def _ensure_torchsim_available() -> None:
 
     if not has_torchsim():
         raise click.ClickException(
-            "torch-sim is required for plain ML model specs. "
-            "Install torch-sim or use an explicit ASE fallback spec such as "
+            "torch-sim is required for torch-sim ML model specs. "
+            "Install torch-sim or use an explicit ASE driver spec such as "
             "ase:mace:medium."
         )
 
@@ -799,18 +835,22 @@ def _validate_ml_calculator_spec(calculator_spec: str) -> None:
             _normalize_ml_ase_spec(calculator_spec)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
+    elif calculator_spec.startswith("torch-sim:"):
+        from airsspy.jf.ml_runners import _normalize_torchsim_model_spec
+
+        try:
+            _normalize_torchsim_model_spec(calculator_spec)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
 
 
 def _normalize_ml_ase_spec(model_spec: str) -> str:
     """Convert an explicit ``ase:`` model spec into an ASE calculator spec."""
-    if _is_symmetrix_model(model_spec):
-        parts = model_spec.split(":", 2)
-        if len(parts) != 3 or parts[1] != "mace" or not parts[2]:
-            raise ValueError(
-                "Symmetrix ML specs must use 'symmetrix:mace:<model>'. "
-                "Only MACE models are supported by the Symmetrix backend."
-            )
-        return f"symmetrix:Symmetrix@{parts[2]}"
+    from airsspy.jf.ml_runners import _normalize_symmetrix_calculator_spec
+
+    normalized_spec = _normalize_symmetrix_calculator_spec(model_spec)
+    if normalized_spec != model_spec or model_spec.startswith("symmetrix:"):
+        return normalized_spec
     if not model_spec.startswith("ase:"):
         return model_spec
     ase_spec = model_spec[4:]
@@ -914,6 +954,14 @@ def _create_sp_runner(
             pressure=pressure,
             cell_axis_map=cell_axis_map,
         )
+    elif code == "gulp":
+        from airsspy.jf.runners import AirssGulpSinglePointRunner
+
+        return AirssGulpSinglePointRunner(executable=exe, pressure=pressure)
+    elif code == "pp3":
+        from airsspy.jf.runners import AirssPp3SinglePointRunner
+
+        return AirssPp3SinglePointRunner(executable=exe)
     elif code == "vasp":
         from airsspy.jf.runners import AirssVaspSinglePointRunner
 
@@ -960,13 +1008,37 @@ def _collect_result(struct_name: str, code: str, calculator_spec: str = None) ->
         # pp3, gulp — use the external castep2res tool
         import subprocess
 
-        with open(struct_name + ".res", "w") as f:
-            subprocess.run(
-                ["castep2res", struct_name],
-                stdout=f,
-                stderr=subprocess.DEVNULL,
-                check=False,
+        castep_path = Path(struct_name + ".castep")
+        if not castep_path.is_file():
+            raise RuntimeError(
+                f"No CASTEP-like result file available for {struct_name}"
             )
+        output_path = Path(struct_name + ".res")
+        temp_path = Path(struct_name + ".res.tmp")
+        temp_path.unlink(missing_ok=True)
+        try:
+            with open(temp_path, "w") as f:
+                result = subprocess.run(
+                    ["castep2res", struct_name],
+                    stdout=f,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            content = temp_path.read_text()
+            lines = [line.strip() for line in content.splitlines() if line.strip()]
+            if (
+                result.returncode != 0
+                or not lines
+                or not lines[0].startswith("TITL ")
+                or "END" not in lines
+            ):
+                raise RuntimeError(
+                    f"castep2res failed to produce a valid RES file for {struct_name}"
+                )
+            temp_path.replace(output_path)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
 
 
 @click.group("run")
@@ -978,7 +1050,7 @@ def run():
 @click.option(
     "--seed",
     required=True,
-    help="Seed name (<seed>.cell and param file must exist)",
+    help="Seed name (<seed>.cell must exist)",
 )
 @click.option(
     "--nmax",
@@ -991,8 +1063,8 @@ def run():
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "gulp", "pp3", "abacus", "vasp"]),
-    help="DFT code to use",
+    type=click.Choice(RUN_BACKENDS),
+    help="Relaxation backend to use",
 )
 @click.option("--exe", default=None, help="Relaxation executable (default: auto)")
 @click.option(
@@ -1035,7 +1107,7 @@ def run():
     "--mpinp",
     default=None,
     type=int,
-    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus only)",
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus/vasp)",
 )
 @click.option(
     "--walltime-buffer",
@@ -1043,6 +1115,36 @@ def run():
     type=int,
     show_default=True,
     help="Seconds before walltime to stop",
+)
+@click.option(
+    "--calculator",
+    "calculator_spec",
+    default=None,
+    help=(
+        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
+        "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
+        "'ase:module:Class@model' for ASE."
+    ),
+)
+@click.option(
+    "--optimizer",
+    default="FIRE",
+    show_default=True,
+    type=click.Choice(["FIRE", "BFGS"]),
+    help="Optimizer for --code ml",
+)
+@click.option(
+    "--fmax",
+    default=0.05,
+    type=float,
+    show_default=True,
+    help="Force convergence threshold (eV/Ang) for --code ml",
+)
+@click.option(
+    "--device",
+    default=None,
+    help="Torch device for torch-sim ML runs, e.g. cuda or cpu.",
 )
 @click.option(
     "--formula",
@@ -1251,6 +1353,10 @@ def run_search(
     cluster,
     mpinp,
     walltime_buffer,
+    calculator_spec,
+    optimizer,
+    fmax,
+    device,
     formulas,
     formula_elements,
     formula_max_coeff,
@@ -1311,6 +1417,17 @@ def run_search(
 
     if prune and build_only:
         raise click.ClickException("--prune cannot be used with --build-only")
+    if code == "ml" and not build_only and not calculator_spec:
+        raise click.ClickException("--calculator is required when --code ml")
+    if code == "ml" and calculator_spec:
+        _validate_ml_calculator_spec(calculator_spec)
+    use_torchsim = (
+        code == "ml"
+        and not build_only
+        and _is_torchsim_model(calculator_spec)
+    )
+    if use_torchsim:
+        _ensure_torchsim_available()
 
     workdir = Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
@@ -1547,7 +1664,8 @@ def run_search(
     potcar_map = _parse_potcar_map_options(potcar_map_values)
 
     # Copy param file to workdir so runners can find it after chdir
-    if not build_only:
+    param_suffix = None
+    if not build_only and code != "ml":
         param_suffix = SUFFIX_MAP[code]
         param_file = Path(seed + param_suffix)
         if not param_file.exists():
@@ -1560,7 +1678,29 @@ def run_search(
                     shutil.copy2(kpoints, workdir / kpoints.name)
 
     if exe is None:
-        exe = EXE_DEFAULTS[code]
+        exe = EXE_DEFAULTS.get(code, "")
+
+    runner = None
+    if not build_only:
+        if use_torchsim:
+            from airsspy.jf.ml_runners import TorchSimRunner
+
+            runner = TorchSimRunner(calculator_spec, device=device)
+        else:
+            runner = _create_runner(
+                code,
+                exe,
+                max_iterations,
+                cluster,
+                pressure,
+                mpinp,
+                calculator_spec=calculator_spec,
+                optimizer=optimizer,
+                fmax=fmax,
+                potcar_dir=potcar_dir,
+                potcar_map=potcar_map,
+                cell_axis_map=cell_axis_map,
+            )
 
     # Detect scheduler for walltime awareness
     sched = _get_scheduler_for_walltime()
@@ -1633,19 +1773,6 @@ def run_search(
                 logger.info("[%d] Built: %s", i, struct_name)
                 continue
 
-            # Relax
-            runner = _create_runner(
-                code,
-                exe,
-                max_iterations,
-                cluster,
-                pressure,
-                mpinp,
-                potcar_dir=potcar_dir,
-                potcar_map=potcar_map,
-                cell_axis_map=cell_axis_map,
-            )
-
             try:
                 if code == "castep":
                     from castepinput.inputs import ParamInput
@@ -1675,12 +1802,32 @@ def run_search(
                         incar_content,
                         kpoints_path=kpoints_path if kpoints_path.exists() else None,
                     )
+                elif code == "ml":
+                    struct_content = Path(struct_name + ".cell").read_text()
+                    if use_torchsim:
+                        batch_results = runner.relax_batch(
+                            [struct_name],
+                            [struct_content],
+                            max_steps=max_iterations,
+                            force_tol=fmax,
+                            optimizer=optimizer.lower(),
+                            scalar_pressure=pressure,
+                        )
+                        rc = batch_results.get(struct_name, 1)
+                    else:
+                        rc = runner.run(struct_name, struct_content)
 
                 if rc == 0:
                     _collect_result(
                         struct_name,
                         code,
-                        calculator_spec=runner if code == "vasp" else None,
+                        calculator_spec=(
+                            runner
+                            if code == "vasp"
+                            else calculator_spec
+                            if code == "ml"
+                            else None
+                        ),
                     )
                     n_relaxed += 1
                     if prune_options is not None:
@@ -1700,7 +1847,13 @@ def run_search(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else None,
+                            calculator_spec=(
+                                runner
+                                if code == "vasp"
+                                else calculator_spec
+                                if code == "ml"
+                                else None
+                            ),
                         )
                         if prune_options is not None:
                             candidate = candidate_from_res(Path(struct_name + ".res"))
@@ -1718,14 +1871,20 @@ def run_search(
                         logger.info("[%d] Relax FAILED: %s", i, struct_name)
                         _emit_diagnostics(struct_name, code)
                         if not keep:
-                            runner.clean_failed(struct_name)
+                            if use_torchsim:
+                                _cleanup_ml_transients(struct_name)
+                            else:
+                                runner.clean_failed(struct_name)
                     n_failed += 1
 
             except Exception:
                 logger.error("[%d] Relax crashed: %s", i, struct_name, exc_info=True)
                 _emit_diagnostics(struct_name, code)
                 if not keep:
-                    runner.clean_failed(struct_name)
+                    if use_torchsim:
+                        _cleanup_ml_transients(struct_name)
+                    else:
+                        runner.clean_failed(struct_name)
                 n_failed += 1
 
         # Summary
@@ -1753,8 +1912,8 @@ def run_search(
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "gulp", "pp3", "abacus", "vasp", "ml"]),
-    help="DFT code or ML mode to use",
+    type=click.Choice(RUN_BACKENDS),
+    help="Relaxation backend to use",
 )
 @click.option("--exe", default=None, help="Relaxation executable (default: auto)")
 @click.option(
@@ -1799,7 +1958,7 @@ def run_search(
     "--mpinp",
     default=None,
     type=int,
-    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus only)",
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus/vasp)",
 )
 @click.option(
     "--walltime-buffer",
@@ -1813,9 +1972,10 @@ def run_search(
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default backend is torch-sim, e.g. "
-        "'mace:medium'. Use 'ase:mace:medium' or 'ase:module:Class@model' "
-        "for ASE fallback."
+        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
+        "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
+        "'ase:module:Class@model' for ASE."
     ),
 )
 @click.option(
@@ -1884,8 +2044,6 @@ def run_crud(
         raise click.ClickException("--calculator is required when --code ml")
     if code == "ml":
         _validate_ml_calculator_spec(calculator_spec)
-    if singlepoint and code not in ("castep", "abacus", "vasp", "ml"):
-        raise click.ClickException(f"Single-point not supported for code: {code}")
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
         _ensure_torchsim_available()
@@ -2089,8 +2247,8 @@ def run_crud(
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "gulp", "pp3", "abacus", "vasp", "ml"]),
-    help="DFT code or ML mode to use",
+    type=click.Choice(RUN_BACKENDS),
+    help="Relaxation backend to use",
 )
 @click.option("--exe", default=None, help="Relaxation executable (default: auto)")
 @click.option(
@@ -2127,7 +2285,7 @@ def run_crud(
     "--mpinp",
     default=None,
     type=int,
-    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus only)",
+    help="Number of MPI processes. Omit for serial, 0 for mpirun (auto), N for mpirun -np N (castep/abacus/vasp)",
 )
 @click.option(
     "--walltime-buffer",
@@ -2141,9 +2299,10 @@ def run_crud(
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default backend is torch-sim, e.g. "
-        "'mace:medium'. Use 'ase:mace:medium' or 'ase:module:Class@model' "
-        "for ASE fallback."
+        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
+        "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
+        "'ase:module:Class@model' for ASE."
     ),
 )
 @click.option(
@@ -2223,8 +2382,6 @@ def run_relax(
         raise click.ClickException("--calculator is required when --code ml")
     if code == "ml":
         _validate_ml_calculator_spec(calculator_spec)
-    if singlepoint and code not in ("castep", "abacus", "vasp", "ml"):
-        raise click.ClickException(f"Single-point not supported for code: {code}")
     potcar_dir = _resolve_optional_path(potcar_dir)
     potcar_map = _parse_potcar_map_options(potcar_map_values)
 
@@ -2250,6 +2407,7 @@ def run_relax(
             *_prepare_relax_input(
                 input_path,
                 workdir,
+                seed=seed,
                 write_res_cell=code == "castep",
                 convert_res_cell=code != "ml",
             ),
@@ -2366,7 +2524,7 @@ def run_relax(
                     continue
 
         else:
-            # Standard one-by-one loop (DFT codes or ASE fallback)
+            # Standard one-by-one loop (external backends or ASE driver)
             backend_label = "ASE ML" if code == "ml" else code
             logger.info(
                 "%s %d structures with %s",
@@ -2378,6 +2536,7 @@ def run_relax(
             for i, (input_path, cell_path, struct_name, cell_content) in enumerate(
                 relax_inputs, 1
             ):
+                original_res = _snapshot_res_input(input_path)
 
                 # Check walltime
                 if not _walltime_remaining_ok(sched, walltime_buffer):
@@ -2423,7 +2582,12 @@ def run_relax(
                             logger.info("[%d/%d] FAILED: %s", i, total, struct_name)
                             _emit_diagnostics(struct_name, code)
                             if not keep:
-                                runner.clean_failed(struct_name)
+                                _clean_failed_preserving_res(
+                                    runner,
+                                    struct_name,
+                                    input_path,
+                                    original_res,
+                                )
                         n_failed += 1
 
                 except Exception:
@@ -2437,7 +2601,12 @@ def run_relax(
                     )
                     _emit_diagnostics(struct_name, code)
                     if not keep:
-                        runner.clean_failed(struct_name)
+                        _clean_failed_preserving_res(
+                            runner,
+                            struct_name,
+                            input_path,
+                            original_res,
+                        )
                     n_failed += 1
 
         logger.info(
@@ -2475,7 +2644,7 @@ def run_relax(
     "--code",
     default="castep",
     show_default=True,
-    type=click.Choice(["castep", "abacus", "vasp", "ml"]),
+    type=click.Choice(RUN_BACKENDS),
     help="Code to use for single-point calculation",
 )
 @click.option("--exe", default=None, help="Executable (default: auto)")
@@ -2500,9 +2669,10 @@ def run_relax(
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default backend is torch-sim, e.g. "
-        "'mace:medium'. Use 'ase:mace:medium' or 'ase:module:Class@model' "
-        "for ASE fallback."
+        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
+        "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
+        "'ase:module:Class@model' for ASE."
     ),
 )
 @click.option(
@@ -2566,48 +2736,31 @@ def run_sp(
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
         raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
-    if code not in ("ml", "vasp") and any(
-        path.suffix.lower() == ".res" for path in cell_files
-    ):
-        raise click.ClickException(
-            "RES input for run sp is currently supported only with --code ml or vasp"
-        )
-    sp_inputs = None
-    if code in ("ml", "vasp"):
-        sp_inputs = [
-            (
+    sp_inputs = [
+        (
+            input_path,
+            *_prepare_relax_input(
                 input_path,
-                *_prepare_relax_input(
-                    input_path,
-                    workdir,
-                    write_res_cell=code == "vasp",
-                    convert_res_cell=input_path.suffix.lower() != ".res"
-                    or code == "vasp",
-                ),
-            )
-            for input_path in cell_files
-        ]
+                workdir,
+                seed=seed,
+                write_res_cell=code != "ml",
+                convert_res_cell=code != "ml",
+            ),
+        )
+        for input_path in cell_files
+    ]
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
         _ensure_torchsim_available()
 
     # Read param file (not needed for ML)
-    param_file_name = None
     param_suffix = None
     if code != "ml":
         param_suffix = SUFFIX_MAP[code]
-        if code == "vasp" and sp_inputs is not None:
-            for input_path, cell_path, _, _ in sp_inputs:
-                _resolve_relax_param_file(
-                    input_path, cell_path, seed, workdir, param_suffix
-                )
-        else:
-            param_file = workdir / (seed + param_suffix)
-            if not param_file.exists():
-                param_file = workdir / (cell_files[0].stem + param_suffix)
-            if not param_file.exists():
-                raise click.ClickException(f"Param file not found: {param_file}")
-            param_file_name = param_file.stem
+        for input_path, cell_path, _, _ in sp_inputs:
+            _resolve_relax_param_file(
+                input_path, cell_path, seed, workdir, param_suffix
+            )
 
     if exe is None:
         exe = EXE_DEFAULTS.get(code, "")
@@ -2706,49 +2859,29 @@ def run_sp(
         else:
             logger.info("Running single-point on %d structures with %s", total, code)
 
-            loop_inputs = (
-                sp_inputs
-                if sp_inputs is not None
-                else [(cell_path, cell_path, cell_path.stem, None) for cell_path in cell_files]
-            )
+            loop_inputs = sp_inputs
             for i, (input_path, cell_path, struct_name, cell_content) in enumerate(
                 loop_inputs, 1
             ):
+                original_res = _snapshot_res_input(input_path)
 
                 # Check walltime
                 if not _walltime_remaining_ok(sched, walltime_buffer):
                     break
 
                 try:
-                    if code == "castep":
-                        from castepinput.inputs import ParamInput
-
-                        cellinput = cell_path.read_text()
-                        paraminput = ParamInput.from_file(
-                            param_file_name + param_suffix
-                        )
-                        rc = runner.run(struct_name, cellinput, paraminput)
-                    elif code == "abacus":
-                        struct_content = cell_path.read_text()
-                        param_content = Path(param_file_name + param_suffix).read_text()
-                        rc = runner.run(struct_name, struct_content, param_content)
-                    elif code == "vasp":
-                        struct_content = cell_content or cell_path.read_text()
-                        param_file = _resolve_relax_param_file(
-                            input_path, cell_path, seed, workdir, param_suffix
-                        )
-                        kpoints_path = param_file.with_suffix(".KPOINTS")
-                        rc = runner.run(
-                            struct_name,
-                            struct_content,
-                            param_file.read_text(),
-                            kpoints_path=kpoints_path if kpoints_path.exists() else None,
-                        )
-                    elif code == "ml":
-                        ml_input = _prepare_ml_structure_input(
-                            input_path, cell_content
-                        )
-                        rc = runner.run(struct_name, ml_input)
+                    rc = _run_local_structure_one(
+                        input_path,
+                        cell_path,
+                        struct_name,
+                        cell_content,
+                        code,
+                        runner,
+                        param_suffix,
+                        seed,
+                        workdir,
+                        singlepoint=True,
+                    )
 
                     if rc == 0:
                         _collect_result(
@@ -2779,7 +2912,12 @@ def run_sp(
                             logger.info("[%d/%d] FAILED: %s", i, total, struct_name)
                             _emit_diagnostics(struct_name, code)
                             if not keep:
-                                runner.clean_failed(struct_name)
+                                _clean_failed_preserving_res(
+                                    runner,
+                                    struct_name,
+                                    input_path,
+                                    original_res,
+                                )
                         n_failed += 1
 
                 except Exception:
@@ -2792,7 +2930,12 @@ def run_sp(
                     )
                     _emit_diagnostics(struct_name, code)
                     if not keep:
-                        runner.clean_failed(struct_name)
+                        _clean_failed_preserving_res(
+                            runner,
+                            struct_name,
+                            input_path,
+                            original_res,
+                        )
                     n_failed += 1
 
         logger.info(

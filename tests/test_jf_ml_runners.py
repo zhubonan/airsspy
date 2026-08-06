@@ -150,6 +150,95 @@ def test_symmetrix_mace_spec_uses_symmetrix_calculator(monkeypatch, tmp_path):
     assert kwargs == {"dtype": "float64", "use_kokkos": True, "species": [7, 13]}
 
 
+def test_public_ase_symmetrics_spec_decodes_full_mh_model_name(monkeypatch, tmp_path):
+    """The public ASE spec decodes a branded MACE-MH checkpoint and head."""
+    from airsspy.jf import ml_runners
+
+    resolved = []
+    constructed = []
+
+    class FakeSymmetrix:
+        def __init__(self, model_file, **kwargs):
+            constructed.append((model_file, kwargs))
+
+    monkeypatch.setitem(
+        sys.modules, "symmetrix", SimpleNamespace(Symmetrix=FakeSymmetrix)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "symmetrix.extract_mace_data",
+        SimpleNamespace(extract_mace_data=lambda model_file, **kwargs: {}),
+    )
+    monkeypatch.setenv("AIRSSPY_SYMMETRIX_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        ml_runners,
+        "_resolve_mace_model_file",
+        lambda model_id: resolved.append(model_id) or tmp_path / "model.model",
+    )
+
+    calc = ml_runners._resolve_calculator(
+        "ase:symmetrics:MACE-MH-1:matpes_r2scan"
+    )
+
+    assert isinstance(calc, FakeSymmetrix)
+    assert resolved == ["mh-1"]
+    assert constructed[0][1]["head"] == "matpes_r2scan"
+
+
+def test_public_ase_symmetrics_spec_uses_real_mace_resolver(monkeypatch, tmp_path):
+    """MACE-MH shorthand passes the canonical selector to the installed resolver."""
+    foundations_models = pytest.importorskip(
+        "mace.calculators.foundations_models"
+    )
+    from airsspy.jf import ml_runners
+
+    downloaded = []
+    constructed = []
+
+    class FakeSymmetrix:
+        def __init__(self, model_file, **kwargs):
+            constructed.append((model_file, kwargs))
+
+    checkpoint = tmp_path / "mace-mh-1.model"
+    monkeypatch.setitem(
+        sys.modules, "symmetrix", SimpleNamespace(Symmetrix=FakeSymmetrix)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "symmetrix.extract_mace_data",
+        SimpleNamespace(extract_mace_data=lambda model_file, **kwargs: {}),
+    )
+    monkeypatch.setenv("AIRSSPY_SYMMETRIX_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        foundations_models,
+        "download_mace_mp_checkpoint",
+        lambda model: downloaded.append(model) or checkpoint,
+    )
+
+    ml_runners._resolve_calculator("ase:symmetrics:MACE-MH-1:matpes_r2scan")
+
+    assert downloaded == ["mh-1"]
+    model_file, kwargs = constructed[0]
+    assert model_file.parent == tmp_path / "cache"
+    assert kwargs == {
+        "dtype": "float64",
+        "use_kokkos": True,
+        "head": "matpes_r2scan",
+    }
+
+
+def test_generic_ase_symmetrix_spec_remains_supported():
+    """The shorthand alias does not intercept generic ASE class syntax."""
+    from airsspy.jf.ml_runners import _normalize_symmetrix_calculator_spec
+
+    assert (
+        _normalize_symmetrix_calculator_spec(
+            "ase:symmetrix:Symmetrix@mh-1"
+        )
+        == "symmetrix:Symmetrix@mh-1"
+    )
+
+
 def test_symmetrix_mace_spec_caches_extracted_json(monkeypatch, tmp_path):
     """Symmetrix conversion writes and reuses species-specific JSON."""
     from airsspy.jf import ml_runners
@@ -240,12 +329,50 @@ def test_symmetrix_relax_runner_derives_species(monkeypatch, tmp_path):
     monkeypatch.setattr(ml_runners, "_resolve_calculator", fake_resolve)
     monkeypatch.setattr("ase.optimize.FIRE", FakeDyn)
 
-    runner = AirssMlRelaxRunner("symmetrix:Symmetrix@medium-mpa-0", max_steps=1)
+    runner = AirssMlRelaxRunner("ase:symmetrics:medium-mpa-0", max_steps=1)
     rc = runner.run("AlN-001", atoms)
 
     assert rc == 0
-    assert captured["spec"] == "symmetrix:Symmetrix@medium-mpa-0"
+    assert captured["spec"] == "ase:symmetrics:medium-mpa-0"
     assert captured["kwargs"]["species"] == [7, 13]
+
+
+def test_torchsim_runner_strips_explicit_framework_prefix(monkeypatch):
+    """Explicit torch-sim specs pass only backend and model to the loader."""
+    from airsspy.jf import ml_runners
+
+    fake_torch = SimpleNamespace(
+        device=lambda value: SimpleNamespace(type=value),
+        cuda=SimpleNamespace(is_available=lambda: False),
+        float32="float32",
+        float64="float64",
+    )
+    loaded = {}
+
+    def fake_load(model_spec, *, device, dtype):
+        loaded.update(model_spec=model_spec, device=device, dtype=dtype)
+        return MagicMock()
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(ml_runners, "_load_torchsim_model", fake_load)
+
+    runner = ml_runners.TorchSimRunner("torch-sim:mace:medium", device="cpu")
+
+    assert runner.model_spec == "mace:medium"
+    assert loaded == {
+        "model_spec": "mace:medium",
+        "device": runner.device,
+        "dtype": "float64",
+    }
+
+
+@pytest.mark.parametrize("model_spec", ["torch-sim:", "torch-sim:mace", "mace:"])
+def test_torchsim_model_spec_rejects_missing_backend_or_model(model_spec):
+    """Explicit torch-sim specs require both a backend and model identifier."""
+    from airsspy.jf.ml_runners import _normalize_torchsim_model_spec
+
+    with pytest.raises(ValueError, match="backend:<model>"):
+        _normalize_torchsim_model_spec(model_spec)
 
 
 # ---------------------------------------------------------------------------

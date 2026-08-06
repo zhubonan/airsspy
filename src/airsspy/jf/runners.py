@@ -7,6 +7,7 @@ standalone or within jobflow Makers.
 """
 
 import logging
+import os
 import re
 import shlex
 import shutil
@@ -596,6 +597,121 @@ class AirssGulpRelaxRunner(AirssScriptRelaxRunner):
             shutil.move(struct_name + ".lib", seed_name + ".lib")
 
 
+class AirssGulpSinglePointRunner(AirssGulpRelaxRunner):
+    """Execute a GULP ``single prop`` calculation without geometry relaxation."""
+
+    _cleanup_extensions = AirssGulpRelaxRunner._cleanup_extensions + [
+        ".gin",
+        ".xtl",
+        "-out.cell",
+    ]
+
+    @staticmethod
+    def _last_output_value(stdout: str, patterns: tuple[str, ...]) -> float | None:
+        for pattern in patterns:
+            matches = re.findall(pattern, stdout, flags=re.IGNORECASE)
+            if matches:
+                return float(matches[-1].replace("D", "E").replace("d", "e"))
+        return None
+
+    def run(
+        self,
+        struct_name: str,
+        struct_content: str,
+        param_content: str,
+        seed_name: Optional[str] = None,
+    ) -> int:
+        """Run GULP once and write the CASTEP-like output used by AIRSS tools."""
+        for suffix in (".castep", "-out.cell"):
+            Path(struct_name + suffix).unlink(missing_ok=True)
+        self._prepare_inputs(struct_name, struct_content, param_content, seed_name)
+        try:
+            conversion = subprocess.run(
+                ["cabal", "cell", "gulp"],
+                input=struct_content,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("GULP input conversion timed out for %s", struct_name)
+            return 1
+        if conversion.returncode != 0:
+            logger.warning("GULP input conversion failed for %s", struct_name)
+            return 1
+
+        gulp_input, replacements = re.subn(
+            r"\bopti\s+prop\b",
+            "single prop",
+            conversion.stdout,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if replacements != 1:
+            logger.warning("Cabal output did not contain an optimisable GULP task")
+            return 1
+
+        root = Path(seed_name or struct_name.split("-", 1)[0]).name
+        gulp_input += (
+            f"\nlibrary {root}\n"
+            f"output xtl {struct_name}\n"
+            f"pressure {self.pressure} GPa\n"
+        )
+        Path(struct_name + ".gin").write_text(gulp_input)
+
+        try:
+            env = os.environ.copy()
+            env["GULP_LIB"] = str(Path.cwd())
+            result = subprocess.run(
+                shlex.split(self.executable),
+                input=gulp_input,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("GULP single-point timed out for %s", struct_name)
+            return 1
+        Path(struct_name + ".gout").write_text(result.stdout)
+        if result.returncode != 0:
+            return result.returncode
+
+        number = r"([-+0-9.dDeE]+)"
+        volume = self._last_output_value(
+            result.stdout,
+            (
+                rf"Primitive cell volume\s*=\s*{number}",
+                rf"Initial cell volume\s*=\s*{number}",
+            ),
+        )
+        enthalpy = self._last_output_value(
+            result.stdout,
+            (rf"Total lattice enthalpy\s*=\s*{number}\s+eV",),
+        )
+        if enthalpy is None and volume is not None:
+            energy = self._last_output_value(
+                result.stdout,
+                (rf"Total lattice energy\s*=\s*{number}\s+eV",),
+            )
+            if energy is not None:
+                enthalpy = energy + self.pressure * volume / 160.21766208
+        if enthalpy is None or volume is None:
+            logger.warning("Unable to parse GULP single-point output for %s", struct_name)
+            return 1
+
+        Path(struct_name + ".castep").write_text(
+            " Welcome to a b c GULP\n"
+            f" *  Pressure: {self.pressure}\n"
+            f" GULP: Final Enthalpy     = {enthalpy:.12f}\n"
+            f"Current cell volume = {volume:.12f}\n"
+        )
+        Path(struct_name + "-out.cell").write_text(struct_content)
+        return 0
+
+
 class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
     """
     Runner for pp3 relaxation via the external ``pp3_relax`` script.
@@ -626,6 +742,25 @@ class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
 
     def _get_cmd(self, struct_name: str) -> list[str]:
         return ["pp3_relax", self.executable, struct_name]
+
+
+class AirssPp3SinglePointRunner(AirssPp3RelaxRunner):
+    """Execute PP3 with its native no-relax ``-n`` option."""
+
+    def _get_cmd(self, struct_name: str) -> list[str]:
+        return ["pp3_relax", f"{self.executable} -n", struct_name]
+
+    def run(
+        self,
+        struct_name: str,
+        struct_content: str,
+        param_content: str,
+        seed_name: Optional[str] = None,
+    ) -> int:
+        """Run PP3 single-point after removing stale converter inputs."""
+        for suffix in (".castep", "-out.cell"):
+            Path(struct_name + suffix).unlink(missing_ok=True)
+        return super().run(struct_name, struct_content, param_content, seed_name)
 
 
 class AirssVaspRelaxRunner:

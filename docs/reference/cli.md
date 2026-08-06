@@ -55,8 +55,14 @@ and can pack successful `.res` outputs into `packed.res`.
 ap run search --seed Si --code castep --nmax 100 --pack
 ap run search --seed Si --code gulp --exe ggulp --cluster
 ap run search --seed Si --code vasp --potcar-dir /path/to/potpaw --potcar-map Si=Si
+ap run search --seed Si --code ml --calculator mace:medium --device cuda
+ap run search --seed Si --code ml --calculator ase:symmetrix:medium-mpa-0
 ap run search --seed seed --build-only --nmax 20
 ```
+
+`run search` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and `ml`.
+ML searches generate structures with `buildcell` and relax each structure with
+the selected ML driver.
 
 Required files:
 
@@ -131,9 +137,10 @@ The curation step selects one row per reduced formula by lowest
 ```bash
 ap run relax --cell "*.cell" --seed Si --code castep --pack
 ap run relax --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
-ap run relax --cell "*.res" --code ml --calculator mace:medium --device cuda --batch-size 16
+ap run relax --cell "*.res" --code ml --calculator torch-sim:mace:medium --device cuda --batch-size 16
 ap run relax --cell "*.cell" --code ml --calculator ase:mace:medium --optimizer BFGS
-ap run relax --cell "*.cell" --code ml --calculator symmetrix:mace:medium-mpa-0 --optimizer FIRE
+ap run relax --cell "*.cell" --code ml --calculator ase:symmetrix:medium-mpa-0 --optimizer FIRE
+ap run relax --cell "*.cell" --code ml --calculator ase:symmetrix:MACE-MH-1:matpes_r2scan
 ```
 
 `run relax` accepts single-structure `.cell` and `.res` inputs. Packed `.res`
@@ -143,19 +150,21 @@ non-structural cell settings while replacing the lattice and positions.
 
 Supported relaxation codes are `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and
 `ml`. The `--singlepoint` flag reuses this command for single-point calculations
-where supported: `castep`, `abacus`, `vasp`, and `ml`.
+with all six backends.
 
 ### Single-Point Calculations
 
 ```bash
 ap run sp --cell "*.cell" --seed Si --code castep
+ap run sp --cell "*.res" --seed Si --code gulp
+ap run sp --cell "*.res" --seed Si --code pp3
 ap run sp --cell "*.res" --code ml --calculator mace:medium --batch-size 32
-ap run sp --cell "*.res" --code ml --calculator symmetrix:mace:medium
+ap run sp --cell "*.res" --code ml --calculator ase:symmetrix:medium
 ap run sp --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
 ```
 
-`run sp` supports `castep`, `abacus`, `vasp`, and `ml`. RES input is currently
-supported for VASP and ML single-points.
+`run sp` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and `ml`. Both
+single-structure `.cell` and `.res` inputs are supported for every backend.
 
 ### CRUD Queue Worker
 
@@ -163,7 +172,7 @@ supported for VASP and ML single-points.
 ap run crud --workdir . --code castep
 ap run crud --workdir . --code vasp --singlepoint --potcar-dir /path/to/potpaw
 ap run crud --workdir . --code ml --calculator mace:medium --batch-size 8 --nostop
-ap run crud --workdir . --code ml --calculator symmetrix:mace:medium --nostop
+ap run crud --workdir . --code ml --calculator ase:symmetrix:medium --nostop
 ```
 
 The CRUD worker consumes queued `hopper/*-*.res` files, converts each claimed
@@ -172,11 +181,27 @@ RES structure into backend inputs, and moves outputs into `good_castep/` or
 requeue CASTEP-like electronic-minimisation failures.
 
 For ML runs, plain `mace:<model>` uses the torch-sim backend and supports
-`--device`/`--batch-size`; `ase:mace:<model>` uses the generic ASE MACE
-calculator fallback; and `symmetrix:mace:<model>` uses the Symmetrix ASE
-calculator path. The Symmetrix backend is MACE-only, accepts the same MACE model
-names as `mace:<model>`, and uses ASE optimizer controls such as `--optimizer`,
+`--device`/`--batch-size`; prefix it as `torch-sim:mace:<model>` to select that
+framework explicitly. `ase:mace:<model>` uses the generic ASE MACE calculator,
+while `ase:symmetrix:<full-mace-model-name>` uses the Symmetrix ASE calculator.
+Branded MACE-MH names can include the head, for example
+`ase:symmetrix:MACE-MH-1:matpes_r2scan`; airsspy resolves this as checkpoint
+`mh-1` with head `matpes_r2scan`.
+The misspelled `ase:symmetrics:<model>` alias and the legacy
+`symmetrix:mace:<model>` form remain accepted for compatibility. Symmetrix runs
+MACE models only and uses ASE optimizer controls such as `--optimizer`,
 `--fmax`, `--max-iterations`, and `--pressure` rather than torch-sim batching.
+
+The local `ap run` support matrix is uniform:
+
+| Workflow | CASTEP | GULP | PP3 | ABACUS | VASP | ML |
+| --- | --- | --- | --- | --- | --- | --- |
+| `search` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `relax` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `relax --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `sp` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `crud` | Yes | Yes | Yes | Yes | Yes | Yes |
+| `crud --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes |
 
 ## Ranking And Hull Analysis
 

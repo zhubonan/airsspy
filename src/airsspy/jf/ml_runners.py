@@ -1,21 +1,23 @@
 """
 ML interatomic potential runners.
 
-Two backends:
+Two orchestration drivers:
 
-- **torchsim** (preferred): GPU-accelerated batch processing via ``torch_sim``.
+- **torch-sim** (default): GPU-accelerated batch processing via ``torch_sim``.
   Handles all structures in a single batch for maximum throughput.
-- **ASE** (fallback): Uses any ASE-compatible calculator with ASE optimizers.
+- **ASE** (explicit): Uses any ASE-compatible calculator with ASE optimizers.
   Processes structures one at a time; works without torchsim.
 
 The ``torch_sim`` package is an optional dependency (``pip install airsspy[ml]``).
-When unavailable, the ASE fallback is used automatically.
+Select the ASE driver explicitly with an ``ase:`` calculator specification.
 
 Model specification format (torchsim)::
 
     backend:model_id
 
-For example ``mace:medium``, ``mace:/path/to/model.pt``, ``sevennet:sevennet-mf-ompa``.
+For example ``mace:medium``, ``torch-sim:mace:medium``,
+``mace:/path/to/model.pt``, or ``sevennet:sevennet-mf-ompa``. The optional
+``torch-sim:`` prefix explicitly selects this framework.
 
 ASE calculator specification format::
 
@@ -44,6 +46,9 @@ logger = logging.getLogger(__name__)
 # 1 eV/Ang^3 = 160.21766208 GPa
 EV_PER_ANG3_TO_GPA = 160.21766208
 StructureInput = Union[str, Atoms]
+_SYMMETRIX_INTERNAL_PREFIX = "symmetrix:Symmetrix@"
+_SYMMETRIX_GENERIC_ASE_PREFIX = "ase:symmetrix:Symmetrix@"
+_SYMMETRIX_ASE_PREFIXES = ("ase:symmetrix:", "ase:symmetrics:")
 
 
 def _enthalpy_from_energy_pressure_volume(
@@ -74,7 +79,8 @@ def _resolve_calculator(calculator_spec: str, **kwargs):
     Raises:
         ValueError: If the spec cannot be parsed.
     """
-    if calculator_spec.startswith("symmetrix:"):
+    calculator_spec = _normalize_symmetrix_calculator_spec(calculator_spec)
+    if calculator_spec.startswith(_SYMMETRIX_INTERNAL_PREFIX):
         return _resolve_symmetrix_calculator(calculator_spec, **kwargs)
 
     # Split off the @model suffix
@@ -104,6 +110,38 @@ def _resolve_calculator(calculator_spec: str, **kwargs):
     return cls(**kwargs)
 
 
+def _normalize_symmetrix_calculator_spec(calculator_spec: str) -> str:
+    """Normalize public Symmetrix ASE specs to the internal calculator form."""
+    if calculator_spec.startswith(_SYMMETRIX_GENERIC_ASE_PREFIX):
+        return _normalize_symmetrix_calculator_spec(calculator_spec[len("ase:") :])
+
+    if calculator_spec.startswith(_SYMMETRIX_INTERNAL_PREFIX):
+        if len(calculator_spec) == len(_SYMMETRIX_INTERNAL_PREFIX):
+            raise ValueError("A Symmetrix MACE model name is required.")
+        return calculator_spec
+
+    if calculator_spec.startswith("symmetrix:"):
+        parts = calculator_spec.split(":", 2)
+        if len(parts) != 3 or parts[1] != "mace" or not parts[2]:
+            raise ValueError(
+                "Symmetrix ML specs must use "
+                "'ase:symmetrix:<mace-model>' or the legacy "
+                "'symmetrix:mace:<model>' form."
+            )
+        return f"{_SYMMETRIX_INTERNAL_PREFIX}{parts[2]}"
+
+    for prefix in _SYMMETRIX_ASE_PREFIXES:
+        if calculator_spec.startswith(prefix):
+            model_id = calculator_spec[len(prefix) :]
+            if not model_id:
+                raise ValueError(
+                    "Symmetrix ASE specs must use "
+                    "'ase:symmetrix:<mace-model>'."
+                )
+            return f"{_SYMMETRIX_INTERNAL_PREFIX}{model_id}"
+    return calculator_spec
+
+
 def _resolve_symmetrix_calculator(calculator_spec: str, **kwargs):
     """Instantiate the explicit Symmetrix MACE ASE calculator backend."""
     spec = calculator_spec[len("symmetrix:") :]
@@ -123,14 +161,30 @@ def _resolve_symmetrix_calculator(calculator_spec: str, **kwargs):
         module = importlib.import_module("symmetrix")
     except ImportError as exc:
         raise ImportError(
-            "Symmetrix is required for 'symmetrix:mace:<model>' ML specs. "
+            "Symmetrix is required for 'ase:symmetrix:<mace-model>' specs. "
             "Install the symmetrix Python package or use another ML backend."
         ) from exc
 
     calc_kwargs = {"dtype": "float64", "use_kokkos": True}
     calc_kwargs.update(kwargs)
+    model_id = _normalize_symmetrix_mace_model_name(model_id, calc_kwargs)
     model_file = _symmetrix_model_file(model_id, calc_kwargs)
     return module.Symmetrix(model_file, **calc_kwargs)
+
+
+def _normalize_symmetrix_mace_model_name(model_id: str, calc_kwargs: dict) -> str:
+    """Decode branded MACE-MH model names into checkpoint and head arguments."""
+    model_name, separator, head = model_id.partition(":")
+    prefix = "mace-mh-"
+    generation = model_name.lower().removeprefix(prefix)
+    if not model_name.lower().startswith(prefix) or not generation.isdigit():
+        return model_id
+
+    if separator:
+        if not head:
+            raise ValueError("A MACE-MH model head is required after ':'.")
+        calc_kwargs.setdefault("head", head)
+    return f"mh-{generation}"
 
 
 def _resolve_mace_model_file(model_id: str) -> Path | str:
@@ -255,7 +309,11 @@ def _calculator_kwargs_for_atoms(
 ) -> dict:
     """Return calculator kwargs augmented with structure-specific metadata."""
     kwargs = dict(calculator_kwargs or {})
-    if calculator_spec.startswith("symmetrix:") and "species" not in kwargs:
+    normalized_spec = _normalize_symmetrix_calculator_spec(calculator_spec)
+    if (
+        normalized_spec.startswith(_SYMMETRIX_INTERNAL_PREFIX)
+        and "species" not in kwargs
+    ):
         kwargs["species"] = sorted({int(z) for z in atoms.get_atomic_numbers()})
     return kwargs
 
@@ -642,7 +700,7 @@ class TorchSimRunner:
     def __init__(self, model_spec: str, *, device: Optional[str] = None) -> None:
         import torch
 
-        self.model_spec = model_spec
+        self.model_spec = _normalize_torchsim_model_spec(model_spec)
         self.device = (
             torch.device(device)
             if device
@@ -654,7 +712,7 @@ class TorchSimRunner:
         )
         self.dtype = torch.float32 if self.device.type == "cuda" else torch.float64
         self.model = _load_torchsim_model(
-            model_spec,
+            self.model_spec,
             device=self.device,
             dtype=self.dtype,
         )
@@ -824,6 +882,25 @@ def _torchsim_static_batch(
         structures,
         scalar_pressure=scalar_pressure,
     )
+
+
+def _normalize_torchsim_model_spec(model_spec: str) -> str:
+    """Remove an explicit framework prefix and validate a torch-sim model spec."""
+    if model_spec.startswith("torch-sim:"):
+        model_spec = model_spec[len("torch-sim:") :]
+
+    if ":" not in model_spec:
+        raise ValueError(
+            "Torch-sim model specs must use 'backend:<model>', for example "
+            "'torch-sim:mace:medium'."
+        )
+    backend, model_id = model_spec.split(":", 1)
+    if not backend or not model_id:
+        raise ValueError(
+            "Torch-sim model specs must use 'backend:<model>', for example "
+            "'torch-sim:mace:medium'."
+        )
+    return model_spec
 
 
 def _load_torchsim_model(model_spec: str, *, device, dtype):
