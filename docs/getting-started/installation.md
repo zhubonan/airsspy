@@ -7,6 +7,7 @@ This guide covers how to install airsspy and its dependencies.
 - Python 3.9 or later
 - pip or uv package manager
 - AIRSS buildcell executable (for structure generation)
+- Julia plus EDDPotentials.jl when using the native `--code eddp` backend
 
 ## Installing airsspy
 
@@ -116,6 +117,20 @@ airsspy depends on:
 - **tabulate** and **tqdm** - CLI tables and progress display
 
 These are automatically installed when you install airsspy.
+
+### Native EDDP backend
+
+EDDP is a Julia-side backend and has no Python extra. Install and instantiate
+EDDPotentials.jl in Julia, then either pass its project directory on each run
+or set it once in the environment:
+
+```bash
+export AIRSSPY_EDDP_PROJECT=/path/to/EDDPotentials.jl
+ap run sp --cell structure.res --code eddp --calculator /path/to/model.json
+```
+
+The `julia` executable must be on `PATH`; alternatively supply a command with
+`--exe`, for example `--exe "/path/to/julia --startup-file=no"`.
 
 ## Verifying Installation
 

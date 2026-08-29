@@ -1,11 +1,14 @@
 """Jobflow integration for AIRSS structure searches."""
 
 from .documents import AirssJobDoc, AirssResultDoc, RelaxOutcome
+from .eddp_runners import AirssEddpRelaxRunner, AirssEddpSinglePointRunner
 from .runners import AirssAbacusRelaxRunner, AirssGulpRelaxRunner, AirssPp3RelaxRunner
 from .store import SearchStore
 
 __all__ = [
     "AirssAbacusRelaxRunner",
+    "AirssEddpRelaxRunner",
+    "AirssEddpSinglePointRunner",
     "AirssGulpRelaxRunner",
     "AirssJobDoc",
     "AirssPp3RelaxRunner",

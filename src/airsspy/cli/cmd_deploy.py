@@ -13,6 +13,7 @@ SUFFIX_MAP = {
     "abacus": ".INPUT",
     "vasp": ".INCAR",
     "ml": None,
+    "eddp": None,
 }
 DEPLOY_CODES = tuple(code for code, suffix in SUFFIX_MAP.items() if suffix is not None)
 

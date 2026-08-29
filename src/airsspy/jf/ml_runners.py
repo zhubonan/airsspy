@@ -559,7 +559,12 @@ class AirssMlRelaxRunner:
             return 1
 
 
-def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
+def compose_ml_task_doc(
+    struct_name: str,
+    calculator_spec: str = "",
+    calculator_label: str = "ML Calculator",
+    metadata_label: str = "ML",
+) -> dict:
     """Extract results from a completed ML calculation.
 
     Reads the ``.extxyz`` output file (with SinglePointCalculator attached),
@@ -569,6 +574,8 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
     Args:
         struct_name: Structure name (without extension).
         calculator_spec: The calculator spec string (for REM metadata).
+        calculator_label: Label used for the calculator REM record.
+        metadata_label: Prefix used for relaxation REM records.
 
     Returns:
         Dictionary with energy, structure, volume, formula, etc.
@@ -618,14 +625,19 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
         sym = "P1"
 
     # REM lines for ML calculation
-    rem_lines = ["", f"ML Calculator {calculator_spec}"]
+    rem_lines = ["", f"{calculator_label} {calculator_spec}"]
     relax_status = atoms.info.get("relax_status")
     if relax_status is not None:
-        rem_lines.append(f"ML Relax status {relax_status}")
+        rem_lines.append(f"{metadata_label} Relax status {relax_status}")
     if "relax_converged" in atoms.info:
-        rem_lines.append(f"ML Relax converged {bool(atoms.info['relax_converged'])}")
+        rem_lines.append(
+            f"{metadata_label} Relax converged "
+            f"{bool(atoms.info['relax_converged'])}"
+        )
     if atoms.info.get("relax_steps") is not None:
-        rem_lines.append(f"ML Relax steps {atoms.info['relax_steps']}")
+        rem_lines.append(
+            f"{metadata_label} Relax steps {atoms.info['relax_steps']}"
+        )
     rem_lines.append("")
 
     enthalpy = _enthalpy_from_energy_pressure_volume(energy, pressure, volume)
