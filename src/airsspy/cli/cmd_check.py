@@ -15,12 +15,16 @@ def check():
 
 
 @check.command("scheduler")
-@click.option("--allow-dummy", is_flag=True, default=False, help="Allow dummy scheduler")
+@click.option(
+    "--allow-dummy", is_flag=True, default=False, help="Allow dummy scheduler"
+)
 def check_scheduler(allow_dummy):
     """Check the status of the job scheduler."""
     obj = Scheduler.get_scheduler()
     if isinstance(obj, Dummy) and not allow_dummy:
-        raise click.ClickException("Not in a scheduler environment (use --allow-dummy to override)")
+        raise click.ClickException(
+            "Not in a scheduler environment (use --allow-dummy to override)"
+        )
     click.echo(f"Scheduler:     {obj}")
     click.echo(f"JOB ID:        {obj.job_id}")
     click.echo(f"USERNAME:      {obj.user_name}")

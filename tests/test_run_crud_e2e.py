@@ -5,6 +5,8 @@ External executables are configured with environment variables so the harness
 can run on developer workstations or CI runners without hardcoded local paths.
 """
 
+from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
