@@ -109,7 +109,9 @@ def save_airss_res(
         + " "
         + str(nat)
         + " "
-        + "(" + sg.strip("()") + ")"
+        + "("
+        + sg.strip("()")
+        + ")"
         + " n - 1\n"
     )
     rems = info_dict.get("rem", [])
@@ -133,7 +135,9 @@ def save_airss_res(
                         and atom_idx < len(atom_annotations)
                         and atom_annotations[atom_idx]
                     ):
-                        line = line.rstrip("\n") + " " + atom_annotations[atom_idx] + "\n"
+                        line = (
+                            line.rstrip("\n") + " " + atom_annotations[atom_idx] + "\n"
+                        )
                     fout.write(line)
                     atom_idx += 1
 

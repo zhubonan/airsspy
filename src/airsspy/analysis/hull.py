@@ -56,7 +56,9 @@ class PlotlyPDPlotter(PDPlotter):
             (lines, stable_entries, unstable_entries):
             Same as pd_plot_data, but in proper ternary coordinates.
         """
-        assert self._dim == 3, "Cannot get data for ternary plot - the system is not ternary"
+        assert self._dim == 3, (
+            "Cannot get data for ternary plot - the system is not ternary"
+        )
         pd = self._pd
         entries = pd.qhull_entries
 
@@ -134,8 +136,13 @@ class PlotlyPDPlotter(PDPlotter):
                 continue
             x, y = list(zip(*stable_coords))
             fig.add_scatter3d(
-                x=x, y=y, z=form_engs, text=stable_text, name=f"Stable ({etype})",
-                mode="markers+text", marker_size=5,
+                x=x,
+                y=y,
+                z=form_engs,
+                text=stable_text,
+                name=f"Stable ({etype})",
+                mode="markers+text",
+                marker_size=5,
             )
 
         if self.show_unstable:
@@ -158,17 +165,26 @@ class PlotlyPDPlotter(PDPlotter):
                     continue
                 x, y = list(zip(*unstable_coords))
                 fig.add_scatter3d(
-                    x=x, y=y, z=form_engs, text=unstable_text,
+                    x=x,
+                    y=y,
+                    z=form_engs,
+                    text=unstable_text,
                     customdata=np.array([unstable_name]).T,
-                    name=f"Unstable ({etype})", mode="markers",
-                    hovertemplate="%{text} - %{customdata[0]}", marker_size=2,
+                    name=f"Unstable ({etype})",
+                    mode="markers",
+                    hovertemplate="%{text} - %{customdata[0]}",
+                    marker_size=2,
                 )
 
         pname = "-".join(x.name for x in elems)
-        fig.update_layout({
-            "title": f"Ternary plot for {pname}",
-            "autosize": False, "height": 600, "width": 800,
-        })
+        fig.update_layout(
+            {
+                "title": f"Ternary plot for {pname}",
+                "autosize": False,
+                "height": 600,
+                "width": 800,
+            }
+        )
         return fig
 
     def _get_2d_ternary_plot(self):  # pylint: disable=too-many-statements,too-many-locals,too-many-branches
@@ -184,7 +200,9 @@ class PlotlyPDPlotter(PDPlotter):
             b_list.extend(b + (None,))
             c_list.extend(c + (None,))
 
-        fig.add_scatterternary(a=a_list, b=b_list, c=c_list, mode="lines", hoverinfo="none")
+        fig.add_scatterternary(
+            a=a_list, b=b_list, c=c_list, mode="lines", hoverinfo="none"
+        )
 
         elems = pd.elements
         all_types = [entry_type(entry, "Default") for entry in pd.all_entries]
@@ -207,8 +225,13 @@ class PlotlyPDPlotter(PDPlotter):
             a, b, c = list(zip(*stable_coords))
             aname, bname, cname = (x.name for x in elems)
             fig.add_scatterternary(
-                a=a, b=b, c=c, text=stable_text, marker_symbol="circle",
-                name=f"Stable ({etype})", mode="markers+text",
+                a=a,
+                b=b,
+                c=c,
+                text=stable_text,
+                marker_symbol="circle",
+                name=f"Stable ({etype})",
+                mode="markers+text",
                 customdata=np.array([stable_name]).T,
                 hovertemplate=(
                     f"{aname}: %{{a:.2f}} {bname}: %{{b:.2f}} {cname}: %{{c:.2f}}"
@@ -236,7 +259,10 @@ class PlotlyPDPlotter(PDPlotter):
                 nsamples = len(unstable)
                 scatter_mode = "markers" if nsamples > 10 else "markers+text"
                 for entry, coords, ehull in comps.values():
-                    if entry_type(entry, "Unstable") != etype or entry.name in all_stable_names:
+                    if (
+                        entry_type(entry, "Unstable") != etype
+                        or entry.name in all_stable_names
+                    ):
                         continue
                     if ehull > self.show_unstable:
                         continue
@@ -249,9 +275,14 @@ class PlotlyPDPlotter(PDPlotter):
                 a, b, c = list(zip(*unstable_coords))
                 aname, bname, cname = (x.name for x in elems)
                 fig.add_scatterternary(
-                    a=a, b=b, c=c, marker_symbol="triangle-up",
-                    marker_color=dist2hull, text=unstable_text,
-                    name=f"Unstable ({etype})", mode=scatter_mode,
+                    a=a,
+                    b=b,
+                    c=c,
+                    marker_symbol="triangle-up",
+                    marker_color=dist2hull,
+                    text=unstable_text,
+                    name=f"Unstable ({etype})",
+                    mode=scatter_mode,
                     customdata=np.array([unstable_name, dist2hull]).T,
                     hovertemplate=(
                         f"{aname}: %{{a:.2f}} {bname}: %{{b:.2f}} {cname}: %{{c:.2f}}"
@@ -262,14 +293,18 @@ class PlotlyPDPlotter(PDPlotter):
                 )
 
         aname, bname, cname = (x.name for x in elems)
-        fig.update_layout({
-            "title": f"Ternary plot for {aname}-{bname}-{cname}",
-            "ternary": {
-                "sum": 1,
-                "aaxis": make_axis(elems[0].name, 0),
-                "baxis": make_axis(elems[1].name, 45),
-                "caxis": make_axis(elems[2].name, -45),
-            },
-            "autosize": False, "height": 600, "width": 800,
-        })
+        fig.update_layout(
+            {
+                "title": f"Ternary plot for {aname}-{bname}-{cname}",
+                "ternary": {
+                    "sum": 1,
+                    "aaxis": make_axis(elems[0].name, 0),
+                    "baxis": make_axis(elems[1].name, 45),
+                    "caxis": make_axis(elems[2].name, -45),
+                },
+                "autosize": False,
+                "height": 600,
+                "width": 800,
+            }
+        )
         return fig

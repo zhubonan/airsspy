@@ -2,6 +2,8 @@
 CLI commands for running AIRSS searches locally (non-jobflow, like airss.pl).
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import random
@@ -502,7 +504,9 @@ def _resolve_relax_param_file(
 ) -> Path:
     """Find the parameter file for a relax input."""
     if input_path.suffix.lower() == ".res":
-        candidates = [workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"]
+        candidates = [
+            workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"
+        ]
         seed_candidate = workdir / f"{seed}{param_suffix}"
         if seed_candidate not in candidates:
             candidates.append(seed_candidate)
@@ -1422,9 +1426,7 @@ def run_search(
     if code == "ml" and calculator_spec:
         _validate_ml_calculator_spec(calculator_spec)
     use_torchsim = (
-        code == "ml"
-        and not build_only
-        and _is_torchsim_model(calculator_spec)
+        code == "ml" and not build_only and _is_torchsim_model(calculator_spec)
     )
     if use_torchsim:
         _ensure_torchsim_available()
@@ -1482,12 +1484,12 @@ def run_search(
             parse_key_float,
             "--target-volume",
         )
-        composition_ratio = _parse_composition_ratio_option(
-            formula_composition_ratio
-        )
+        composition_ratio = _parse_composition_ratio_option(formula_composition_ratio)
         oxidation_states = _parse_oxidation_state_options(formula_oxidation_states)
         seed_text_for_formula_filter = (
-            remove_buildcell_directives(seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES)
+            remove_buildcell_directives(
+                seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES
+            )
             if use_volume_minsep
             else seed_content
         )
@@ -1592,17 +1594,13 @@ def run_search(
                     # before users commit a long search to the scheduler.
                     click.echo(
                         "formula_counts_by_arity = "
-                        + _format_arity_map(
-                            formula_context.formula_counts_by_arity
-                        )
+                        + _format_arity_map(formula_context.formula_counts_by_arity)
                     )
                     click.echo(
                         "composition_ratio = "
                         + _format_arity_map(dict(formula_context.composition_ratio))
                     )
-                    click.echo(
-                        f"formula_arity = {len(Composition(formula).as_dict())}"
-                    )
+                    click.echo(f"formula_arity = {len(Composition(formula).as_dict())}")
                 if varvol is not None:
                     click.echo(f"varvol = {varvol:g}")
                 if estimate is not None:
@@ -2148,9 +2146,7 @@ def run_crud(
                     if torchsim_runner is None:
                         from airsspy.jf.ml_runners import TorchSimRunner
 
-                        torchsim_runner = TorchSimRunner(
-                            calculator_spec, device=device
-                        )
+                        torchsim_runner = TorchSimRunner(calculator_spec, device=device)
                     structures = [
                         _read_res_as_atoms(Path(sname + ".res"))
                         for sname in claimed_seeds
@@ -2391,7 +2387,9 @@ def run_relax(
         raise click.ClickException(f"No files matched pattern: {cell}")
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
-        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+        raise click.ClickException(
+            f"No single-structure inputs matched pattern: {cell}"
+        )
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
         _ensure_torchsim_available()
@@ -2511,7 +2509,9 @@ def run_relax(
                         optimizer=optimizer,
                         pressure=pressure,
                     )
-                    collected_res_files.extend(workdir / path.name for path in collected)
+                    collected_res_files.extend(
+                        workdir / path.name for path in collected
+                    )
                     n_relaxed += done
                     n_failed += failed
                 except Exception:
@@ -2560,7 +2560,9 @@ def run_relax(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                            calculator_spec=runner
+                            if code == "vasp"
+                            else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_relaxed += 1
@@ -2735,7 +2737,9 @@ def run_sp(
         raise click.ClickException(f"No files matched pattern: {cell}")
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
-        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+        raise click.ClickException(
+            f"No single-structure inputs matched pattern: {cell}"
+        )
     sp_inputs = [
         (
             input_path,
@@ -2887,7 +2891,9 @@ def run_sp(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                            calculator_spec=runner
+                            if code == "vasp"
+                            else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_done += 1
@@ -2949,9 +2955,7 @@ def run_sp(
             packed = _pack_res_files(workdir, files=collected_res_files)
             logger.info("Packed into %s", packed)
 
-        if (
-            code == "ml" and use_torchsim and n_done == 0 and n_failed > 0
-        ):
+        if code == "ml" and use_torchsim and n_done == 0 and n_failed > 0:
             raise click.ClickException(
                 "TorchSim single-point failed for all matched structures; "
                 "see verbose log above for the failing batch."

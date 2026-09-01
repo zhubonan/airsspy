@@ -573,7 +573,9 @@ def _enumerate_reduced_formulas_by_atom_budget(
     return sorted(formulas)
 
 
-def _positive_integer_compositions(total: int, length: int) -> Iterator[tuple[int, ...]]:
+def _positive_integer_compositions(
+    total: int, length: int
+) -> Iterator[tuple[int, ...]]:
     """Yield ordered positive integer compositions of ``total``."""
     if length == 1:
         yield (total,)
@@ -610,8 +612,7 @@ def _resolve_composition_ratio(
     if not any(weight > 0.0 for weight in parsed.values()):
         raise ValueError("composition ratio must contain at least one positive weight")
     if not any(
-        weight > 0.0 and arity in available_arities
-        for arity, weight in parsed.items()
+        weight > 0.0 and arity in available_arities for arity, weight in parsed.items()
     ):
         raise ValueError("composition ratio does not match any available formulas")
     return parsed

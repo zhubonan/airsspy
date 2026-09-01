@@ -114,7 +114,9 @@ def volume_minsep_estimate_from_exact_record(
     atoms_per_formula_unit = float(sum(composition.values()))
     canonical_minsep = canonical_minsep_map(record)
     required_pairs = required_pair_keys(reduced_formula)
-    missing_pairs = [pair_key for pair_key in required_pairs if pair_key not in canonical_minsep]
+    missing_pairs = [
+        pair_key for pair_key in required_pairs if pair_key not in canonical_minsep
+    ]
     if missing_pairs:
         joined_pairs = ", ".join(sorted(missing_pairs))
         raise ValueError(
@@ -130,7 +132,9 @@ def volume_minsep_estimate_from_exact_record(
         atoms_per_formula_unit=atoms_per_formula_unit,
         volume_per_atom=volume_per_atom,
         total_volume=volume_per_atom * atoms_per_formula_unit,
-        canonical_minsep={pair_key: canonical_minsep[pair_key] for pair_key in required_pairs},
+        canonical_minsep={
+            pair_key: canonical_minsep[pair_key] for pair_key in required_pairs
+        },
         volume_source=EstimateSource(method="exact_curated_row", n_observations=1),
         minsep_sources={
             pair_key: EstimateSource(method="exact_curated_row", n_observations=1)
@@ -187,7 +191,9 @@ def volume_minsep_estimate_from_prediction(
         volume_per_atom=volume_per_atom,
         total_volume=volume_per_atom * atoms_per_formula_unit,
         canonical_minsep=canonical_minsep,
-        volume_source=EstimateSource(method=f"baseline_{predictor_type}", n_observations=1),
+        volume_source=EstimateSource(
+            method=f"baseline_{predictor_type}", n_observations=1
+        ),
         minsep_sources={
             pair_key: EstimateSource(
                 method=f"baseline_{predictor_type}", n_observations=1
@@ -212,7 +218,9 @@ def predict_baseline_volume_minsep_estimate(
     from .volume_minsep_model import BaselineFormulaPredictor
 
     prediction = BaselineFormulaPredictor(bundle_path=bundle_path).predict(formula)
-    return volume_minsep_estimate_from_prediction(formula=formula, prediction=prediction)
+    return volume_minsep_estimate_from_prediction(
+        formula=formula, prediction=prediction
+    )
 
 
 def reference_volume_minsep_estimate(
