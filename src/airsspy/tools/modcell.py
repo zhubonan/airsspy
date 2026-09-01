@@ -5,6 +5,8 @@ Provides functions to replace blocks in cell files and update lattice
 and position blocks using ASE Atoms objects.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
