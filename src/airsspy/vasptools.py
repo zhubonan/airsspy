@@ -12,7 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 CONTROL_INPUT_SET = "AIRSSPY_VASP_INPUT_SET"
 CONTROL_PREFIX = "AIRSSPY_"
 EV_PER_ANG3_TO_GPA = 160.21766208
