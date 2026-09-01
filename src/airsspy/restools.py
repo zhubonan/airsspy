@@ -109,7 +109,9 @@ def save_airss_res(
         + " "
         + str(nat)
         + " "
-        + "(" + sg.strip("()") + ")"
+        + "("
+        + sg.strip("()")
+        + ")"
         + " n - 1\n"
     )
     rems = info_dict.get("rem", [])
@@ -128,6 +130,10 @@ def save_airss_res(
             in_atoms = False
             for n, line in enumerate(resin):
                 if n == 0:
+                    continue
+                # ASE writes a blank line after its RES title, but cryan
+                # treats blank records as the end of a structure.
+                if not line.strip():
                     continue
 
                 keyword = line.split(maxsplit=1)[0].upper() if line.split() else ""

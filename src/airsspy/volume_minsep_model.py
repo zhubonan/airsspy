@@ -58,7 +58,9 @@ def _element_property_vector(symbol: str) -> np.ndarray:
     element = Element(symbol)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
-        values = [_coerce_float(getattr(element, name, None)) for name in PROPERTY_NAMES]
+        values = [
+            _coerce_float(getattr(element, name, None)) for name in PROPERTY_NAMES
+        ]
         values.extend(
             (
                 float(element.is_metal),
@@ -291,7 +293,9 @@ def _stack_features(items: Sequence, feature_fn: Callable[[object], np.ndarray])
 
 def _safe_log(values: np.ndarray) -> np.ndarray:
     if np.any(values <= 0):
-        raise ValueError("Targets must be strictly positive before applying log transform")
+        raise ValueError(
+            "Targets must be strictly positive before applying log transform"
+        )
     return np.log(values)
 
 
@@ -476,7 +480,9 @@ def train_baseline_regressor(
         val_metrics = (
             evaluate_regressor(model, feature_cache["val"], target_cache["val"])
             if split_items["val"]
-            else evaluate_regressor(model, feature_cache["train"], target_cache["train"])
+            else evaluate_regressor(
+                model, feature_cache["train"], target_cache["train"]
+            )
         )
         if val_metrics["rmse"] < best_val_rmse:
             best_alpha = float(alpha)
@@ -629,7 +635,9 @@ def train_baseline_models(
     }
 
 
-def _validate_supported_formula(formula: str, builder: FeatureBuilder) -> dict[str, float]:
+def _validate_supported_formula(
+    formula: str, builder: FeatureBuilder
+) -> dict[str, float]:
     composition = composition_dict_from_formula(formula)
     missing = sorted(set(composition) - set(builder.element_index))
     if missing:
@@ -688,8 +696,12 @@ class BaselineFormulaPredictor:
         canonical_minsep = {}
         for left_symbol, right_symbol in enumerate_formula_pairs(reduced_formula):
             pair_key = f"{left_symbol}-{right_symbol}"
-            pair_features = self.builder.pair_features(reduced_formula, pair_key)[None, :]
-            canonical_minsep[pair_key] = float(self.minsep_model.predict(pair_features)[0])
+            pair_features = self.builder.pair_features(reduced_formula, pair_key)[
+                None, :
+            ]
+            canonical_minsep[pair_key] = float(
+                self.minsep_model.predict(pair_features)[0]
+            )
 
         return _prediction_payload(
             formula=reduced_formula,

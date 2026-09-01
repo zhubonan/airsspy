@@ -2,12 +2,15 @@
 CLI commands for running AIRSS searches locally (non-jobflow, like airss.pl).
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import random
 import shutil
 import sys
 from pathlib import Path
+from typing import cast
 
 import click
 
@@ -209,7 +212,7 @@ def _parse_potcar_map_options(values) -> dict[str, str]:
     from airsspy.vasptools import parse_potcar_map
 
     try:
-        return parse_potcar_map(values)
+        return cast(dict[str, str], parse_potcar_map(values))
     except ValueError as exc:
         raise click.ClickException(f"Invalid --potcar-map: {exc}") from exc
 
@@ -525,11 +528,15 @@ def _resolve_relax_param_file(
     cell_path: Path,
     seed: str,
     workdir: Path,
-    param_suffix: str,
+    param_suffix: str | None,
 ) -> Path:
     """Find the parameter file for a relax input."""
+    if param_suffix is None:
+        raise click.ClickException("This backend requires a parameter-file suffix")
     if input_path.suffix.lower() == ".res":
-        candidates = [workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"]
+        candidates = [
+            workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"
+        ]
         seed_candidate = workdir / f"{seed}{param_suffix}"
         if seed_candidate not in candidates:
             candidates.append(seed_candidate)
@@ -565,22 +572,26 @@ def _run_local_structure_one(
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
-        return runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
+        return int(
+            runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
+        )
     if code in ("gulp", "pp3"):
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
-        return runner.run(
-            struct_name,
-            cell_content,
-            param_file.read_text(),
-            seed_name=_crud_root_from_seed(struct_name),
+        return int(
+            runner.run(
+                struct_name,
+                cell_content,
+                param_file.read_text(),
+                seed_name=_crud_root_from_seed(struct_name),
+            )
         )
     if code == "abacus":
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
-        return runner.run(struct_name, cell_content, param_file.read_text())
+        return int(runner.run(struct_name, cell_content, param_file.read_text()))
     if code == "vasp":
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
@@ -588,15 +599,17 @@ def _run_local_structure_one(
         kpoints_path = param_file.with_suffix(".KPOINTS")
         if not kpoints_path.exists():
             kpoints_path = workdir / f"{seed}.KPOINTS"
-        return runner.run(
-            struct_name,
-            cell_content,
-            param_file.read_text(),
-            kpoints_path=kpoints_path if kpoints_path.exists() else None,
+        return int(
+            runner.run(
+                struct_name,
+                cell_content,
+                param_file.read_text(),
+                kpoints_path=kpoints_path if kpoints_path.exists() else None,
+            )
         )
     if code in ("ml", "eddp"):
         structure_input = _prepare_ml_structure_input(input_path, cell_content)
-        return runner.run(struct_name, structure_input)
+        return int(runner.run(struct_name, structure_input))
     raise click.ClickException(f"Unknown code: {code}")
 
 
@@ -1053,7 +1066,9 @@ def _create_sp_runner(
         raise click.ClickException(f"Single-point not supported for code: {code}")
 
 
-def _collect_result(struct_name: str, code: str, calculator_spec: str = None) -> None:
+def _collect_result(
+    struct_name: str, code: str, calculator_spec: str | None = None
+) -> None:
     """Write a .res file from completed calculation output."""
     if code == "castep":
         from airsspy.jf.runners import compose_task_doc
@@ -1531,9 +1546,7 @@ def run_search(
             code, calculator_spec, eddp_project
         )
     use_torchsim = (
-        code == "ml"
-        and not build_only
-        and _is_torchsim_model(calculator_spec)
+        code == "ml" and not build_only and _is_torchsim_model(calculator_spec)
     )
     if use_torchsim:
         _ensure_torchsim_available()
@@ -1591,12 +1604,12 @@ def run_search(
             parse_key_float,
             "--target-volume",
         )
-        composition_ratio = _parse_composition_ratio_option(
-            formula_composition_ratio
-        )
+        composition_ratio = _parse_composition_ratio_option(formula_composition_ratio)
         oxidation_states = _parse_oxidation_state_options(formula_oxidation_states)
         seed_text_for_formula_filter = (
-            remove_buildcell_directives(seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES)
+            remove_buildcell_directives(
+                seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES
+            )
             if use_volume_minsep
             else seed_content
         )
@@ -1701,17 +1714,13 @@ def run_search(
                     # before users commit a long search to the scheduler.
                     click.echo(
                         "formula_counts_by_arity = "
-                        + _format_arity_map(
-                            formula_context.formula_counts_by_arity
-                        )
+                        + _format_arity_map(formula_context.formula_counts_by_arity)
                     )
                     click.echo(
                         "composition_ratio = "
                         + _format_arity_map(dict(formula_context.composition_ratio))
                     )
-                    click.echo(
-                        f"formula_arity = {len(Composition(formula).as_dict())}"
-                    )
+                    click.echo(f"formula_arity = {len(Composition(formula).as_dict())}")
                 if varvol is not None:
                     click.echo(f"varvol = {varvol:g}")
                 if estimate is not None:
@@ -1744,7 +1753,7 @@ def run_search(
 
             def seed_text_transform(text: str) -> str:
                 sampled_seed, _, _, _, _ = build_sample_seed(text)
-                return sampled_seed
+                return cast(str, sampled_seed)
 
         else:
             seed_text_transform = make_seed_text_transform(formula_context)
@@ -2299,9 +2308,7 @@ def run_crud(
                     if torchsim_runner is None:
                         from airsspy.jf.ml_runners import TorchSimRunner
 
-                        torchsim_runner = TorchSimRunner(
-                            calculator_spec, device=device
-                        )
+                        torchsim_runner = TorchSimRunner(calculator_spec, device=device)
                     structures = [
                         _read_res_as_atoms(Path(sname + ".res"))
                         for sname in claimed_seeds
@@ -2576,7 +2583,9 @@ def run_relax(
         raise click.ClickException(f"No files matched pattern: {cell}")
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
-        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+        raise click.ClickException(
+            f"No single-structure inputs matched pattern: {cell}"
+        )
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
         _ensure_torchsim_available()
@@ -2700,7 +2709,9 @@ def run_relax(
                         optimizer=optimizer,
                         pressure=pressure,
                     )
-                    collected_res_files.extend(workdir / path.name for path in collected)
+                    collected_res_files.extend(
+                        workdir / path.name for path in collected
+                    )
                     n_relaxed += done
                     n_failed += failed
                 except Exception:
@@ -2749,7 +2760,9 @@ def run_relax(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                            calculator_spec=runner
+                            if code == "vasp"
+                            else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_relaxed += 1
@@ -2936,7 +2949,9 @@ def run_sp(
         raise click.ClickException(f"No files matched pattern: {cell}")
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
-        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+        raise click.ClickException(
+            f"No single-structure inputs matched pattern: {cell}"
+        )
     sp_inputs = [
         (
             input_path,
@@ -3089,7 +3104,9 @@ def run_sp(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                            calculator_spec=runner
+                            if code == "vasp"
+                            else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_done += 1
@@ -3151,9 +3168,7 @@ def run_sp(
             packed = _pack_res_files(workdir, files=collected_res_files)
             logger.info("Packed into %s", packed)
 
-        if (
-            code == "ml" and use_torchsim and n_done == 0 and n_failed > 0
-        ):
+        if code == "ml" and use_torchsim and n_done == 0 and n_failed > 0:
             raise click.ClickException(
                 "TorchSim single-point failed for all matched structures; "
                 "see verbose log above for the failing batch."

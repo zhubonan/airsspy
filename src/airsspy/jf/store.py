@@ -91,12 +91,12 @@ class SearchStore:
                 job_doc = AirssJobDoc(**output)
                 results.extend(job_doc.results)
             except (TypeError, KeyError, ValueError):
-                logger.warning("Failed to parse job document %s", doc.get("uuid"), exc_info=True)
+                logger.warning(
+                    "Failed to parse job document %s", doc.get("uuid"), exc_info=True
+                )
         return results
 
-    def retrieve_project_df(
-        self, project_name: str, **filters
-    ) -> pd.DataFrame:
+    def retrieve_project_df(self, project_name: str, **filters) -> pd.DataFrame:
         """
         Get all results for a project as a DataFrame.
 
@@ -158,14 +158,16 @@ class SearchStore:
                 job_doc = AirssJobDoc(**output)
             except (TypeError, KeyError, ValueError):
                 continue
-            records.append({
-                "project_name": job_doc.project_name,
-                "seed_name": job_doc.seed_name,
-                "job_type": job_doc.job_type,
-                "n_structures": job_doc.n_structures,
-                "n_finished": job_doc.n_finished,
-                "n_errored": job_doc.n_errored,
-            })
+            records.append(
+                {
+                    "project_name": job_doc.project_name,
+                    "seed_name": job_doc.seed_name,
+                    "job_type": job_doc.job_type,
+                    "n_structures": job_doc.n_structures,
+                    "n_finished": job_doc.n_finished,
+                    "n_errored": job_doc.n_errored,
+                }
+            )
 
         if not records:
             return pd.DataFrame()
@@ -207,7 +209,5 @@ class SearchStore:
 
         if not daily:
             return pd.DataFrame()
-        records = [
-            {"date": k, **v} for k, v in sorted(daily.items())
-        ]
+        records = [{"date": k, **v} for k, v in sorted(daily.items())]
         return pd.DataFrame(records)

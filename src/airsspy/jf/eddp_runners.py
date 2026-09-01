@@ -15,7 +15,7 @@ import logging
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Union
+from typing import Union, cast
 
 import numpy as np
 from ase import Atoms
@@ -55,7 +55,7 @@ def _write_eddp_input(path: Path, atoms: Atoms, label: str) -> None:
 def _julia_matrix_to_numpy(values, *, transpose: bool = False) -> np.ndarray:
     """Convert a JSON-encoded Julia matrix to a NumPy array."""
     array = np.asarray(values, dtype=float)
-    return array.T if transpose else array
+    return cast(np.ndarray, array.T if transpose else array)
 
 
 class _AirssEddpBaseRunner:
@@ -299,9 +299,12 @@ def compose_eddp_task_doc(struct_name: str, model_path: str = "") -> dict:
     """Compose an AIRSS result through the common extxyz result pipeline."""
     from .ml_runners import compose_ml_task_doc
 
-    return compose_ml_task_doc(
-        struct_name,
-        calculator_spec=model_path,
-        calculator_label="EDDP Model",
-        metadata_label="EDDP",
+    return cast(
+        dict,
+        compose_ml_task_doc(
+            struct_name,
+            calculator_spec=model_path,
+            calculator_label="EDDP Model",
+            metadata_label="EDDP",
+        ),
     )

@@ -6,6 +6,8 @@ one buildcell invocation or one CASTEP relaxation cycle. They are usable
 standalone or within jobflow Makers.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import re
@@ -13,7 +15,6 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def run_buildcell(
     write_seed: bool = True,
     seed_text_transform=None,
     max_attempts: int = 3,
-) -> Optional[dict[str, str]]:
+) -> dict[str, str] | None:
     """
     Run the buildcell executable to generate a random structure.
 
@@ -70,7 +71,7 @@ def run_buildcell(
 
     logger.info("Starting random structure generation...")
     attempt = max_attempts
-    stdout: Optional[str] = None
+    stdout: str | None = None
     input_content = seed_content
     while attempt > 0:
         try:
@@ -240,9 +241,7 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
                             result = True
                         elif status == "failed":
                             result = False
-                    match = re.search(
-                        r"Finished iteration +(\d+)", line, re.IGNORECASE
-                    )
+                    match = re.search(r"Finished iteration +(\d+)", line, re.IGNORECASE)
                     if match is not None:
                         max_iter = int(match.group(1))
 
@@ -476,7 +475,7 @@ class AirssScriptRelaxRunner:
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> None:
         """Write .cell and code-specific param files to disk."""
         Path(struct_name + ".cell").write_text(struct_content)
@@ -487,7 +486,7 @@ class AirssScriptRelaxRunner:
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """
         Run relaxation via the external script.
@@ -589,7 +588,7 @@ class AirssGulpRelaxRunner(AirssScriptRelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> None:
         super()._prepare_inputs(struct_name, struct_content, param_content, seed_name)
         # gulp_relax looks for <seed_name>.lib, not <struct_name>.lib
@@ -619,7 +618,7 @@ class AirssGulpSinglePointRunner(AirssGulpRelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """Run GULP once and write the CASTEP-like output used by AIRSS tools."""
         for suffix in (".castep", "-out.cell"):
@@ -699,7 +698,9 @@ class AirssGulpSinglePointRunner(AirssGulpRelaxRunner):
             if energy is not None:
                 enthalpy = energy + self.pressure * volume / 160.21766208
         if enthalpy is None or volume is None:
-            logger.warning("Unable to parse GULP single-point output for %s", struct_name)
+            logger.warning(
+                "Unable to parse GULP single-point output for %s", struct_name
+            )
             return 1
 
         Path(struct_name + ".castep").write_text(
@@ -755,7 +756,7 @@ class AirssPp3SinglePointRunner(AirssPp3RelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """Run PP3 single-point after removing stale converter inputs."""
         for suffix in (".castep", "-out.cell"):
@@ -851,9 +852,8 @@ class AirssVaspRelaxRunner:
     ) -> bool:
         """Return True if the current VASP cycle produced a fresh vasprun.xml."""
         after = self._output_mtimes(workdir)
-        return (
-            after["vasprun.xml"] is not None
-            and after["vasprun.xml"] != before.get("vasprun.xml")
+        return after["vasprun.xml"] is not None and after["vasprun.xml"] != before.get(
+            "vasprun.xml"
         )
 
     def _read_vasp_status(
@@ -1101,7 +1101,9 @@ class AirssAbacusRelaxRunner:
             cell_to_stru,
         )
 
-        cell_content = apply_cell_axis_map_to_cell_text(cell_content, self.cell_axis_map)
+        cell_content = apply_cell_axis_map_to_cell_text(
+            cell_content, self.cell_axis_map
+        )
         input_content = apply_cell_axis_map_to_abacus_input(
             input_content, self.cell_axis_map
         )
@@ -1130,7 +1132,7 @@ class AirssAbacusRelaxRunner:
         struct_name: str,
         workdir: str,
         input_path: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Run a single ABACUS calculation and parse results.
 
         Returns:
@@ -1420,7 +1422,9 @@ class AirssAbacusSinglePointRunner:
         workdir = f"{struct_name}.abacus"
         Path(workdir).mkdir(parents=True, exist_ok=True)
 
-        cell_content = apply_cell_axis_map_to_cell_text(cell_content, self.cell_axis_map)
+        cell_content = apply_cell_axis_map_to_cell_text(
+            cell_content, self.cell_axis_map
+        )
         input_content = apply_cell_axis_map_to_abacus_input(
             input_content, self.cell_axis_map
         )

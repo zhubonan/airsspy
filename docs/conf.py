@@ -76,6 +76,9 @@ autodoc2_packages = [
 ]
 autodoc2_render_plugin = "myst"
 autodoc2_hidden_objects = ["private", "inherited"]
+# ASE's ``Atoms`` class exposes these attributes through more than one
+# descriptor, which autodoc2 reports as duplicate inherited items.
+suppress_warnings = ["autodoc2.dup_item"]
 
 # -- Intersphinx configuration -----------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/extensions/intersphinx.html
@@ -83,7 +86,7 @@ autodoc2_hidden_objects = ["private", "inherited"]
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "ase": ("https://wiki.fysik.dtu.dk/ase/", None),
+    "ase": ("https://docs.ase-lib.org/", None),
 }
 
 # -- Copybutton configuration ------------------------------------------------

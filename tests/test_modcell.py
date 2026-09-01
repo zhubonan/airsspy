@@ -1,5 +1,7 @@
 """Tests for tools/modcell module."""
 
+from __future__ import annotations
+
 import pytest
 
 from airsspy.tools.modcell import modify_cell, replace_block

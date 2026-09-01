@@ -46,7 +46,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "mypy",
+    "mypy<2",  # mypy 2.x no longer supports the configured Python 3.9 target
     "pre-commit",
     "pytest>=6.0",
     "pytest-cov",

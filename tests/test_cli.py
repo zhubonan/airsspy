@@ -1,5 +1,7 @@
 """Tests for CLI commands."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -462,7 +464,10 @@ def test_rank_cryan_species_and_ions_filters():
 
 def test_rank_pathological_prune_hides_rejected_from_stdout():
     """Test trimmed-MAD pathological pruning filters rank output."""
-    runner = CliRunner()
+    try:
+        runner = CliRunner(mix_stderr=False)
+    except TypeError:
+        runner = CliRunner()
     packed_res = "".join(
         [
             _single_atom_res("Si-pathological", -10.0),
@@ -509,7 +514,8 @@ def test_rank_pathological_prune_absent_keeps_existing_output():
 
     assert result.exit_code == 0
     assert "Si-pathological" in result.stdout
-    assert "Pathological prune" not in result.stderr
+    stderr = result.stderr if result.stderr_bytes is not None else ""
+    assert "Pathological prune" not in stderr
 
 
 def test_rank_maxwell_collapses_duplicate_compositions():

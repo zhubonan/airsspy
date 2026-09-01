@@ -145,7 +145,9 @@ def aggregate_training_targets(
         composition = composition_dict_from_formula(formula)
         element_set.update(composition)
 
-        volume_groups.setdefault(formula, []).append(volume_per_atom_from_record(record))
+        volume_groups.setdefault(formula, []).append(
+            volume_per_atom_from_record(record)
+        )
 
         for pair_key, value in canonical_minsep_map(record).items():
             pair_key_set.add(pair_key)
@@ -350,15 +352,11 @@ def curate_minsep_volume_dataset(
         "unique_formulas": len(by_formula),
         "duplicate_formulas": duplicate_formula_count,
         "exact_energy_ties": tie_count,
-        "average_duplicate_ehull_spread": (
-            sum(spread_values) / len(spread_values)
-        )
+        "average_duplicate_ehull_spread": (sum(spread_values) / len(spread_values))
         if spread_values
         else 0.0,
         "output_path": str(output_path),
     }
-    with output_path.with_suffix(".summary.json").open(
-        "w", encoding="utf-8"
-    ) as handle:
+    with output_path.with_suffix(".summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2, sort_keys=True)
     return summary

@@ -12,7 +12,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 CONTROL_INPUT_SET = "AIRSSPY_VASP_INPUT_SET"
 CONTROL_PREFIX = "AIRSSPY_"
 EV_PER_ANG3_TO_GPA = 160.21766208
@@ -332,9 +331,11 @@ def prepare_vasp_inputs(
     default_set = "MPStaticSet" if mode == "sp" else "MPRelaxSet"
     input_set_name = _coerce_input_set_name(control.get(CONTROL_INPUT_SET), default_set)
     input_set_cls = resolve_input_set_class(input_set_name)
-    input_set_name = f"{input_set_cls.__module__}:{input_set_cls.__name__}" if (
-        ":" in input_set_name or "." in input_set_name
-    ) else input_set_cls.__name__
+    input_set_name = (
+        f"{input_set_cls.__module__}:{input_set_cls.__name__}"
+        if (":" in input_set_name or "." in input_set_name)
+        else input_set_cls.__name__
+    )
 
     kwargs: dict[str, Any] = {"user_incar_settings": user_incar}
     if potcar_map:
@@ -375,7 +376,9 @@ def prepare_vasp_inputs(
         "input_set": input_set_name,
         "incar_overrides": sorted(user_incar),
         "potcars": potcar_metadata,
-        "kpoints_source": str(kpoints_path) if explicit_kpoints is not None else "input-set",
+        "kpoints_source": str(kpoints_path)
+        if explicit_kpoints is not None
+        else "input-set",
     }
 
 
@@ -455,7 +458,9 @@ def _enthalpy_from_energy_pressure_volume(
     return energy + pressure * volume / EV_PER_ANG3_TO_GPA
 
 
-def build_vasp_rem_lines(struct_name: str, metadata: dict[str, Any] | None = None) -> list[str]:
+def build_vasp_rem_lines(
+    struct_name: str, metadata: dict[str, Any] | None = None
+) -> list[str]:
     """Build REM metadata lines for VASP results."""
     metadata = metadata or {}
     lines = [f"VASP input set {metadata.get('input_set', 'unknown')}"]

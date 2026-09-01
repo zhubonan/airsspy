@@ -5,10 +5,11 @@ External executables are configured with environment variables so the harness
 can run on developer workstations or CI runners without hardcoded local paths.
 """
 
+from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 
 import pytest
 from click.testing import CliRunner
@@ -102,7 +103,7 @@ def _write_hopper_res(root: Path, label: str, element: str) -> None:
 def _write_root_cell(
     root: Path,
     element: str,
-    species_pot: Optional[str] = None,
+    species_pot: str | None = None,
 ) -> None:
     """Create the root cell file used to reconstruct claimed RES jobs."""
     lines = [
