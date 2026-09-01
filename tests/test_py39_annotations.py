@@ -38,7 +38,9 @@ def test_pep604_annotations_are_safe_on_python39():
     checked = []
     missing = []
     for search_root in SEARCH_ROOTS:
-        for path in sorted((root / search_root).rglob("*.py")):
+        search_path = root / search_root
+        assert search_path.is_dir()
+        for path in sorted(search_path.rglob("*.py")):
             has_pep604_annotations, has_future_import = _analyze_annotations(path)
             if not has_pep604_annotations:
                 continue
