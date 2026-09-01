@@ -35,7 +35,6 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 from ase import Atoms
@@ -47,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 # 1 eV/Ang^3 = 160.21766208 GPa
 EV_PER_ANG3_TO_GPA = 160.21766208
-StructureInput = Union[str, Atoms]
+StructureInput = str | Atoms
 _SYMMETRIX_INTERNAL_PREFIX = "symmetrix:Symmetrix@"
 _SYMMETRIX_GENERIC_ASE_PREFIX = "ase:symmetrix:Symmetrix@"
 _SYMMETRIX_ASE_PREFIXES = ("ase:symmetrix:", "ase:symmetrics:")

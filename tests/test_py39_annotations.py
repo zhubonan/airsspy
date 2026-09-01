@@ -1,29 +1,50 @@
+import ast
 from pathlib import Path
 
-FUTURE_IMPORT = "from __future__ import annotations"
-FILES_WITH_PEP604_ANNOTATIONS = [
-    "src/airsspy/casteptools.py",
-    "src/airsspy/jf/runners.py",
-    "src/airsspy/jf/ml_runners.py",
-    "src/airsspy/tools/modcell.py",
-    "src/airsspy/cli/cmd_run.py",
-    "src/airsspy/cli/cmd_deploy.py",
-    "src/airsspy/cli/cmd_rank.py",
-    "tests/test_volume_minsep.py",
-    "tests/test_cli.py",
-    "tests/test_rem_extraction.py",
-    "tests/test_jf_runners_castep.py",
-    "tests/test_ranking.py",
-    "tests/test_run_crud_e2e.py",
-    "tests/test_modcell.py",
-]
+FUTURE_IMPORT = "annotations"
+SEARCH_ROOTS = ("src", "tests")
+
+
+def _annotation_uses_pep604_union(annotation: ast.AST) -> bool:
+    return any(
+        isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
+        for node in ast.walk(annotation)
+    )
+
+
+def _analyze_annotations(path: Path) -> tuple[bool, bool]:
+    tree = ast.parse(path.read_text())
+    has_future_import = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and any(alias.name == FUTURE_IMPORT for alias in node.names)
+        for node in tree.body
+    )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and node.annotation:
+            if _annotation_uses_pep604_union(node.annotation):
+                return True, has_future_import
+        elif isinstance(node, ast.AnnAssign):
+            if _annotation_uses_pep604_union(node.annotation):
+                return True, has_future_import
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns:
+            if _annotation_uses_pep604_union(node.returns):
+                return True, has_future_import
+    return False, has_future_import
 
 
 def test_pep604_annotations_are_safe_on_python39():
     root = Path(__file__).resolve().parents[1]
+    checked = []
     missing = []
-    for relative_path in FILES_WITH_PEP604_ANNOTATIONS:
-        text = (root / relative_path).read_text()
-        if "|" in text and FUTURE_IMPORT not in text:
-            missing.append(relative_path)
+    for search_root in SEARCH_ROOTS:
+        for path in sorted((root / search_root).rglob("*.py")):
+            has_pep604_annotations, has_future_import = _analyze_annotations(path)
+            if not has_pep604_annotations:
+                continue
+            checked.append(path.relative_to(root).as_posix())
+            if not has_future_import:
+                missing.append(path.relative_to(root).as_posix())
+
+    assert checked
     assert not missing
