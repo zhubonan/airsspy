@@ -26,6 +26,8 @@ ASE calculator specification format::
 For example ``mace.calculators:MACECalculator@medium``.
 """
 
+from __future__ import annotations
+
 import hashlib
 import importlib
 import json
@@ -33,7 +35,6 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Union
 
 import numpy as np
 from ase import Atoms
@@ -45,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 # 1 eV/Ang^3 = 160.21766208 GPa
 EV_PER_ANG3_TO_GPA = 160.21766208
-StructureInput = Union[str, Atoms]
+StructureInput = str | Atoms
 _SYMMETRIX_INTERNAL_PREFIX = "symmetrix:Symmetrix@"
 _SYMMETRIX_GENERIC_ASE_PREFIX = "ase:symmetrix:Symmetrix@"
 _SYMMETRIX_ASE_PREFIXES = ("ase:symmetrix:", "ase:symmetrics:")
@@ -304,7 +305,7 @@ def _structure_input_to_atoms(structure_input: StructureInput):
 
 def _calculator_kwargs_for_atoms(
     calculator_spec: str,
-    calculator_kwargs: Optional[dict],
+    calculator_kwargs: dict | None,
     atoms: Atoms,
 ) -> dict:
     """Return calculator kwargs augmented with structure-specific metadata."""
@@ -383,7 +384,7 @@ class AirssMlSinglePointRunner:
     def __init__(
         self,
         calculator_spec: str,
-        calculator_kwargs: Optional[dict] = None,
+        calculator_kwargs: dict | None = None,
         pressure: float = 0.0,
     ) -> None:
         self.calculator_spec = calculator_spec
@@ -458,7 +459,7 @@ class AirssMlRelaxRunner:
     def __init__(
         self,
         calculator_spec: str,
-        calculator_kwargs: Optional[dict] = None,
+        calculator_kwargs: dict | None = None,
         optimizer: str = "FIRE",
         fmax: float = 0.05,
         max_steps: int = 500,
@@ -697,7 +698,7 @@ def has_torchsim() -> bool:
 class TorchSimRunner:
     """Reusable torch-sim model context for chunked ML runs."""
 
-    def __init__(self, model_spec: str, *, device: Optional[str] = None) -> None:
+    def __init__(self, model_spec: str, *, device: str | None = None) -> None:
         import torch
 
         self.model_spec = _normalize_torchsim_model_spec(model_spec)
@@ -847,7 +848,7 @@ def _torchsim_relax_batch(
     struct_names: list[str],
     structures: list[StructureInput],
     *,
-    device: Optional[str] = None,
+    device: str | None = None,
     max_steps: int = 300,
     force_tol: float = 0.05,
     optimizer: str = "fire",
@@ -873,7 +874,7 @@ def _torchsim_static_batch(
     struct_names: list[str],
     structures: list[StructureInput],
     *,
-    device: Optional[str] = None,
+    device: str | None = None,
     scalar_pressure: float = 0.0,
 ) -> dict[str, int]:
     """Run single-point calculations on a batch of structures using torchsim."""

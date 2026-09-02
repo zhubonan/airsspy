@@ -6,6 +6,8 @@ one buildcell invocation or one CASTEP relaxation cycle. They are usable
 standalone or within jobflow Makers.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import re
@@ -13,7 +15,6 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def run_buildcell(
     write_seed: bool = True,
     seed_text_transform=None,
     max_attempts: int = 3,
-) -> Optional[dict[str, str]]:
+) -> dict[str, str] | None:
     """
     Run the buildcell executable to generate a random structure.
 
@@ -70,7 +71,7 @@ def run_buildcell(
 
     logger.info("Starting random structure generation...")
     attempt = max_attempts
-    stdout: Optional[str] = None
+    stdout: str | None = None
     input_content = seed_content
     while attempt > 0:
         try:
@@ -476,7 +477,7 @@ class AirssScriptRelaxRunner:
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> None:
         """Write .cell and code-specific param files to disk."""
         Path(struct_name + ".cell").write_text(struct_content)
@@ -487,7 +488,7 @@ class AirssScriptRelaxRunner:
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """
         Run relaxation via the external script.
@@ -589,7 +590,7 @@ class AirssGulpRelaxRunner(AirssScriptRelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> None:
         super()._prepare_inputs(struct_name, struct_content, param_content, seed_name)
         # gulp_relax looks for <seed_name>.lib, not <struct_name>.lib
@@ -619,7 +620,7 @@ class AirssGulpSinglePointRunner(AirssGulpRelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """Run GULP once and write the CASTEP-like output used by AIRSS tools."""
         for suffix in (".castep", "-out.cell"):
@@ -755,7 +756,7 @@ class AirssPp3SinglePointRunner(AirssPp3RelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """Run PP3 single-point after removing stale converter inputs."""
         for suffix in (".castep", "-out.cell"):
@@ -1130,7 +1131,7 @@ class AirssAbacusRelaxRunner:
         struct_name: str,
         workdir: str,
         input_path: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Run a single ABACUS calculation and parse results.
 
         Returns:

@@ -1,5 +1,7 @@
 """CLI command for ranking AIRSS structures by energy."""
 
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 

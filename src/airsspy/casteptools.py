@@ -6,6 +6,8 @@ managing cell files, and running RASH (Random Ab initio Structure
 Hunting) relaxation seeds.
 """
 
+from __future__ import annotations
+
 import io
 import os
 import platform

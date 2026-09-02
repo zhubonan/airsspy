@@ -4,6 +4,8 @@ Uses real output files from the AIRSS reference implementation as fixtures
 and optionally runs actual CASTEP/ABACUS calculations.
 """
 
+from __future__ import annotations
+
 import hashlib
 import shutil
 from pathlib import Path
