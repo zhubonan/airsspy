@@ -1,21 +1,23 @@
 """
 ML interatomic potential runners.
 
-Two backends:
+Two orchestration drivers:
 
-- **torchsim** (preferred): GPU-accelerated batch processing via ``torch_sim``.
+- **torch-sim** (default): GPU-accelerated batch processing via ``torch_sim``.
   Handles all structures in a single batch for maximum throughput.
-- **ASE** (fallback): Uses any ASE-compatible calculator with ASE optimizers.
+- **ASE** (explicit): Uses any ASE-compatible calculator with ASE optimizers.
   Processes structures one at a time; works without torchsim.
 
 The ``torch_sim`` package is an optional dependency (``pip install airsspy[ml]``).
-When unavailable, the ASE fallback is used automatically.
+Select the ASE driver explicitly with an ``ase:`` calculator specification.
 
 Model specification format (torchsim)::
 
     backend:model_id
 
-For example ``mace:medium``, ``mace:/path/to/model.pt``, ``sevennet:sevennet-mf-ompa``.
+For example ``mace:medium``, ``torch-sim:mace:medium``,
+``mace:/path/to/model.pt``, or ``sevennet:sevennet-mf-ompa``. The optional
+``torch-sim:`` prefix explicitly selects this framework.
 
 ASE calculator specification format::
 
@@ -24,11 +26,17 @@ ASE calculator specification format::
 For example ``mace.calculators:MACECalculator@medium``.
 """
 
+from __future__ import annotations
+
+import hashlib
 import importlib
+import json
 import logging
+import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union, cast
+
 
 import numpy as np
 from ase import Atoms
@@ -40,7 +48,23 @@ logger = logging.getLogger(__name__)
 
 # 1 eV/Ang^3 = 160.21766208 GPa
 EV_PER_ANG3_TO_GPA = 160.21766208
-StructureInput = Union[str, Atoms]
+StructureInput = str | Atoms
+_SYMMETRIX_INTERNAL_PREFIX = "symmetrix:Symmetrix@"
+_SYMMETRIX_GENERIC_ASE_PREFIX = "ase:symmetrix:Symmetrix@"
+_SYMMETRIX_ASE_PREFIXES = ("ase:symmetrix:", "ase:symmetrics:")
+
+
+def _enthalpy_from_energy_pressure_volume(
+    energy: float | None,
+    pressure: float | None,
+    volume: float | None,
+) -> float | None:
+    """Return E + P*V with pressure in GPa and volume in Angstrom^3."""
+    if energy is None:
+        return None
+    if pressure is None or volume is None:
+        return energy
+    return energy + pressure * volume / EV_PER_ANG3_TO_GPA
 
 
 def _resolve_calculator(calculator_spec: str, **kwargs):
@@ -58,6 +82,10 @@ def _resolve_calculator(calculator_spec: str, **kwargs):
     Raises:
         ValueError: If the spec cannot be parsed.
     """
+    calculator_spec = _normalize_symmetrix_calculator_spec(calculator_spec)
+    if calculator_spec.startswith(_SYMMETRIX_INTERNAL_PREFIX):
+        return _resolve_symmetrix_calculator(calculator_spec, **kwargs)
+
     # Split off the @model suffix
     model = None
     if "@" in calculator_spec:
@@ -83,6 +111,168 @@ def _resolve_calculator(calculator_spec: str, **kwargs):
     if model is not None:
         return cls(model, **kwargs)
     return cls(**kwargs)
+
+
+def _normalize_symmetrix_calculator_spec(calculator_spec: str) -> str:
+    """Normalize public Symmetrix ASE specs to the internal calculator form."""
+    if calculator_spec.startswith(_SYMMETRIX_GENERIC_ASE_PREFIX):
+        return _normalize_symmetrix_calculator_spec(calculator_spec[len("ase:") :])
+
+    if calculator_spec.startswith(_SYMMETRIX_INTERNAL_PREFIX):
+        if len(calculator_spec) == len(_SYMMETRIX_INTERNAL_PREFIX):
+            raise ValueError("A Symmetrix MACE model name is required.")
+        return calculator_spec
+
+    if calculator_spec.startswith("symmetrix:"):
+        parts = calculator_spec.split(":", 2)
+        if len(parts) != 3 or parts[1] != "mace" or not parts[2]:
+            raise ValueError(
+                "Symmetrix ML specs must use "
+                "'ase:symmetrix:<mace-model>' or the legacy "
+                "'symmetrix:mace:<model>' form."
+            )
+        return f"{_SYMMETRIX_INTERNAL_PREFIX}{parts[2]}"
+
+    for prefix in _SYMMETRIX_ASE_PREFIXES:
+        if calculator_spec.startswith(prefix):
+            model_id = calculator_spec[len(prefix) :]
+            if not model_id:
+                raise ValueError(
+                    "Symmetrix ASE specs must use 'ase:symmetrix:<mace-model>'."
+                )
+            return f"{_SYMMETRIX_INTERNAL_PREFIX}{model_id}"
+    return calculator_spec
+
+
+def _resolve_symmetrix_calculator(calculator_spec: str, **kwargs):
+    """Instantiate the explicit Symmetrix MACE ASE calculator backend."""
+    spec = calculator_spec[len("symmetrix:") :]
+    if "@" not in spec:
+        raise ValueError(
+            "Cannot parse Symmetrix calculator spec. "
+            "Use 'symmetrix:Symmetrix@<mace-model>'."
+        )
+    class_name, model_id = spec.rsplit("@", 1)
+    if class_name != "Symmetrix":
+        raise ValueError(
+            f"Unsupported Symmetrix calculator: {class_name!r}. "
+            "Expected 'symmetrix:Symmetrix@<mace-model>'."
+        )
+
+    try:
+        module = importlib.import_module("symmetrix")
+    except ImportError as exc:
+        raise ImportError(
+            "Symmetrix is required for 'ase:symmetrix:<mace-model>' specs. "
+            "Install the symmetrix Python package or use another ML backend."
+        ) from exc
+
+    calc_kwargs = {"dtype": "float64", "use_kokkos": True}
+    calc_kwargs.update(kwargs)
+    model_id = _normalize_symmetrix_mace_model_name(model_id, calc_kwargs)
+    model_file = _symmetrix_model_file(model_id, calc_kwargs)
+    return module.Symmetrix(model_file, **calc_kwargs)
+
+
+def _normalize_symmetrix_mace_model_name(model_id: str, calc_kwargs: dict) -> str:
+    """Decode branded MACE-MH model names into checkpoint and head arguments."""
+    model_name, separator, head = model_id.partition(":")
+    prefix = "mace-mh-"
+    generation = model_name.lower().removeprefix(prefix)
+    if not model_name.lower().startswith(prefix) or not generation.isdigit():
+        return model_id
+
+    if separator:
+        if not head:
+            raise ValueError("A MACE-MH model head is required after ':'.")
+        calc_kwargs.setdefault("head", head)
+    return f"mh-{generation}"
+
+
+def _resolve_mace_model_file(model_id: str) -> Path | str:
+    """Resolve a MACE model id or local path for torch-sim-compatible names."""
+    model_path = Path(model_id).expanduser()
+    if model_path.is_file():
+        return model_path
+
+    from mace.calculators.foundations_models import download_mace_mp_checkpoint
+
+    return Path(download_mace_mp_checkpoint(model=model_id))
+
+
+def _symmetrix_model_file(model_id: str, calc_kwargs: dict) -> Path | str:
+    """Return a cached Symmetrix JSON file for MACE models when possible."""
+    model_file = _resolve_mace_model_file(model_id)
+    extract_kwargs = {
+        key: calc_kwargs[key]
+        for key in ("species", "head", "num_spline_points")
+        if key in calc_kwargs
+    }
+    if not extract_kwargs:
+        return model_file
+
+    extract_mace_data = importlib.import_module(
+        "symmetrix.extract_mace_data"
+    ).extract_mace_data
+
+    cache_dir = _symmetrix_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / (
+        _symmetrix_cache_key(model_id, model_file, extract_kwargs) + ".json"
+    )
+    if not cache_path.is_file():
+        data = extract_mace_data(model_file, **extract_kwargs)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                suffix=".json",
+                prefix=cache_path.stem + "-",
+                dir=cache_dir,
+                delete=False,
+                encoding="utf-8",
+            ) as handle:
+                json.dump(data, handle)
+                tmp_path = Path(handle.name)
+            tmp_path.replace(cache_path)
+        finally:
+            if tmp_path is not None and tmp_path.exists():
+                tmp_path.unlink()
+    return cache_path
+
+
+def _symmetrix_cache_dir() -> Path:
+    """Return the cache directory for converted Symmetrix JSON models."""
+    env_path = os.environ.get("AIRSSPY_SYMMETRIX_CACHE")
+    if env_path:
+        return Path(env_path).expanduser()
+    return (
+        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        / "airsspy"
+        / "symmetrix"
+    )
+
+
+def _symmetrix_cache_key(
+    model_id: str, model_file: Path | str, extract_kwargs: dict
+) -> str:
+    """Build a stable cache key for a Symmetrix model conversion."""
+    model_path = Path(model_file).expanduser()
+    identity: dict[str, object] = {"model_id": model_id}
+    if model_path.is_file():
+        stat = model_path.stat()
+        identity.update(
+            {
+                "path": str(model_path.resolve()),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    else:
+        identity["path"] = str(model_file)
+    identity["extract_kwargs"] = extract_kwargs
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _cell_to_atoms(cell_path: str):
@@ -116,6 +306,22 @@ def _structure_input_to_atoms(structure_input: StructureInput):
     return _cell_content_to_atoms(structure_input)
 
 
+def _calculator_kwargs_for_atoms(
+    calculator_spec: str,
+    calculator_kwargs: dict | None,
+    atoms: Atoms,
+) -> dict:
+    """Return calculator kwargs augmented with structure-specific metadata."""
+    kwargs = dict(calculator_kwargs or {})
+    normalized_spec = _normalize_symmetrix_calculator_spec(calculator_spec)
+    if (
+        normalized_spec.startswith(_SYMMETRIX_INTERNAL_PREFIX)
+        and "species" not in kwargs
+    ):
+        kwargs["species"] = sorted({int(z) for z in atoms.get_atomic_numbers()})
+    return kwargs
+
+
 def _get_pressure_gpa(atoms) -> float:
     """Extract scalar pressure in GPa from an ASE Atoms with stress.
 
@@ -125,7 +331,7 @@ def _get_pressure_gpa(atoms) -> float:
     try:
         stress = atoms.get_stress()  # eV/Ang^3
         pressure_ev_ang3 = -(stress[0] + stress[1] + stress[2]) / 3.0
-        return pressure_ev_ang3 * EV_PER_ANG3_TO_GPA
+        return cast(float, pressure_ev_ang3 * EV_PER_ANG3_TO_GPA)
     except Exception:
         return 0.0
 
@@ -181,10 +387,12 @@ class AirssMlSinglePointRunner:
     def __init__(
         self,
         calculator_spec: str,
-        calculator_kwargs: Optional[dict] = None,
+        calculator_kwargs: dict | None = None,
+        pressure: float = 0.0,
     ) -> None:
         self.calculator_spec = calculator_spec
         self.calculator_kwargs = calculator_kwargs or {}
+        self.pressure = pressure
 
     def clean_failed(self, struct_name: str) -> None:
         from .runners import clean_files
@@ -203,7 +411,14 @@ class AirssMlSinglePointRunner:
         """
         try:
             atoms = _structure_input_to_atoms(structure_input)
-            calc = _resolve_calculator(self.calculator_spec, **self.calculator_kwargs)
+            calc = _resolve_calculator(
+                self.calculator_spec,
+                **_calculator_kwargs_for_atoms(
+                    self.calculator_spec,
+                    self.calculator_kwargs,
+                    atoms,
+                ),
+            )
             atoms.calc = calc
 
             energy = atoms.get_potential_energy()
@@ -220,6 +435,7 @@ class AirssMlSinglePointRunner:
             if stress is not None:
                 sp_kwargs["stress"] = stress
             atoms.calc = SinglePointCalculator(atoms, **sp_kwargs)
+            atoms.info["extern_pressure"] = self.pressure
 
             # Write output with attached calculator results
             ase_write(struct_name + ".extxyz", atoms, format="extxyz")
@@ -246,7 +462,7 @@ class AirssMlRelaxRunner:
     def __init__(
         self,
         calculator_spec: str,
-        calculator_kwargs: Optional[dict] = None,
+        calculator_kwargs: dict | None = None,
         optimizer: str = "FIRE",
         fmax: float = 0.05,
         max_steps: int = 500,
@@ -278,7 +494,14 @@ class AirssMlRelaxRunner:
 
         try:
             atoms = _structure_input_to_atoms(structure_input)
-            calc = _resolve_calculator(self.calculator_spec, **self.calculator_kwargs)
+            calc = _resolve_calculator(
+                self.calculator_spec,
+                **_calculator_kwargs_for_atoms(
+                    self.calculator_spec,
+                    self.calculator_kwargs,
+                    atoms,
+                ),
+            )
             atoms.calc = calc
 
             # Choose optimizer
@@ -311,6 +534,7 @@ class AirssMlRelaxRunner:
             atoms.info["relax_steps"] = getattr(dyn, "nsteps", None)
             atoms.info["relax_fmax"] = self.fmax
             atoms.info["relax_max_steps"] = self.max_steps
+            atoms.info["extern_pressure"] = self.pressure
 
             # Store final results as SinglePointCalculator
             try:
@@ -339,7 +563,12 @@ class AirssMlRelaxRunner:
             return 1
 
 
-def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
+def compose_ml_task_doc(
+    struct_name: str,
+    calculator_spec: str = "",
+    calculator_label: str = "ML Calculator",
+    metadata_label: str = "ML",
+) -> dict:
     """Extract results from a completed ML calculation.
 
     Reads the ``.extxyz`` output file (with SinglePointCalculator attached),
@@ -349,6 +578,8 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
     Args:
         struct_name: Structure name (without extension).
         calculator_spec: The calculator spec string (for REM metadata).
+        calculator_label: Label used for the calculator REM record.
+        metadata_label: Prefix used for relaxation REM records.
 
     Returns:
         Dictionary with energy, structure, volume, formula, etc.
@@ -361,7 +592,7 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
     atoms = ase_read(extxyz_path)
 
     energy = None
-    pressure = 0.0
+    pressure = None
     forces = None
 
     if atoms.calc is not None:
@@ -373,7 +604,11 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
             forces = atoms.get_forces()
         except Exception:
             pass
-        pressure = _get_pressure_gpa(atoms)
+        pressure = atoms.info.get("extern_pressure", atoms.info.get("pressure"))
+        if pressure is None:
+            pressure = _get_pressure_gpa(atoms)
+        else:
+            pressure = float(pressure)
 
     volume = atoms.get_volume()
 
@@ -394,23 +629,23 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
         sym = "P1"
 
     # REM lines for ML calculation
-    rem_lines = ["", f"ML Calculator {calculator_spec}"]
+    rem_lines = ["", f"{calculator_label} {calculator_spec}"]
     relax_status = atoms.info.get("relax_status")
     if relax_status is not None:
-        rem_lines.append(f"ML Relax status {relax_status}")
+        rem_lines.append(f"{metadata_label} Relax status {relax_status}")
     if "relax_converged" in atoms.info:
-        rem_lines.append(f"ML Relax converged {bool(atoms.info['relax_converged'])}")
+        rem_lines.append(
+            f"{metadata_label} Relax converged {bool(atoms.info['relax_converged'])}"
+        )
     if atoms.info.get("relax_steps") is not None:
-        rem_lines.append(f"ML Relax steps {atoms.info['relax_steps']}")
+        rem_lines.append(f"{metadata_label} Relax steps {atoms.info['relax_steps']}")
     rem_lines.append("")
 
-    enthalpy = energy
-    if energy is not None and pressure is not None and volume is not None:
-        enthalpy = energy + pressure * volume / EV_PER_ANG3_TO_GPA
+    enthalpy = _enthalpy_from_energy_pressure_volume(energy, pressure, volume)
 
     info = {
         "uid": struct_name,
-        "P": pressure,
+        "P": pressure if pressure is not None else 0.0,
         "V": volume,
         "H": enthalpy if enthalpy is not None else 0.0,
         "nat": len(atoms),
@@ -475,10 +710,10 @@ def has_torchsim() -> bool:
 class TorchSimRunner:
     """Reusable torch-sim model context for chunked ML runs."""
 
-    def __init__(self, model_spec: str, *, device: Optional[str] = None) -> None:
+    def __init__(self, model_spec: str, *, device: str | None = None) -> None:
         import torch
 
-        self.model_spec = model_spec
+        self.model_spec = _normalize_torchsim_model_spec(model_spec)
         self.device = (
             torch.device(device)
             if device
@@ -490,7 +725,7 @@ class TorchSimRunner:
         )
         self.dtype = torch.float32 if self.device.type == "cuda" else torch.float64
         self.model = _load_torchsim_model(
-            model_spec,
+            self.model_spec,
             device=self.device,
             dtype=self.dtype,
         )
@@ -572,6 +807,7 @@ class TorchSimRunner:
             if stress_values is not None and index < len(stress_values):
                 calc_kwargs["stress"] = stress_values[index]
             atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+            atoms.info["extern_pressure"] = scalar_pressure
 
             ase_write(name + ".extxyz", atoms, format="extxyz")
             results[name] = 0
@@ -582,6 +818,8 @@ class TorchSimRunner:
         self,
         struct_names: list[str],
         structures: list[StructureInput],
+        *,
+        scalar_pressure: float = 0.0,
     ) -> dict[str, int]:
         """Run one static batch using the loaded model."""
         import torch_sim as ts
@@ -610,6 +848,7 @@ class TorchSimRunner:
                 calc_kwargs["stress"] = _normalize_static_stress(stress, index)
 
             atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+            atoms.info["extern_pressure"] = scalar_pressure
             ase_write(name + ".extxyz", atoms, format="extxyz")
             results[name] = 0
 
@@ -621,7 +860,7 @@ def _torchsim_relax_batch(
     struct_names: list[str],
     structures: list[StructureInput],
     *,
-    device: Optional[str] = None,
+    device: str | None = None,
     max_steps: int = 300,
     force_tol: float = 0.05,
     optimizer: str = "fire",
@@ -647,13 +886,34 @@ def _torchsim_static_batch(
     struct_names: list[str],
     structures: list[StructureInput],
     *,
-    device: Optional[str] = None,
+    device: str | None = None,
+    scalar_pressure: float = 0.0,
 ) -> dict[str, int]:
     """Run single-point calculations on a batch of structures using torchsim."""
     return TorchSimRunner(model_spec, device=device).static_batch(
         struct_names,
         structures,
+        scalar_pressure=scalar_pressure,
     )
+
+
+def _normalize_torchsim_model_spec(model_spec: str) -> str:
+    """Remove an explicit framework prefix and validate a torch-sim model spec."""
+    if model_spec.startswith("torch-sim:"):
+        model_spec = model_spec[len("torch-sim:") :]
+
+    if ":" not in model_spec:
+        raise ValueError(
+            "Torch-sim model specs must use 'backend:<model>', for example "
+            "'torch-sim:mace:medium'."
+        )
+    backend, model_id = model_spec.split(":", 1)
+    if not backend or not model_id:
+        raise ValueError(
+            "Torch-sim model specs must use 'backend:<model>', for example "
+            "'torch-sim:mace:medium'."
+        )
+    return model_spec
 
 
 def _load_torchsim_model(model_spec: str, *, device, dtype):

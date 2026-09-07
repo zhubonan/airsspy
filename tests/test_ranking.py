@@ -1,5 +1,7 @@
 """Tests for the ranking module."""
 
+from __future__ import annotations
+
 import io
 import os
 
@@ -662,6 +664,24 @@ class TestFileIO:
         records = read_res_file(str(res_file))
         assert len(records) == 1
         assert records[0].label == "Si-001"
+
+    def test_read_res_file_can_drop_raw_lines(self, tmp_path):
+        """Ranking can avoid retaining raw blocks when fingerprints are unused."""
+        res_file = tmp_path / "test.res"
+        res_file.write_text(RES_SI_1)
+
+        records = read_res_file(str(res_file), keep_raw=False)
+
+        assert len(records) == 1
+        assert records[0].label == "Si-001"
+        assert records[0]._raw_lines == []
+
+    def test_read_res_stream_can_drop_raw_lines(self):
+        stream = io.StringIO(RES_SI_1)
+
+        records = read_res_stream(stream, keep_raw=False)
+
+        assert records[0]._raw_lines == []
 
 
 # ---------------------------------------------------------------------------

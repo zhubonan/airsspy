@@ -6,13 +6,15 @@ one buildcell invocation or one CASTEP relaxation cycle. They are usable
 standalone or within jobflow Makers.
 """
 
+from __future__ import annotations
+
 import logging
+import os
 import re
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ def run_buildcell(
     write_seed: bool = True,
     seed_text_transform=None,
     max_attempts: int = 3,
-) -> Optional[dict[str, str]]:
+) -> dict[str, str] | None:
     """
     Run the buildcell executable to generate a random structure.
 
@@ -69,7 +71,7 @@ def run_buildcell(
 
     logger.info("Starting random structure generation...")
     attempt = max_attempts
-    stdout: Optional[str] = None
+    stdout: str | None = None
     input_content = seed_content
     while attempt > 0:
         try:
@@ -239,9 +241,7 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
                             result = True
                         elif status == "failed":
                             result = False
-                    match = re.search(
-                        r"Finished iteration +(\d+)", line, re.IGNORECASE
-                    )
+                    match = re.search(r"Finished iteration +(\d+)", line, re.IGNORECASE)
                     if match is not None:
                         max_iter = int(match.group(1))
 
@@ -475,7 +475,7 @@ class AirssScriptRelaxRunner:
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> None:
         """Write .cell and code-specific param files to disk."""
         Path(struct_name + ".cell").write_text(struct_content)
@@ -486,7 +486,7 @@ class AirssScriptRelaxRunner:
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> int:
         """
         Run relaxation via the external script.
@@ -588,12 +588,129 @@ class AirssGulpRelaxRunner(AirssScriptRelaxRunner):
         struct_name: str,
         struct_content: str,
         param_content: str,
-        seed_name: Optional[str] = None,
+        seed_name: str | None = None,
     ) -> None:
         super()._prepare_inputs(struct_name, struct_content, param_content, seed_name)
         # gulp_relax looks for <seed_name>.lib, not <struct_name>.lib
         if seed_name is not None and seed_name != struct_name:
             shutil.move(struct_name + ".lib", seed_name + ".lib")
+
+
+class AirssGulpSinglePointRunner(AirssGulpRelaxRunner):
+    """Execute a GULP ``single prop`` calculation without geometry relaxation."""
+
+    _cleanup_extensions = AirssGulpRelaxRunner._cleanup_extensions + [
+        ".gin",
+        ".xtl",
+        "-out.cell",
+    ]
+
+    @staticmethod
+    def _last_output_value(stdout: str, patterns: tuple[str, ...]) -> float | None:
+        for pattern in patterns:
+            matches = re.findall(pattern, stdout, flags=re.IGNORECASE)
+            if matches:
+                return float(matches[-1].replace("D", "E").replace("d", "e"))
+        return None
+
+    def run(
+        self,
+        struct_name: str,
+        struct_content: str,
+        param_content: str,
+        seed_name: str | None = None,
+    ) -> int:
+        """Run GULP once and write the CASTEP-like output used by AIRSS tools."""
+        for suffix in (".castep", "-out.cell"):
+            Path(struct_name + suffix).unlink(missing_ok=True)
+        self._prepare_inputs(struct_name, struct_content, param_content, seed_name)
+        try:
+            conversion = subprocess.run(
+                ["cabal", "cell", "gulp"],
+                input=struct_content,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("GULP input conversion timed out for %s", struct_name)
+            return 1
+        if conversion.returncode != 0:
+            logger.warning("GULP input conversion failed for %s", struct_name)
+            return 1
+
+        gulp_input, replacements = re.subn(
+            r"\bopti\s+prop\b",
+            "single prop",
+            conversion.stdout,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if replacements != 1:
+            logger.warning("Cabal output did not contain an optimisable GULP task")
+            return 1
+
+        root = Path(seed_name or struct_name.split("-", 1)[0]).name
+        gulp_input += (
+            f"\nlibrary {root}\n"
+            f"output xtl {struct_name}\n"
+            f"pressure {self.pressure} GPa\n"
+        )
+        Path(struct_name + ".gin").write_text(gulp_input)
+
+        try:
+            env = os.environ.copy()
+            env["GULP_LIB"] = str(Path.cwd())
+            result = subprocess.run(
+                shlex.split(self.executable),
+                input=gulp_input,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("GULP single-point timed out for %s", struct_name)
+            return 1
+        Path(struct_name + ".gout").write_text(result.stdout)
+        if result.returncode != 0:
+            return result.returncode
+
+        number = r"([-+0-9.dDeE]+)"
+        volume = self._last_output_value(
+            result.stdout,
+            (
+                rf"Primitive cell volume\s*=\s*{number}",
+                rf"Initial cell volume\s*=\s*{number}",
+            ),
+        )
+        enthalpy = self._last_output_value(
+            result.stdout,
+            (rf"Total lattice enthalpy\s*=\s*{number}\s+eV",),
+        )
+        if enthalpy is None and volume is not None:
+            energy = self._last_output_value(
+                result.stdout,
+                (rf"Total lattice energy\s*=\s*{number}\s+eV",),
+            )
+            if energy is not None:
+                enthalpy = energy + self.pressure * volume / 160.21766208
+        if enthalpy is None or volume is None:
+            logger.warning(
+                "Unable to parse GULP single-point output for %s", struct_name
+            )
+            return 1
+
+        Path(struct_name + ".castep").write_text(
+            " Welcome to a b c GULP\n"
+            f" *  Pressure: {self.pressure}\n"
+            f" GULP: Final Enthalpy     = {enthalpy:.12f}\n"
+            f"Current cell volume = {volume:.12f}\n"
+        )
+        Path(struct_name + "-out.cell").write_text(struct_content)
+        return 0
 
 
 class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
@@ -626,6 +743,25 @@ class AirssPp3RelaxRunner(AirssScriptRelaxRunner):
 
     def _get_cmd(self, struct_name: str) -> list[str]:
         return ["pp3_relax", self.executable, struct_name]
+
+
+class AirssPp3SinglePointRunner(AirssPp3RelaxRunner):
+    """Execute PP3 with its native no-relax ``-n`` option."""
+
+    def _get_cmd(self, struct_name: str) -> list[str]:
+        return ["pp3_relax", f"{self.executable} -n", struct_name]
+
+    def run(
+        self,
+        struct_name: str,
+        struct_content: str,
+        param_content: str,
+        seed_name: str | None = None,
+    ) -> int:
+        """Run PP3 single-point after removing stale converter inputs."""
+        for suffix in (".castep", "-out.cell"):
+            Path(struct_name + suffix).unlink(missing_ok=True)
+        return super().run(struct_name, struct_content, param_content, seed_name)
 
 
 class AirssVaspRelaxRunner:
@@ -716,9 +852,8 @@ class AirssVaspRelaxRunner:
     ) -> bool:
         """Return True if the current VASP cycle produced a fresh vasprun.xml."""
         after = self._output_mtimes(workdir)
-        return (
-            after["vasprun.xml"] is not None
-            and after["vasprun.xml"] != before.get("vasprun.xml")
+        return after["vasprun.xml"] is not None and after["vasprun.xml"] != before.get(
+            "vasprun.xml"
         )
 
     def _read_vasp_status(
@@ -908,11 +1043,13 @@ class AirssAbacusRelaxRunner:
         max_fails: int = 2,
         max_iterations: int = 200,
         pressure: float = 0.0,
+        cell_axis_map: str | None = None,
     ) -> None:
         self.executable = executable
         self.max_fails = max_fails
         self.max_iterations = max_iterations
         self.pressure = pressure
+        self.cell_axis_map = cell_axis_map
 
     def clean_failed(self, struct_name: str) -> None:
         clean_files(
@@ -958,6 +1095,19 @@ class AirssAbacusRelaxRunner:
         workdir = f"{struct_name}.abacus"
         Path(workdir).mkdir(parents=True, exist_ok=True)
 
+        from ..abacustools import (
+            apply_cell_axis_map_to_abacus_input,
+            apply_cell_axis_map_to_cell_text,
+            cell_to_stru,
+        )
+
+        cell_content = apply_cell_axis_map_to_cell_text(
+            cell_content, self.cell_axis_map
+        )
+        input_content = apply_cell_axis_map_to_abacus_input(
+            input_content, self.cell_axis_map
+        )
+
         # Write .cell file
         cell_path = struct_name + ".cell"
         Path(cell_path).write_text(cell_content)
@@ -966,21 +1116,23 @@ class AirssAbacusRelaxRunner:
         input_path = struct_name + ".INPUT"
         Path(input_path).write_text(input_content)
 
-        # Convert .cell to STRU
-        from ..abacustools import cell_to_stru
-
         stru_content = cell_to_stru(cell_content)
         Path(f"{workdir}/STRU").write_text(stru_content)
 
         # Copy INPUT to workdir
         Path(f"{workdir}/INPUT").write_text(input_content)
+        pressure_kbar = self.pressure * 10.0
+        for input_file in (input_path, f"{workdir}/INPUT"):
+            self._set_input_param(input_file, "press1", str(pressure_kbar))
+            self._set_input_param(input_file, "press2", str(pressure_kbar))
+            self._set_input_param(input_file, "press3", str(pressure_kbar))
 
     def _run_single(
         self,
         struct_name: str,
         workdir: str,
         input_path: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Run a single ABACUS calculation and parse results.
 
         Returns:
@@ -1233,8 +1385,15 @@ class AirssAbacusSinglePointRunner:
 
     _cleanup_extensions = [".cell", ".INPUT", "-orig.cell", ".res", ".err"]
 
-    def __init__(self, executable: str = "abacus") -> None:
+    def __init__(
+        self,
+        executable: str = "abacus",
+        pressure: float = 0.0,
+        cell_axis_map: str | None = None,
+    ) -> None:
         self.executable = executable
+        self.pressure = pressure
+        self.cell_axis_map = cell_axis_map
 
     def clean_failed(self, struct_name: str) -> None:
         clean_files(
@@ -1254,10 +1413,21 @@ class AirssAbacusSinglePointRunner:
         Forces ``calculation scf`` in the INPUT file regardless of what
         the user specified.
         """
-        from ..abacustools import cell_to_stru
+        from ..abacustools import (
+            apply_cell_axis_map_to_abacus_input,
+            apply_cell_axis_map_to_cell_text,
+            cell_to_stru,
+        )
 
         workdir = f"{struct_name}.abacus"
         Path(workdir).mkdir(parents=True, exist_ok=True)
+
+        cell_content = apply_cell_axis_map_to_cell_text(
+            cell_content, self.cell_axis_map
+        )
+        input_content = apply_cell_axis_map_to_abacus_input(
+            input_content, self.cell_axis_map
+        )
 
         # Write .cell file
         Path(struct_name + ".cell").write_text(cell_content)
@@ -1274,6 +1444,16 @@ class AirssAbacusSinglePointRunner:
                 new_lines.append(line)
         if not found:
             new_lines.append("calculation scf")
+        pressure_kbar = self.pressure * 10.0
+        for key in ("press1", "press2", "press3"):
+            found_pressure = False
+            for index, line in enumerate(new_lines):
+                if re.match(rf"^\s*{key}\s+", line):
+                    new_lines[index] = f"{key} {pressure_kbar}"
+                    found_pressure = True
+                    break
+            if not found_pressure:
+                new_lines.append(f"{key} {pressure_kbar}")
         input_content = "\n".join(new_lines)
 
         # Write INPUT file (both in cwd and in workdir)

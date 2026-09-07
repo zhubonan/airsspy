@@ -29,6 +29,7 @@ Use `-v` or `-vv` for more logging, and `-q`, `-qq`, or `-qqq` for less.
 | `ap deploy` | Build jobflow search or relaxation flows and store results in MongoDB. |
 | `ap db` | Query and retrieve jobflow results from MongoDB. |
 | `ap tools modcell` | Replace the structure in a CASTEP `.cell` template with an ASE-readable structure. |
+| `ap tools volume-minsep-*` | Build/curate volume-minsep datasets and train the lightweight baseline predictor. |
 
 ## Environment Checks
 
@@ -54,8 +55,16 @@ and can pack successful `.res` outputs into `packed.res`.
 ap run search --seed Si --code castep --nmax 100 --pack
 ap run search --seed Si --code gulp --exe ggulp --cluster
 ap run search --seed Si --code vasp --potcar-dir /path/to/potpaw --potcar-map Si=Si
+ap run search --seed Si --code ml --calculator mace:medium --device cuda
+ap run search --seed Si --code ml --calculator ase:symmetrix:medium-mpa-0
+ap run search --seed Si --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl
 ap run search --seed seed --build-only --nmax 20
 ```
+
+`run search` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, `ml`, and
+`eddp`.
+ML searches generate structures with `buildcell` and relax each structure with
+the selected ML driver.
 
 Required files:
 
@@ -66,6 +75,7 @@ Required files:
 | `pp3` | `<seed>.cell`, `<seed>.pp` |
 | `abacus` | `<seed>.cell`, `<seed>.INPUT` |
 | `vasp` | `<seed>.cell`, `<seed>.INCAR`; optional `<seed>.KPOINTS` |
+| `eddp` | `<seed>.cell` and an EDDP `.json` or `.jld2` model artifact passed with `--calculator` |
 
 Useful options include `--pressure`, `--max-iterations`, `--build-timeout`,
 `--mpinp`, `--keep`, and `--diagnose`.
@@ -76,20 +86,65 @@ the seed sent to buildcell:
 ```bash
 ap run search --seed seed --formula SiO2,Si2O3 --target-volume Si=20 --target-volume O=12
 ap run search --seed seed --elements Li,P,O --max-coeff 4 --oxidation-state Li=1,P=5,O=-2
+ap run search --seed seed --elements Li,P,O,S --max-num-atoms 20 --composition-ratio 1=0.1,2=0.4,3=0.4,4=0.1
 ap run search --seed seed --elements Li,P,O --diagnose 3
 ```
+
+`--max-num-atoms` enumerates unique reduced formulas whose reduced formula
+contains at most that many atoms, using all non-empty subsets of `--elements`.
+This avoids over-sampling formulas such as `LiNa` just because `Li2Na2`,
+`Li3Na3`, and other unreduced atom-count tuples collapse to the same reduced
+formula. `--composition-ratio` optionally chooses the number of distinct
+elements first, for example `1=0.1,2=0.4,3=0.4,4=0.1` for 10% elemental, 40%
+binary, 40% ternary, and 10% quaternary sampling. Within each selected arity,
+the sampler chooses uniformly from the available reduced formulas.
+
+Volume/minsep estimates can additionally inject `#MINSEP` and automatic
+`#NFORM` directives. The large curated dataset is user-supplied or generated
+offline; airsspy does not bundle it by default.
+
+```bash
+ap run search --seed seed --formula SiO2 \
+  --volume-minsep-source dataset \
+  --volume-minsep-dataset generation/minsep_vol_dataset_curated.json \
+  --diagnose 1
+
+ap run search --seed seed --formula SiO2 \
+  --volume-minsep-source baseline \
+  --volume-minsep-bundle formula_model_artifacts/baseline/baseline_bundle.json
+```
+
+Use `--volume-scale`, `--minsep-scale-low`, `--minsep-scale-high`,
+`--max-atoms`, and `--max-nform` to tune generated directives.
 
 Post-relax RSS pruning is available with `--prune`. The main controls are
 `--prune-pool-size`, `--prune-keep-fraction`, `--prune-dedup-tol`,
 `--prune-fingerprint-cutoff`, and `--prune-zweight`.
+
+### Volume/Minsep Dataset Tools
+
+The volume/minsep tools are offline utilities for reproducing a curated dataset
+and training the small non-torch baseline bundle:
+
+```bash
+ap tools volume-minsep-build-dataset --mp-docs mp-stable-docs.json --output minsep_vol_dataset.json
+ap tools volume-minsep-curate-dataset --dataset minsep_vol_dataset.json --mp-docs mp-stable-docs.json --output minsep_vol_dataset_curated.json
+ap tools volume-minsep-train-baseline --dataset minsep_vol_dataset_curated.json --output-dir formula_model_artifacts
+```
+
+The curation step selects one row per reduced formula by lowest
+`energy_above_hull`.
 
 ### Relax Existing Structures
 
 ```bash
 ap run relax --cell "*.cell" --seed Si --code castep --pack
 ap run relax --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
-ap run relax --cell "*.res" --code ml --calculator mace:medium --device cuda --batch-size 16
+ap run relax --cell "*.res" --code ml --calculator torch-sim:mace:medium --device cuda --batch-size 16
 ap run relax --cell "*.cell" --code ml --calculator ase:mace:medium --optimizer BFGS
+ap run relax --cell "*.cell" --code ml --calculator ase:symmetrix:medium-mpa-0 --optimizer FIRE
+ap run relax --cell "*.cell" --code ml --calculator ase:symmetrix:MACE-MH-1:matpes_r2scan
+ap run relax --cell "*.res" --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl --eddp-method tpsd
 ```
 
 `run relax` accepts single-structure `.cell` and `.res` inputs. Packed `.res`
@@ -97,20 +152,24 @@ files matched by the glob are skipped. For `.res` inputs with non-ML codes,
 airsspy looks for a root template such as `Si.cell` so it can preserve the
 non-structural cell settings while replacing the lattice and positions.
 
-Supported relaxation codes are `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and
-`ml`. The `--singlepoint` flag reuses this command for single-point calculations
-where supported: `castep`, `abacus`, `vasp`, and `ml`.
+Supported relaxation codes are `castep`, `gulp`, `pp3`, `abacus`, `vasp`,
+`ml`, and `eddp`. The `--singlepoint` flag reuses this command for single-point
+calculations with all seven backends.
 
 ### Single-Point Calculations
 
 ```bash
 ap run sp --cell "*.cell" --seed Si --code castep
+ap run sp --cell "*.res" --seed Si --code gulp
+ap run sp --cell "*.res" --seed Si --code pp3
 ap run sp --cell "*.res" --code ml --calculator mace:medium --batch-size 32
+ap run sp --cell "*.res" --code ml --calculator ase:symmetrix:medium
 ap run sp --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
+ap run sp --cell "*.res" --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl
 ```
 
-`run sp` supports `castep`, `abacus`, `vasp`, and `ml`. RES input is currently
-supported for VASP and ML single-points.
+`run sp` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, `ml`, and `eddp`. Both
+single-structure `.cell` and `.res` inputs are supported for every backend.
 
 ### CRUD Queue Worker
 
@@ -118,12 +177,49 @@ supported for VASP and ML single-points.
 ap run crud --workdir . --code castep
 ap run crud --workdir . --code vasp --singlepoint --potcar-dir /path/to/potpaw
 ap run crud --workdir . --code ml --calculator mace:medium --batch-size 8 --nostop
+ap run crud --workdir . --code ml --calculator ase:symmetrix:medium --nostop
+ap run crud --workdir . --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl --nostop
 ```
 
 The CRUD worker consumes queued `hopper/*-*.res` files, converts each claimed
 RES structure into backend inputs, and moves outputs into `good_castep/` or
 `bad_castep/`. Use `STOP_CRUD` to stop a long-running worker. `--cycle` can
 requeue CASTEP-like electronic-minimisation failures.
+
+For ML runs, plain `mace:<model>` uses the torch-sim backend and supports
+`--device`/`--batch-size`; prefix it as `torch-sim:mace:<model>` to select that
+framework explicitly. `ase:mace:<model>` uses the generic ASE MACE calculator,
+while `ase:symmetrix:<full-mace-model-name>` uses the Symmetrix ASE calculator.
+Branded MACE-MH names can include the head, for example
+`ase:symmetrix:MACE-MH-1:matpes_r2scan`; airsspy resolves this as checkpoint
+`mh-1` with head `matpes_r2scan`.
+The misspelled `ase:symmetrics:<model>` alias and the legacy
+`symmetrix:mace:<model>` form remain accepted for compatibility. Symmetrix runs
+MACE models only and uses ASE optimizer controls such as `--optimizer`,
+`--fmax`, `--max-iterations`, and `--pressure` rather than torch-sim batching.
+
+The native EDDP backend starts Julia with the packaged bridge and calls
+EDDP Potentials' `load_calculator`, energy/force/stress evaluators, and native
+`multirelax!` loop. It therefore supports native `tpsd` or `fire` relaxation,
+cell relaxation, pressure, and calculator workspace reuse during each
+optimization. Use `--eddp-fixed-cell` for position-only relaxation,
+`--eddp-stress-tol` for the cell stress threshold, and `--fmax` for the force
+threshold. `AIRSSPY_EDDP_PROJECT` can replace `--eddp-project`. Results are
+normalized to extxyz and passed through the common AIRSS `.res` composer.
+Each structure currently launches an independent Julia process, so model and
+workspace reuse is limited to one optimization; cross-structure persistent
+workers and batch model caching are not yet implemented.
+
+The local `ap run` support matrix is uniform:
+
+| Workflow | CASTEP | GULP | PP3 | ABACUS | VASP | ML | EDDP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `search` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `relax` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `relax --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `sp` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `crud` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `crud --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
 ## Ranking And Hull Analysis
 

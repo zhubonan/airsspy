@@ -12,9 +12,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-
 CONTROL_INPUT_SET = "AIRSSPY_VASP_INPUT_SET"
 CONTROL_PREFIX = "AIRSSPY_"
+EV_PER_ANG3_TO_GPA = 160.21766208
 
 
 def parse_potcar_map(values: tuple[str, ...] | list[str]) -> dict[str, str]:
@@ -331,9 +331,11 @@ def prepare_vasp_inputs(
     default_set = "MPStaticSet" if mode == "sp" else "MPRelaxSet"
     input_set_name = _coerce_input_set_name(control.get(CONTROL_INPUT_SET), default_set)
     input_set_cls = resolve_input_set_class(input_set_name)
-    input_set_name = f"{input_set_cls.__module__}:{input_set_cls.__name__}" if (
-        ":" in input_set_name or "." in input_set_name
-    ) else input_set_cls.__name__
+    input_set_name = (
+        f"{input_set_cls.__module__}:{input_set_cls.__name__}"
+        if (":" in input_set_name or "." in input_set_name)
+        else input_set_cls.__name__
+    )
 
     kwargs: dict[str, Any] = {"user_incar_settings": user_incar}
     if potcar_map:
@@ -374,7 +376,9 @@ def prepare_vasp_inputs(
         "input_set": input_set_name,
         "incar_overrides": sorted(user_incar),
         "potcars": potcar_metadata,
-        "kpoints_source": str(kpoints_path) if explicit_kpoints is not None else "input-set",
+        "kpoints_source": str(kpoints_path)
+        if explicit_kpoints is not None
+        else "input-set",
     }
 
 
@@ -416,12 +420,12 @@ def _parse_text_outputs(workdir: Path) -> dict[str, Any]:
         text = outcar.read_text(errors="ignore")
         matches = re.findall(r"enthalpy\s+is\s+(-?\d+(?:\.\d+)?)", text)
         if matches:
-            data["energy"] = float(matches[-1])
+            data["enthalpy"] = float(matches[-1])
         pressure = re.findall(r"pressure\s+=?\s*(-?\d+(?:\.\d+)?)", text, re.I)
         if pressure:
             data["pressure"] = float(pressure[-1]) * 0.1
     oszicar = workdir / "OSZICAR"
-    if oszicar.is_file() and "energy" not in data:
+    if oszicar.is_file():
         text = oszicar.read_text(errors="ignore")
         matches = re.findall(r"\bE0=\s*(-?\d+(?:\.\d+)?)", text)
         if matches:
@@ -429,7 +433,34 @@ def _parse_text_outputs(workdir: Path) -> dict[str, Any]:
     return data
 
 
-def build_vasp_rem_lines(struct_name: str, metadata: dict[str, Any] | None = None) -> list[str]:
+def _parse_external_pressure_gpa(workdir: Path) -> float | None:
+    """Parse VASP PSTRESS from INCAR as external pressure in GPa."""
+    incar = workdir / "INCAR"
+    if not incar.is_file():
+        return None
+    text = incar.read_text(errors="ignore")
+    for line in text.splitlines():
+        stripped = re.split(r"[#!]", line, maxsplit=1)[0].strip()
+        if not stripped:
+            continue
+        match = re.match(r"^PSTRESS\s*=?\s*([-+0-9.eEdD]+)", stripped, re.I)
+        if match:
+            return float(match.group(1).replace("D", "E").replace("d", "e")) / 10.0
+    return None
+
+
+def _enthalpy_from_energy_pressure_volume(
+    energy: float,
+    pressure: float,
+    volume: float,
+) -> float:
+    """Return E + P*V with pressure in GPa and volume in Angstrom^3."""
+    return energy + pressure * volume / EV_PER_ANG3_TO_GPA
+
+
+def build_vasp_rem_lines(
+    struct_name: str, metadata: dict[str, Any] | None = None
+) -> list[str]:
     """Build REM metadata lines for VASP results."""
     metadata = metadata or {}
     lines = [f"VASP input set {metadata.get('input_set', 'unknown')}"]
@@ -469,10 +500,22 @@ def compose_vasp_task_doc(
     if structure is None:
         structure = _read_structure_from_vasp(workdir)
 
-    energy = parsed.get("energy", text_parsed.get("energy"))
+    raw_energy = parsed.get("energy")
+    text_energy = text_parsed.get("energy")
+    outcar_enthalpy = text_parsed.get("enthalpy")
+    energy = raw_energy if raw_energy is not None else text_energy
+    if energy is None:
+        energy = outcar_enthalpy
     if energy is None:
         raise ValueError(f"No VASP energy found for {struct_name}")
-    pressure = text_parsed.get("pressure", 0.0)
+    pressure = _parse_external_pressure_gpa(workdir)
+    if pressure is None:
+        pressure = text_parsed.get("pressure", 0.0)
+    enthalpy = (
+        outcar_enthalpy
+        if outcar_enthalpy is not None
+        else _enthalpy_from_energy_pressure_volume(energy, pressure, structure.volume)
+    )
 
     atoms = AseAtomsAdaptor.get_atoms(structure)
     try:
@@ -493,7 +536,7 @@ def compose_vasp_task_doc(
     rem_lines = build_vasp_rem_lines(struct_name, metadata)
     info = {
         "uid": struct_name,
-        "H": energy if energy is not None else 0.0,
+        "H": enthalpy,
         "P": pressure,
         "V": structure.volume,
         "nat": len(structure),

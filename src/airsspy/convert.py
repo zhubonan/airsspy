@@ -1,9 +1,9 @@
 """Lossless conversion between AIRSS .res and extended XYZ formats.
 
-Supports round-tripping all data including forces (stored as extra
-columns 8-10 on atom lines in .res), per-atom spins, REM metadata,
-and all TITL fields. Output .res files are fully compatible with
-cryan and other AIRSS tools.
+Supports round-tripping all data including forces (stored after an
+explicit spin column on atom lines in .res), per-atom spins, REM
+metadata, and all TITL fields. Output .res files are fully compatible
+with cryan and other AIRSS tools.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from ase.geometry import cell_to_cellpar
 from ase.io import read as ase_read
 from ase.io import write as ase_write
 
-from .restools import RESFile, _get_res_lines, parse_titl
+from .restools import RESFile, _get_res_lines, iter_res_blocks, parse_titl
 
 # ---------------------------------------------------------------------------
 # Force parsing helpers
@@ -29,45 +29,14 @@ def _parse_res_forces(lines: list[str]) -> list[list[float]] | None:
 
     Atom line format: Symbol index x y z occ [spin] [fx fy fz]
     Base columns (6): Symbol(0) index(1) x(2) y(3) z(4) occ(5)
-    Optional spin(6), then forces(7,8,9) — or if no spin, forces(6,7,8).
-
-    We detect forces by checking if there are 3+ extra columns beyond base
-    (for no-spin case: 9 tokens → forces at 6,7,8) or 4+ extra (with spin:
-    10 tokens → forces at 7,8,9).
+    Optional spin(6), then forces(7,8,9). Legacy force-only lines with
+    forces in columns 6-8 are still accepted when reading.
 
     Returns None if no force columns are present.
     """
-    # First pass: determine if spin column is present
-    has_spin = False
-    for line in lines:
-        tokens = line.split()
-        if not tokens or tokens[0] != "SFAC":
-            continue
-        # Look at the next atom line to determine column count
-        break
-
-    for line in lines:
-        tokens = line.split()
-        if not tokens:
-            continue
-        if tokens[0] == "SFAC":
-            # Check first atom line after SFAC for column count
-            continue
-        if tokens[0] in ("TITL", "CELL", "LATT", "REM", "END"):
-            continue
-        if tokens[0] and tokens[0][0].isalpha() and len(tokens) > 6:
-            # Check if column 6 looks like a spin value (small number)
-            # vs a force value. If we have 10 tokens, col 6 is spin, 7-9 are forces.
-            # If 9 tokens, col 6 is first force component.
-            if len(tokens) >= 10:
-                has_spin = True
-            break
-
-    # Second pass: parse forces
     forces: list[list[float]] = []
     in_sfac = False
     found_forces = False
-    force_start = 7 if has_spin else 6  # index of first force component
 
     for line in lines:
         tokens = line.split()
@@ -82,11 +51,12 @@ def _parse_res_forces(lines: list[str]) -> list[list[float]] | None:
         if tokens[0] in ("TITL", "CELL", "LATT", "REM"):
             continue
         if in_sfac and tokens[0] and tokens[0][0].isalpha():
-            n_extra = len(tokens) - 6  # columns beyond base (symbol..occ)
-            # With spin: n_extra=1 (spin only), 4 (spin+forces)
-            # Without spin: n_extra=0 (base only), 3 (forces only)
-            expected_for_force = 4 if has_spin else 3
-            if n_extra >= expected_for_force:
+            force_start = None
+            if len(tokens) >= 10:
+                force_start = 7
+            elif len(tokens) == 9:
+                force_start = 6
+            if force_start is not None:
                 try:
                     fx = float(tokens[force_start])
                     fy = float(tokens[force_start + 1])
@@ -170,11 +140,19 @@ def res_to_extxyz(res_path: str | Path, extxyz_path: str | Path) -> int:
     res_path = Path(res_path)
     extxyz_path = Path(extxyz_path)
 
-    res_objs = RESFile.from_packed(str(res_path), include_structure=True)
-    atoms_list = [_resfile_to_atoms(r) for r in res_objs]
-
-    ase_write(str(extxyz_path), atoms_list, format="extxyz")
-    return len(atoms_list)
+    count = 0
+    with open(res_path) as stream:
+        for lines in iter_res_blocks(stream):
+            res = RESFile.from_lines(lines, include_structure=True)
+            atoms = _resfile_to_atoms(res)
+            ase_write(
+                str(extxyz_path),
+                atoms,
+                format="extxyz",
+                append=count > 0,
+            )
+            count += 1
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +251,12 @@ def _atoms_to_res_lines(atoms: Atoms) -> list[str]:
                 new_lines.append(line)
                 continue
             if in_atoms and line and line[0].isalpha():
-                # Atom line — append forces
+                # Atom line: force-bearing output always carries an explicit
+                # spin column. If there was no spin, write zero before forces.
                 if atom_idx < len(forces):
                     fx, fy, fz = forces[atom_idx]
+                    if spins is None:
+                        line = f"{line} {0.0:>8.3f}"
                     line = f"{line} {fx:>12.6f} {fy:>12.6f} {fz:>12.6f}"
                     atom_idx += 1
             new_lines.append(line)
@@ -402,18 +383,9 @@ def _find_in_packed_res(source_path: Path, label: str) -> RESFile | None:
     Uses fast TITL-only parsing first to avoid loading full structures
     for non-matching entries.
     """
-    res_objs = RESFile.from_packed(
-        str(source_path), include_structure=False, only_titl=True
-    )
-
-    target_idx = None
-    for i, res in enumerate(res_objs):
-        if res.label == label:
-            target_idx = i
-            break
-
-    if target_idx is None:
-        return None
-
-    # Reload only the matching structure with full data
-    return RESFile.from_packed(str(source_path), include_structure=True)[target_idx]
+    with open(source_path) as stream:
+        for lines in iter_res_blocks(stream):
+            res = RESFile.from_lines(lines, include_structure=False, only_titl=True)
+            if res.label == label:
+                return RESFile.from_lines(lines, include_structure=True)
+    return None

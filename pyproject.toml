@@ -46,7 +46,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "mypy",
+    "mypy<2",  # mypy 2.x no longer supports the configured Python 3.9 target
     "pre-commit",
     "pytest>=6.0",
     "pytest-cov",
@@ -55,6 +55,15 @@ dev = [
 ]
 ml = [
     "torch-sim-atomistic>=0.4.0; python_version >= '3.12'",
+]
+mace = [
+    "mace-torch>=0.3.16; python_version >= '3.12'",
+    "matscipy>=1.2.0; python_version >= '3.12'",
+]
+symmetrix = [
+    "mace-torch>=0.3.16; python_version >= '3.12'",
+    "matscipy>=1.2.0; python_version >= '3.12'",
+    "symmetrix>=0.0.1; python_version >= '3.12'",
 ]
 docs = [
     "sphinx>=7.0",
@@ -121,7 +130,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-markers = ["e2e: end-to-end tests that run actual CASTEP/ABACUS/VASP executables"]
+markers = ["e2e: end-to-end tests that run actual CASTEP/ABACUS/VASP/EDDP executables"]
 
 [tool.coverage.run]
 source = ["src/airsspy"]

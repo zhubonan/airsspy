@@ -48,9 +48,15 @@ def pack(inputs, output, from_dir):
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as fout:
         for fpath in files:
-            content = fpath.read_text()
-            fout.write(content)
-            if not content.endswith("\n"):
+            ends_with_newline = True
+            with open(fpath) as fin:
+                while True:
+                    chunk = fin.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    ends_with_newline = chunk.endswith("\n")
+                    fout.write(chunk)
+            if not ends_with_newline:
                 fout.write("\n")
 
     click.echo(f"Packed {len(files)} files → {out}", err=True)
@@ -94,36 +100,25 @@ def unpack(input, output_dir, fmt):
 
 def _unpack_res(inp: Path, out: Path) -> None:
     """Split packed .res on TITL...END blocks."""
-    text = inp.read_text()
-    lines = text.splitlines(True)
+    from airsspy.restools import iter_res_blocks
 
-    current: list[str] = []
-    label = None
     count = 0
-
-    def flush():
-        nonlocal label, count
-        if not current or label is None:
-            return
-        safe = label.replace("/", "_").replace(" ", "_")
-        (out / f"{safe}.res").write_text("".join(current))
-        count += 1
-        current.clear()
-        label = None
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("TITL"):
-            if current:
-                flush()
-            tokens = stripped.split()
-            label = tokens[1] if len(tokens) > 1 else f"struct_{count:04d}"
-        current.append(line)
-        if stripped == "END":
-            flush()
-
-    if current:
-        flush()
+    with open(inp) as stream:
+        for current in iter_res_blocks(stream):
+            label = None
+            for line in current:
+                stripped = line.strip()
+                if stripped.startswith("TITL"):
+                    tokens = stripped.split()
+                    label = tokens[1] if len(tokens) > 1 else None
+                    break
+            if label is None:
+                label = f"struct_{count:04d}"
+            safe = label.replace("/", "_").replace(" ", "_")
+            if current and not current[-1].strip().startswith("END"):
+                current = [*current, "END\n"]
+            (out / f"{safe}.res").write_text("".join(current))
+            count += 1
 
     click.echo(f"Unpacked {count} structures → {out}/", err=True)
 
@@ -134,50 +129,37 @@ def _unpack_extxyz(inp: Path, out: Path, out_ext: str = ".xyz") -> None:
     Each structure starts with a line containing an integer (atom count)
     followed by a properties line, then that many atom lines.
     """
-    text = inp.read_text()
-    lines = text.splitlines()
-
-    structures: list[list[str]] = []
     current: list[str] = []
-    i = 0
-
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line:
-            i += 1
-            continue
-
-        try:
-            natoms = int(line.split()[0])
-            if natoms > 0 and len(line.split()) == 1:
-                if current:
-                    structures.append(current)
-                    current = []
-                current.append(lines[i])
-                i += 1
-                if i < len(lines):
-                    current.append(lines[i])
-                    i += 1
-                    for _ in range(natoms):
-                        if i < len(lines):
-                            current.append(lines[i])
-                            i += 1
-                continue
-        except (ValueError, IndexError):
-            pass
-
-        current.append(lines[i])
-        i += 1
-
-    if current:
-        structures.append(current)
-
     count = 0
-    for struct_lines in structures:
-        label = _extract_label_from_extxyz(struct_lines, count)
-        safe = label.replace("/", "_").replace(" ", "_")
-        (out / f"{safe}{out_ext}").write_text("\n".join(struct_lines) + "\n")
-        count += 1
+    with open(inp) as stream:
+        lines_iter = iter(stream)
+        for first in lines_iter:
+            line = first.strip()
+            if not line:
+                continue
+            try:
+                natoms = int(line.split()[0])
+            except (ValueError, IndexError):
+                current.append(first.rstrip("\n"))
+                continue
+            if natoms <= 0 or len(line.split()) != 1:
+                current.append(first.rstrip("\n"))
+                continue
+            current = [first.rstrip("\n")]
+            try:
+                current.append(next(lines_iter).rstrip("\n"))
+            except StopIteration:
+                break
+            for _ in range(natoms):
+                try:
+                    current.append(next(lines_iter).rstrip("\n"))
+                except StopIteration:
+                    break
+            label = _extract_label_from_extxyz(current, count)
+            safe = label.replace("/", "_").replace(" ", "_")
+            (out / f"{safe}{out_ext}").write_text("\n".join(current) + "\n")
+            count += 1
+            continue
 
     click.echo(f"Unpacked {count} structures → {out}/", err=True)
 

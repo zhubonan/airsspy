@@ -28,6 +28,14 @@ Master different approaches for generating random structures with buildcell.
 Read, write, and analyze AIRSS .res output files.
 :::
 
+:::{grid-item-card} Auto Volume And Minsep
+:link: auto-volume-minsep
+:link-type: doc
+
+Generate buildcell volume, minsep, and nform directives from datasets,
+baseline bundles, or reference structures.
+:::
+
 :::{grid-item-card} Command Line Workflows
 :link: ../reference/cli
 :link-type: doc
@@ -52,4 +60,5 @@ These guides assume you're familiar with the basics from the [Quickstart Tutoria
 create-seeds
 generate-structures
 work-with-res-files
+auto-volume-minsep
 ```

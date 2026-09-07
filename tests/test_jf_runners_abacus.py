@@ -3,7 +3,6 @@
 from pathlib import Path
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 
 from airsspy.jf.runners import AirssAbacusRelaxRunner
@@ -56,6 +55,34 @@ class TestPrepareInputs:
         runner = AirssAbacusRelaxRunner()
         with pytest.raises(ValueError, match="Expected 3 lattice vectors"):
             runner.prepare_inputs("Si-001", bad_cell, INPUT_CONTENT)
+
+    def test_writes_external_pressure_in_kbar(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        runner = AirssAbacusRelaxRunner(pressure=5.0)
+        runner.prepare_inputs("Si-001", CELL_CONTENT, INPUT_CONTENT)
+
+        for input_file in ("Si-001.INPUT", "Si-001.abacus/INPUT"):
+            content = Path(input_file).read_text()
+            assert "press1 50.0" in content
+            assert "press2 50.0" in content
+            assert "press3 50.0" in content
+
+    def test_singlepoint_axis_map_rotates_stru_and_kspacing(self, tmp_path, monkeypatch):
+        from airsspy.jf.runners import AirssAbacusSinglePointRunner
+
+        monkeypatch.chdir(tmp_path)
+        input_content = INPUT_CONTENT + "kspacing 0.1 0.2 1.0\n"
+
+        runner = AirssAbacusSinglePointRunner(cell_axis_map="z:x")
+        runner.prepare_inputs("Si-001", CELL_CONTENT, input_content)
+
+        stru = Path("Si-001.abacus/STRU").read_text()
+        assert "5.4300000000  0.0000000000  0.0000000000" in stru
+        assert "0.2500000000 0.2500000000 0.2500000000 1 1 1" in stru
+
+        abacus_input = Path("Si-001.abacus/INPUT").read_text()
+        assert "kspacing 1.0 0.1 0.2" in abacus_input
 
 
 class TestSetInputParam:

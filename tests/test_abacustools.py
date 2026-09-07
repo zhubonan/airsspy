@@ -1,7 +1,6 @@
 """Tests for ABACUS output parsing and result composition."""
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -298,6 +297,73 @@ Si Si.UPF
         assert "ATOMIC_POSITIONS\nDirect" in stru
         assert "0.2500000000 0.0000000000 0.0000000000 1 1 1" in stru
 
+    def test_cell_axis_map_moves_z_vacuum_to_x(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_CART
+2.0 0.0 0.0
+0.0 3.0 0.0
+0.0 0.0 9.0
+%ENDBLOCK LATTICE_CART
+%BLOCK POSITIONS_FRAC
+Ga 0.10 0.20 0.30
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Ga Ga.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        stru = cell_to_stru(cell, cell_axis_map="z:x")
+
+        lines = stru.splitlines()
+        start = lines.index("LATTICE_VECTORS") + 1
+        assert lines[start:start + 3] == [
+            "9.0000000000  0.0000000000  0.0000000000",
+            "0.0000000000  2.0000000000  0.0000000000",
+            "0.0000000000  0.0000000000  3.0000000000",
+        ]
+        assert "0.3000000000 0.1000000000 0.2000000000 1 1 1" in stru
+
+    def test_cell_axis_map_rejects_lattice_abc(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_ABC
+2.0 3.0 9.0
+90.0 90.0 90.0
+%ENDBLOCK LATTICE_ABC
+%BLOCK POSITIONS_FRAC
+Ga 0.10 0.20 0.30
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Ga Ga.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        with pytest.raises(ValueError, match="LATTICE_ABC"):
+            cell_to_stru(cell, cell_axis_map="z:x")
+
+    def test_cell_axis_map_rejects_duplicate_target_axes(self):
+        from airsspy.abacustools import cell_to_stru
+
+        cell = """\
+%BLOCK LATTICE_CART
+2.0 0.0 0.0
+0.0 3.0 0.0
+0.0 0.0 9.0
+%ENDBLOCK LATTICE_CART
+%BLOCK POSITIONS_FRAC
+Ga 0.10 0.20 0.30
+%ENDBLOCK POSITIONS_FRAC
+%BLOCK SPECIES_POT
+Ga Ga.UPF
+%ENDBLOCK SPECIES_POT
+"""
+
+        with pytest.raises(ValueError, match="Duplicate target axis"):
+            cell_to_stru(cell, cell_axis_map="x:y z:y")
+
 
 class TestParseAbacusStru:
     def test_stru_direct(self, tmp_path):
@@ -329,6 +395,38 @@ class TestParseAbacusStru:
         assert np.all(positions >= -0.01)
         assert np.all(positions <= 1.01)
 
+    def test_stru_cartesian_skew_cell_matches_row_vector_conversion(self, tmp_path):
+        from airsspy.abacustools import parse_abacus_stru
+
+        stru = tmp_path / "STRU"
+        stru.write_text(
+            """\
+ATOMIC_SPECIES
+Ga 69.723 Ga.UPF
+
+LATTICE_CONSTANT
+1.0
+
+LATTICE_VECTORS
+3.2459100000 0.0000000000 0.0000000000
+-0.2621630475 4.5544108663 0.0000000000
+-0.8895542149 -2.3255978880 5.9584787154
+
+ATOMIC_POSITIONS
+Cartesian
+
+Ga
+0.0
+1
+0.5392494814 -1.1326931555 3.5297265225 1 1 1
+"""
+        )
+
+        _, positions, cell = parse_abacus_stru(str(stru))
+        expected = np.array([[0.3328221, 0.0537855, 0.5923872]])
+        assert np.allclose(positions, expected, atol=1e-7)
+        assert np.allclose(positions @ cell, [[0.5392494814, -1.1326931555, 3.5297265225]])
+
     def test_stru_direct_positions(self, tmp_path):
         from airsspy.abacustools import parse_abacus_stru
 
@@ -351,7 +449,7 @@ class TestParseAbacusStru:
 def test_compose_abacus_task_doc(
     mock_detect, mock_parse_log, mock_parse_stru, mock_save, tmp_path, monkeypatch
 ):
-    from airsspy.abacustools import compose_abacus_task_doc
+    from airsspy.abacustools import GPA_TO_EV_PER_ANG3, compose_abacus_task_doc
 
     monkeypatch.chdir(tmp_path)
 
@@ -376,11 +474,91 @@ def test_compose_abacus_task_doc(
     out_dir.mkdir(parents=True)
     (out_dir / "STRU_ION_D").write_text("dummy")
     (workdir / "abacus_out").write_text("TOTAL  Time : 120.3")
+    (tmp_path / "test.INPUT").write_text("calculation cell-relax\npress1 50\npress2 50\npress3 50\n")
 
     doc = compose_abacus_task_doc("test")
 
     assert doc["energy"] == pytest.approx(-197.1286)
-    assert doc["pressure"] == pytest.approx(2.09)
+    assert doc["pressure"] == pytest.approx(5.0)
     assert doc["natoms"] == 2
     assert doc["total_time"] == pytest.approx(120.3)
+    info = mock_save.call_args.args[1]
+    assert info["P"] == pytest.approx(5.0)
+    assert info["H"] == pytest.approx(-197.1286 + 5.0 * 47.5648 * GPA_TO_EV_PER_ANG3)
     mock_save.assert_called_once()
+
+
+@patch("airsspy.restools.save_airss_res")
+@patch("airsspy.abacustools.parse_abacus_stru")
+@patch("airsspy.abacustools.parse_abacus_log")
+@patch("airsspy.abacustools.detect_logfile")
+def test_compose_abacus_task_doc_falls_back_to_logged_pressure(
+    mock_detect, mock_parse_log, mock_parse_stru, mock_save, tmp_path, monkeypatch
+):
+    from airsspy.abacustools import GPA_TO_EV_PER_ANG3, compose_abacus_task_doc
+
+    monkeypatch.chdir(tmp_path)
+
+    mock_detect.return_value = str(tmp_path / "test.abacus" / "OUT.ABACUS" / "running.log")
+    mock_parse_log.return_value = {
+        "energy": -197.1286,
+        "pressure": 2.09,
+        "volume": 47.5648,
+        "converged": True,
+        "scf_converged": True,
+        "n_ionic_steps": 2,
+    }
+    mock_parse_stru.return_value = (
+        ["Si", "Si"],
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.25, 0.25]]),
+        np.eye(3) * 5.43,
+    )
+
+    workdir = tmp_path / "test.abacus"
+    out_dir = workdir / "OUT.ABACUS"
+    out_dir.mkdir(parents=True)
+    (out_dir / "STRU_ION_D").write_text("dummy")
+
+    doc = compose_abacus_task_doc("test")
+
+    info = mock_save.call_args.args[1]
+    assert doc["pressure"] == pytest.approx(2.09)
+    assert info["P"] == pytest.approx(2.09)
+    assert info["H"] == pytest.approx(-197.1286 + 2.09 * 47.5648 * GPA_TO_EV_PER_ANG3)
+
+
+@patch("airsspy.abacustools.detect_logfile")
+def test_compose_abacus_task_doc_requires_log(mock_detect, tmp_path, monkeypatch):
+    from airsspy.abacustools import compose_abacus_task_doc
+
+    monkeypatch.chdir(tmp_path)
+    mock_detect.return_value = None
+
+    with pytest.raises(RuntimeError, match="ABACUS log file not found"):
+        compose_abacus_task_doc("test")
+
+    assert not (tmp_path / "test.res").exists()
+
+
+@patch("airsspy.abacustools.parse_abacus_log")
+@patch("airsspy.abacustools.detect_logfile")
+def test_compose_abacus_task_doc_rejects_unconverged_scf(
+    mock_detect, mock_parse_log, tmp_path, monkeypatch
+):
+    from airsspy.abacustools import compose_abacus_task_doc
+
+    monkeypatch.chdir(tmp_path)
+    mock_detect.return_value = str(tmp_path / "test.abacus" / "OUT.ABACUS" / "running.log")
+    mock_parse_log.return_value = {
+        "energy": -197.1286,
+        "pressure": 2.09,
+        "volume": 47.5648,
+        "converged": False,
+        "scf_converged": False,
+        "n_ionic_steps": 2,
+    }
+
+    with pytest.raises(RuntimeError, match="ABACUS SCF did not converge"):
+        compose_abacus_task_doc("test")
+
+    assert not (tmp_path / "test.res").exists()

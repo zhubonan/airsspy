@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 # Conversion constants
 BOHR_TO_ANG = 0.529177249
 BOHR3_TO_ANG3 = 0.148184743
-GPA_KBAR_TO_EV_PER_ANG3 = 0.006241510219780177
+GPA_TO_EV_PER_ANG3 = 0.006241510219780177
+GPA_KBAR_TO_EV_PER_ANG3 = GPA_TO_EV_PER_ANG3
 
 
 def parse_abacus_log(logfile: str) -> dict:
@@ -69,7 +70,9 @@ def parse_abacus_log(logfile: str) -> dict:
 
     # Pressure — use the last occurrence (final ionic step value)
     # LTS: #TOTAL-PRESSURE# (EXCLUDE KINETIC PART OF IONS): <val> GPa
-    matches = re.findall(r"#TOTAL-PRESSURE#.*?([-eE+0-9.]+)\s*GPa", content, re.IGNORECASE)
+    matches = re.findall(
+        r"#TOTAL-PRESSURE#.*?([-eE+0-9.]+)\s*GPa", content, re.IGNORECASE
+    )
     if matches:
         result["pressure"] = float(matches[-1])
     else:
@@ -103,7 +106,146 @@ def parse_abacus_log(logfile: str) -> dict:
     return result
 
 
-def cell_to_stru(cell_content: str) -> str:
+_AXES = {"x": 0, "y": 1, "z": 2}
+_VECTOR_INPUT_KEYS = {"kspacing", "press", "force", "stress"}
+
+
+def _axis_permutation(axis_map: Optional[str]) -> list[int]:
+    """Return old-axis indices ordered by new x,y,z axes."""
+    if axis_map is None or not str(axis_map).strip():
+        return [0, 1, 2]
+
+    text = str(axis_map).strip().lower()
+    if text in ("identity", "none"):
+        return [0, 1, 2]
+
+    mapping: dict[int, int] = {}
+    for item in text.replace(",", " ").split():
+        if ":" not in item:
+            raise ValueError(
+                "cell_axis_map entries must use old:new syntax, e.g. 'z:x'"
+            )
+        old, new = [part.strip() for part in item.split(":", 1)]
+        if old not in _AXES or new not in _AXES:
+            raise ValueError(f"Invalid axis in cell_axis_map entry: {item!r}")
+        new_axis = _AXES[new]
+        if new_axis in mapping:
+            raise ValueError(f"Duplicate target axis in cell_axis_map: {new!r}")
+        mapping[new_axis] = _AXES[old]
+
+    remaining_old = [axis for axis in range(3) if axis not in mapping.values()]
+    for new_axis in range(3):
+        if new_axis not in mapping:
+            mapping[new_axis] = remaining_old.pop(0)
+    perm = [mapping[i] for i in range(3)]
+    if sorted(perm) != [0, 1, 2]:
+        raise ValueError(f"cell_axis_map is not one-to-one: {axis_map!r}")
+    return perm
+
+
+def apply_cell_axis_map_to_cell_text(
+    cell_content: str,
+    cell_axis_map: Optional[str] = None,
+) -> str:
+    """Permute lattice and coordinates in CASTEP cell text.
+
+    The map uses ``old:new`` axis names.  For example ``z:x`` makes the old
+    AIRSS slab-normal/vacuum axis become the new ABACUS x axis, while the
+    unspecified old x/y axes fill new y/z in order.
+    """
+    perm = _axis_permutation(cell_axis_map)
+    if perm == [0, 1, 2]:
+        return cell_content
+    if any(
+        line.strip().upper().startswith("%BLOCK LATTICE_ABC")
+        for line in cell_content.splitlines()
+    ):
+        raise ValueError("cell_axis_map requires LATTICE_CART, not LATTICE_ABC")
+
+    lines = cell_content.splitlines()
+    out: list[str] = []
+    in_block: Optional[str] = None
+    lattice_rows: list[list[float]] = []
+
+    def _flush_lattice() -> None:
+        if not lattice_rows:
+            return
+        lattice = np.asarray(lattice_rows, dtype=float)
+        mapped = lattice[perm, :][:, perm]
+        for vec in mapped:
+            out.append("  " + "  ".join(f"{v:.10f}" for v in vec))
+        lattice_rows.clear()
+
+    for line in lines:
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("%BLOCK LATTICE_CART"):
+            in_block = "lattice_cart"
+            out.append(line)
+            continue
+        if upper.startswith("%BLOCK POSITIONS_FRAC"):
+            in_block = "positions_frac"
+            out.append(line)
+            continue
+        if upper.startswith("%BLOCK POSITIONS_ABS"):
+            in_block = "positions_abs"
+            out.append(line)
+            continue
+        if upper.startswith("%ENDBLOCK"):
+            if in_block == "lattice_cart":
+                _flush_lattice()
+            in_block = None
+            out.append(line)
+            continue
+
+        if in_block == "lattice_cart" and stripped and not stripped.startswith("#"):
+            lattice_rows.append([float(x) for x in line.split()[:3]])
+            continue
+        if in_block in ("positions_frac", "positions_abs") and stripped:
+            parts = line.split()
+            if len(parts) >= 4 and parts[0][0].isalpha():
+                coords = np.asarray([float(x) for x in parts[1:4]], dtype=float)[perm]
+                rest = " " + " ".join(parts[4:]) if len(parts) > 4 else ""
+                out.append(
+                    f"{parts[0]} {coords[0]:.10f} {coords[1]:.10f} {coords[2]:.10f}{rest}"
+                )
+                continue
+        out.append(line)
+    return "\n".join(out) + ("\n" if cell_content.endswith("\n") else "")
+
+
+def apply_cell_axis_map_to_abacus_input(
+    input_content: str,
+    cell_axis_map: Optional[str] = None,
+) -> str:
+    """Permute direction-vector ABACUS INPUT values to match a cell axis map."""
+    perm = _axis_permutation(cell_axis_map)
+    if perm == [0, 1, 2]:
+        return input_content
+
+    out: list[str] = []
+    for line in input_content.splitlines():
+        data, sep, comment = line.partition("#")
+        parts = data.split()
+        if len(parts) >= 4 and parts[0].lower() in _VECTOR_INPUT_KEYS:
+            try:
+                for value in parts[1:4]:
+                    float(value)
+            except ValueError:
+                out.append(line)
+                continue
+            mapped = [parts[1:4][old] for old in perm]
+            trailing = parts[4:]
+            new_data = " ".join([parts[0], *mapped, *trailing])
+            if sep:
+                new_data += " #" + comment
+            out.append(new_data)
+        else:
+            out.append(line)
+    return "\n".join(out) + ("\n" if input_content.endswith("\n") else "")
+
+
+def cell_to_stru(cell_content: str, cell_axis_map: Optional[str] = None) -> str:
     """Convert CASTEP .cell content to ABACUS STRU format.
 
     Parses the LATTICE_CART, POSITIONS_FRAC, and SPECIES_POT blocks
@@ -111,10 +253,12 @@ def cell_to_stru(cell_content: str) -> str:
 
     Args:
         cell_content: Content of the .cell file.
+        cell_axis_map: Optional ``old:new`` axis map applied before conversion.
 
     Returns:
         STRU file content as a string.
     """
+    cell_content = apply_cell_axis_map_to_cell_text(cell_content, cell_axis_map)
     lines = cell_content.splitlines()
 
     # Parse lattice (LATTICE_CART or LATTICE_ABC)
@@ -260,25 +404,100 @@ def cell_to_stru(cell_content: str) -> str:
 
 # Minimal atomic masses for ABACUS ATOMIC_SPECIES block
 _ATOMIC_MASSES = {
-    "H": 1.008, "He": 4.003, "Li": 6.941, "Be": 9.012, "B": 10.811,
-    "C": 12.011, "N": 14.007, "O": 15.999, "F": 18.998, "Ne": 20.180,
-    "Na": 22.990, "Mg": 24.305, "Al": 26.982, "Si": 28.086, "P": 30.974,
-    "S": 32.065, "Cl": 35.453, "Ar": 39.948, "K": 39.098, "Ca": 40.078,
-    "Sc": 44.956, "Ti": 47.867, "V": 50.942, "Cr": 51.996, "Mn": 54.938,
-    "Fe": 55.845, "Co": 58.933, "Ni": 58.693, "Cu": 63.546, "Zn": 65.380,
-    "Ga": 69.723, "Ge": 72.630, "As": 74.922, "Se": 78.971, "Br": 79.904,
-    "Kr": 83.798, "Rb": 85.468, "Sr": 87.620, "Y": 88.906, "Zr": 91.224,
-    "Nb": 92.906, "Mo": 95.950, "Tc": 98.000, "Ru": 101.070, "Rh": 102.906,
-    "Pd": 106.420, "Ag": 107.868, "Cd": 112.414, "In": 114.818, "Sn": 118.711,
-    "Sb": 121.760, "Te": 127.600, "I": 126.904, "Xe": 131.293, "Cs": 132.905,
-    "Ba": 137.327, "La": 138.905, "Ce": 140.116, "Pr": 140.908, "Nd": 144.242,
-    "Pm": 145.000, "Sm": 150.360, "Eu": 151.964, "Gd": 157.250, "Tb": 158.925,
-    "Dy": 162.500, "Ho": 164.930, "Er": 167.259, "Tm": 168.934, "Yb": 173.045,
-    "Lu": 174.967, "Hf": 178.490, "Ta": 180.948, "W": 183.840, "Re": 186.207,
-    "Os": 190.230, "Ir": 192.217, "Pt": 195.084, "Au": 196.967, "Hg": 200.590,
-    "Tl": 204.383, "Pb": 207.200, "Bi": 208.980, "Po": 209.000, "At": 210.000,
-    "Rn": 222.000, "Fr": 223.000, "Ra": 226.000, "Ac": 227.000, "Th": 232.038,
-    "Pa": 231.036, "U": 238.029, "Np": 237.000, "Pu": 244.000,
+    "H": 1.008,
+    "He": 4.003,
+    "Li": 6.941,
+    "Be": 9.012,
+    "B": 10.811,
+    "C": 12.011,
+    "N": 14.007,
+    "O": 15.999,
+    "F": 18.998,
+    "Ne": 20.180,
+    "Na": 22.990,
+    "Mg": 24.305,
+    "Al": 26.982,
+    "Si": 28.086,
+    "P": 30.974,
+    "S": 32.065,
+    "Cl": 35.453,
+    "Ar": 39.948,
+    "K": 39.098,
+    "Ca": 40.078,
+    "Sc": 44.956,
+    "Ti": 47.867,
+    "V": 50.942,
+    "Cr": 51.996,
+    "Mn": 54.938,
+    "Fe": 55.845,
+    "Co": 58.933,
+    "Ni": 58.693,
+    "Cu": 63.546,
+    "Zn": 65.380,
+    "Ga": 69.723,
+    "Ge": 72.630,
+    "As": 74.922,
+    "Se": 78.971,
+    "Br": 79.904,
+    "Kr": 83.798,
+    "Rb": 85.468,
+    "Sr": 87.620,
+    "Y": 88.906,
+    "Zr": 91.224,
+    "Nb": 92.906,
+    "Mo": 95.950,
+    "Tc": 98.000,
+    "Ru": 101.070,
+    "Rh": 102.906,
+    "Pd": 106.420,
+    "Ag": 107.868,
+    "Cd": 112.414,
+    "In": 114.818,
+    "Sn": 118.711,
+    "Sb": 121.760,
+    "Te": 127.600,
+    "I": 126.904,
+    "Xe": 131.293,
+    "Cs": 132.905,
+    "Ba": 137.327,
+    "La": 138.905,
+    "Ce": 140.116,
+    "Pr": 140.908,
+    "Nd": 144.242,
+    "Pm": 145.000,
+    "Sm": 150.360,
+    "Eu": 151.964,
+    "Gd": 157.250,
+    "Tb": 158.925,
+    "Dy": 162.500,
+    "Ho": 164.930,
+    "Er": 167.259,
+    "Tm": 168.934,
+    "Yb": 173.045,
+    "Lu": 174.967,
+    "Hf": 178.490,
+    "Ta": 180.948,
+    "W": 183.840,
+    "Re": 186.207,
+    "Os": 190.230,
+    "Ir": 192.217,
+    "Pt": 195.084,
+    "Au": 196.967,
+    "Hg": 200.590,
+    "Tl": 204.383,
+    "Pb": 207.200,
+    "Bi": 208.980,
+    "Po": 209.000,
+    "At": 210.000,
+    "Rn": 222.000,
+    "Fr": 223.000,
+    "Ra": 226.000,
+    "Ac": 227.000,
+    "Th": 232.038,
+    "Pa": 231.036,
+    "U": 238.029,
+    "Np": 237.000,
+    "Pu": 244.000,
 }
 
 
@@ -382,7 +601,7 @@ def parse_abacus_stru(stru_path: str):
     # Convert Cartesian to fractional if needed
     if coord_type.lower() == "cartesian" and lattice_vectors is not None:
         inv_cell = np.linalg.inv(lattice_vectors)
-        positions = positions @ inv_cell.T
+        positions = positions @ inv_cell
 
     return elements, positions, lattice_vectors
 
@@ -422,6 +641,36 @@ def detect_logfile(workdir: str, input_path: str) -> Optional[str]:
             return str(logs[-1])
 
     return None
+
+
+def _parse_external_pressure_gpa(input_path: str) -> Optional[float]:
+    """Parse hydrostatic external pressure from ABACUS INPUT press1/2/3.
+
+    ABACUS takes ``press1``, ``press2`` and ``press3`` in kbar.  The AIRSS
+    result line stores scalar pressure in GPa.
+    """
+    path = Path(input_path)
+    if not path.is_file():
+        return None
+
+    values: list[float] = []
+    with open(path) as fh:
+        for line in fh:
+            stripped = line.split("#", 1)[0].strip()
+            if not stripped:
+                continue
+            parts = stripped.split()
+            if len(parts) < 2:
+                continue
+            if parts[0].lower() in ("press1", "press2", "press3"):
+                try:
+                    values.append(float(parts[1]))
+                except ValueError:
+                    pass
+
+    if not values:
+        return None
+    return sum(values) / len(values) / 10.0
 
 
 def extract_abacus_rem(struct_name: str) -> dict:
@@ -466,7 +715,10 @@ def extract_abacus_rem(struct_name: str) -> dict:
             atom_type_orbital: list[str] = []
             for line in fh:
                 # Functional from pseudopotential section
-                if "exchange-correlation functional" in line and "functional" not in rem:
+                if (
+                    "exchange-correlation functional" in line
+                    and "functional" not in rem
+                ):
                     m = re.search(r"=\s*(\S+)", line)
                     if m:
                         rem["functional"] = "Functional " + m.group(1)
@@ -493,9 +745,7 @@ def extract_abacus_rem(struct_name: str) -> dict:
                     if "number of zeta" in line:
                         m = re.search(r"L=(\d+),\s*number of zeta\s*=\s*(\d+)", line)
                         if m and atom_type_orbital:
-                            atom_type_orbital.append(
-                                f"L{m.group(1)}-dz{m.group(2)}"
-                            )
+                            atom_type_orbital.append(f"L{m.group(1)}-dz{m.group(2)}")
                     if re.match(r"\s+number of atom", line) or (
                         "TOTAL ATOM NUMBER" in line
                     ):
@@ -574,22 +824,30 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
     Returns:
         Dictionary with energy, structure, volume, formula, etc.
     """
-    from ase import Atoms
-    from pymatgen.io.ase import AseAtomsAdaptor
-
-    from .restools import save_airss_res
-
     workdir = f"{struct_name}.abacus"
     input_path = f"{struct_name}.INPUT"
 
     # Detect and parse log file
     logfile = detect_logfile(workdir, input_path)
-    log_data = {}
-    if logfile:
-        log_data = parse_abacus_log(logfile)
+    if not logfile:
+        raise RuntimeError(
+            f"ABACUS log file not found for {struct_name}; refusing to collect result"
+        )
+    log_data = parse_abacus_log(logfile)
+    if not log_data.get("scf_converged", False):
+        raise RuntimeError(
+            f"ABACUS SCF did not converge for {struct_name}; refusing to collect result"
+        )
+
+    from ase import Atoms
+    from pymatgen.io.ase import AseAtomsAdaptor
+
+    from .restools import save_airss_res
 
     energy = log_data.get("energy")
-    pressure = log_data.get("pressure")
+    logged_pressure = log_data.get("pressure")
+    external_pressure = _parse_external_pressure_gpa(input_path)
+    pressure = external_pressure if external_pressure is not None else logged_pressure
     volume = log_data.get("volume")
 
     # Read relaxed structure from STRU_ION_D
@@ -611,7 +869,11 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
         import spglib
 
         sg = spglib.get_spacegroup(
-            (atoms.get_cell().array, atoms.get_scaled_positions(), atoms.get_atomic_numbers()),
+            (
+                atoms.get_cell().array,
+                atoms.get_scaled_positions(),
+                atoms.get_atomic_numbers(),
+            ),
             symprec=0.1,
         )
         sym = sg.split()[0] if sg else "P1"
@@ -621,7 +883,7 @@ def compose_abacus_task_doc(struct_name: str) -> dict:
     # Compute enthalpy for pressure results
     enthalpy = energy
     if energy is not None and pressure is not None and volume is not None:
-        enthalpy = energy + pressure * volume * GPA_KBAR_TO_EV_PER_ANG3
+        enthalpy = energy + pressure * volume * GPA_TO_EV_PER_ANG3
 
     # Build REM lines from ABACUS metadata
     rem_lines = build_abacus_rem_lines(struct_name)

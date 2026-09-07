@@ -7,6 +7,7 @@ This guide covers how to install airsspy and its dependencies.
 - Python 3.9 or later
 - pip or uv package manager
 - AIRSS buildcell executable (for structure generation)
+- Julia plus EDDPotentials.jl when using the native `--code eddp` backend
 
 ## Installing airsspy
 
@@ -47,12 +48,23 @@ airsspy has several optional dependency groups:
 - **`dev`**: Development and test tools (pytest, pytest-cov, ruff, mypy,
   pre-commit, twine)
 - **`ml`**: Optional machine-learning potential support through torch-sim-atomistic
+  for model specs such as `mace:medium` or explicit `torch-sim:mace:medium`
+- **`mace`**: Optional MACE ASE-calculator support for `ase:mace:<model>`
+- **`symmetrix`**: Optional MACE-side dependencies for the Symmetrix backend
+  selected with `ase:symmetrix:<full-mace-model-name>`
 - **`docs`**: Documentation building tools (Sphinx, themes, extensions)
+
+The Symmetrix ML backend is MACE-only and uses the external `symmetrix` Python
+package through ASE. Install the `symmetrix` extra when the package is available
+from your configured package index; otherwise install the local Symmetrix source
+checkout into the same environment.
 
 Install with optional dependencies:
 
 ```bash
 pip install "airsspy[ml]"
+pip install "airsspy[mace]"
+pip install "airsspy[symmetrix]"
 pip install "airsspy[docs]"
 ```
 
@@ -105,6 +117,20 @@ airsspy depends on:
 - **tabulate** and **tqdm** - CLI tables and progress display
 
 These are automatically installed when you install airsspy.
+
+### Native EDDP backend
+
+EDDP is a Julia-side backend and has no Python extra. Install and instantiate
+EDDPotentials.jl in Julia, then either pass its project directory on each run
+or set it once in the environment:
+
+```bash
+export AIRSSPY_EDDP_PROJECT=/path/to/EDDPotentials.jl
+ap run sp --cell structure.res --code eddp --calculator /path/to/model.json
+```
+
+The `julia` executable must be on `PATH`; alternatively supply a command with
+`--exe`, for example `--exe "/path/to/julia --startup-file=no"`.
 
 ## Verifying Installation
 
