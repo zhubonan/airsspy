@@ -320,9 +320,7 @@ def filter_by_formula(
     """
     if "," in formula:
         elements = {el.strip() for el in formula.split(",")}
-        return [
-            r for r in records if elements.issubset(r.species_counts.keys())
-        ]
+        return [r for r in records if elements.issubset(r.species_counts.keys())]
 
     from fnmatch import fnmatch
 
@@ -633,7 +631,9 @@ def _parse_res_fast(lines: list[str]) -> StructureRecord | None:
 # ---------------------------------------------------------------------------
 
 
-def _read_res_from_lines_iter(line_iter) -> list[StructureRecord]:
+def _read_res_from_lines_iter(
+    line_iter, keep_raw: bool = True
+) -> list[StructureRecord]:
     """Read concatenated RES structures from an iterable of lines."""
     records: list[StructureRecord] = []
     current: list[str] = []
@@ -645,6 +645,8 @@ def _read_res_from_lines_iter(line_iter) -> list[StructureRecord]:
             if current:
                 rec = _parse_res_fast(current)
                 if rec is not None:
+                    if not keep_raw:
+                        rec._raw_lines = []
                     records.append(rec)
             current = []
         else:
@@ -654,23 +656,25 @@ def _read_res_from_lines_iter(line_iter) -> list[StructureRecord]:
     if current:
         rec = _parse_res_fast(current)
         if rec is not None:
+            if not keep_raw:
+                rec._raw_lines = []
             records.append(rec)
 
     return records
 
 
-def read_res_stream(stream: TextIO) -> list[StructureRecord]:
+def read_res_stream(stream: TextIO, keep_raw: bool = True) -> list[StructureRecord]:
     """Read concatenated RES structures from a text stream (stdin or file)."""
-    records = _read_res_from_lines_iter(stream)
+    records = _read_res_from_lines_iter(stream, keep_raw=keep_raw)
     for rec in records:
         rec.source = "stdin"
     return records
 
 
-def read_res_file(path: str) -> list[StructureRecord]:
+def read_res_file(path: str, keep_raw: bool = True) -> list[StructureRecord]:
     """Read RES structures from a file (may be packed)."""
     with open(path) as fh:
-        records = _read_res_from_lines_iter(fh)
+        records = _read_res_from_lines_iter(fh, keep_raw=keep_raw)
     for rec in records:
         rec.source = path
     return records
@@ -776,15 +780,14 @@ def _compute_distance_fingerprint(
     neighbors = structure.get_all_neighbors(cutoff)
 
     if not zweight:
-        all_dists = [
-            float(n.nn_distance)
-            for nlist in neighbors
-            for n in nlist
-        ]
+        all_dists = [float(n.nn_distance) for nlist in neighbors for n in nlist]
     else:
         zmax = max(site.specie.Z for site in structure)
         all_dists = [
-            float(n.nn_distance * (1.0 + np.log10(zmax * zmax / (structure[i].specie.Z * n.specie.Z))))
+            float(
+                n.nn_distance
+                * (1.0 + np.log10(zmax * zmax / (structure[i].specie.Z * n.specie.Z)))
+            )
             for i, nlist in enumerate(neighbors)
             for n in nlist
         ]
@@ -1043,9 +1046,7 @@ def maxwell_construction(
         if verbose:
             logger.warning(msg)
         for el in missing:
-            fake_entry = PDEntry(
-                Composition(el), energy=0.0, name=f"{el} (ref)"
-            )
+            fake_entry = PDEntry(Composition(el), energy=0.0, name=f"{el} (ref)")
             fake_entries.append(fake_entry)
         entries.extend(fake_entries)
 
@@ -1147,9 +1148,7 @@ def prefilter_records(
         for rec in group:
             rel_h = rec.enthalpy_per_fu - min_h_per_fu
             rel_h_per_atom = (
-                rel_h * rec.n_formula_units / rec.natoms
-                if rec.natoms > 0
-                else 0.0
+                rel_h * rec.n_formula_units / rec.natoms if rec.natoms > 0 else 0.0
             )
             if rel_h_per_atom > ethresh:
                 continue
@@ -1237,9 +1236,7 @@ def prune_pathological_records(
             continue
 
         cutoff = median - sigma_factor * robust_sigma
-        formula_rejected = [
-            rec for rec in group if _enthalpy_per_atom(rec) < cutoff
-        ]
+        formula_rejected = [rec for rec in group if _enthalpy_per_atom(rec) < cutoff]
         rejected_ids.update(id(rec) for rec in formula_rejected)
 
         diagnostic.update(

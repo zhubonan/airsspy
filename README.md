@@ -112,6 +112,8 @@ The installed command is `ap`:
 ap --help
 ap check airss
 ap run search --seed Si --code castep --nmax 100 --pack
+ap run relax --cell "*.res" --code eddp --calculator /path/to/model.json \
+  --eddp-project /path/to/EDDPotentials.jl
 ap rank packed.res -t 20 -de 0.05
 ap convert packed.res structures.xyz
 ```

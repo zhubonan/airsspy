@@ -2,6 +2,8 @@
 CLI commands for deploying AIRSS searches and relaxations.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import click
@@ -13,6 +15,7 @@ SUFFIX_MAP = {
     "abacus": ".INPUT",
     "vasp": ".INCAR",
     "ml": None,
+    "eddp": None,
 }
 DEPLOY_CODES = tuple(code for code, suffix in SUFFIX_MAP.items() if suffix is not None)
 
@@ -219,9 +222,7 @@ def deploy_relax(
     elif code == "vasp" and "castep" in exe:
         exe = "vasp_std"
 
-    paraminput = (
-        Path(param).read_text() if code == "vasp" else _load_paraminput(param)
-    )
+    paraminput = Path(param).read_text() if code == "vasp" else _load_paraminput(param)
 
     cell_files = list(Path(".").glob(cell))
     if not cell_files:

@@ -7,14 +7,12 @@ from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io import read, write
 
 from airsspy.convert import (
-    _atoms_to_res_lines,
     _parse_res_forces,
     extract_structure,
     extxyz_to_res,
     res_to_extxyz,
 )
-from airsspy.restools import RESFile, _read_res, parse_titl
-
+from airsspy.restools import _read_res, parse_titl
 
 # ---------------------------------------------------------------------------
 # Sample data
@@ -98,6 +96,7 @@ class TestParseForces:
         assert len(forces) == 4
         assert forces[0] == pytest.approx([0.01, -0.02, 0.03])
         assert forces[1] == pytest.approx([-0.01, 0.02, -0.03])
+        assert _read_res(lines)["spins"] == []
 
     def test_with_spin_no_forces(self):
         lines = RES_WITH_SPIN.strip().splitlines()
@@ -144,6 +143,9 @@ class TestResToExtxyz:
         forces = atoms.get_forces()
         assert forces.shape == (4, 3)
         assert forces[0] == pytest.approx([0.01, -0.02, 0.03], abs=1e-4)
+        assert atoms.get_initial_magnetic_moments().tolist() == pytest.approx(
+            [0.0, 0.0, 0.0, 0.0]
+        )
 
     def test_with_spin(self, tmp_path):
         res_file = tmp_path / "test.res"
@@ -185,6 +187,17 @@ class TestResToExtxyz:
         assert len(atoms_list) == 2
         assert atoms_list[0].info["label"] == "Si-001"
         assert atoms_list[1].info["label"] == "Si-002"
+
+    def test_packed_without_final_end(self, tmp_path):
+        res_file = tmp_path / "packed.res"
+        xyz_file = tmp_path / "packed.xyz"
+        res_file.write_text(RES_BASIC.strip() + "\n" + RES_WITH_FORCES.replace("END\n", ""))
+
+        n = res_to_extxyz(res_file, xyz_file)
+
+        assert n == 2
+        atoms_list = read(str(xyz_file), index=":")
+        assert [atoms.info["label"] for atoms in atoms_list] == ["Si-001", "Si-002"]
 
     def test_rem_preserved(self, tmp_path):
         res_file = tmp_path / "test.res"
@@ -281,6 +294,9 @@ class TestExtxyzToRes:
 
         content = _read_single_res_from_dir(out_dir, "Si-001")
         lines = content.strip().splitlines()
+        atom_lines = [line.split() for line in lines if line.startswith("Si")]
+        assert all(len(tokens) == 10 for tokens in atom_lines)
+        assert all(float(tokens[6]) == pytest.approx(0.0) for tokens in atom_lines)
         forces = _parse_res_forces(lines)
         assert forces is not None
         assert len(forces) == 4
@@ -315,7 +331,7 @@ class TestExtxyzToRes:
         lines = content.strip().splitlines()
 
         # Parse TITL line — cryan expects standard format
-        titl_line = [l for l in lines if "TITL" in l][0]
+        titl_line = [line for line in lines if "TITL" in line][0]
         ti = parse_titl(titl_line)
         assert ti.label == "Si-001"
         assert ti.natoms == 4

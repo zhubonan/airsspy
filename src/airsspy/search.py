@@ -6,9 +6,9 @@ import math
 import random
 import re
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
-from itertools import product
+from itertools import combinations, product
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,16 @@ DEFAULT_FORMULA_REMOVE_DIRECTIVES = (
     "TARGVOL",
 )
 
+DEFAULT_ESTIMATE_REMOVE_DIRECTIVES = (
+    "NATOM",
+    "SPECIES",
+    "FORMULA",
+    "VARVOL",
+    "TARGVOL",
+    "MINSEP",
+    "NFORM",
+)
+
 
 @dataclass
 class FormulaSamplingOptions:
@@ -39,6 +49,12 @@ class FormulaSamplingOptions:
     formulas: Sequence[str] = ()
     elements: Sequence[str] = ()
     max_coeff: int = 6
+    # Atom-budget mode enumerates reduced formulas from all non-empty element
+    # subsets, rather than using the legacy rectangular coefficient grid.
+    max_num_atoms: int | None = None
+    # Optional arity weights. Arity is the number of distinct elements in a
+    # formula: 1=elemental, 2=binary, 3=ternary, etc.
+    composition_ratio: dict[int, float] = field(default_factory=dict)
     target_atom_volumes: dict[str, float] = field(default_factory=dict)
     oxidation_states: dict[str, Sequence[int]] = field(default_factory=dict)
     require_charge_neutral: bool = True
@@ -52,6 +68,15 @@ class FormulaSamplingContext:
     formulas: list[str]
     remove_directives: tuple[str, ...] = DEFAULT_FORMULA_REMOVE_DIRECTIVES
     varvol_by_formula: dict[str, float] = field(default_factory=dict)
+    composition_ratio: dict[int, float] | None = None
+
+    @property
+    def formula_counts_by_arity(self) -> dict[int, int]:
+        """Number of available formulas grouped by distinct element count."""
+        counts: Counter[int] = Counter()
+        for formula in self.formulas:
+            counts[_formula_arity(formula)] += 1
+        return dict(sorted(counts.items()))
 
     def sample(
         self,
@@ -61,8 +86,14 @@ class FormulaSamplingContext:
         """Return ``(new_seed_text, formula, varvol)`` for one sampled formula."""
         if not self.formulas:
             raise ValueError("No formulas are available for sampling")
+        formula_pool = self.formulas
+        if self.composition_ratio is not None:
+            # Composition-ratio sampling is intentionally two-stage: first
+            # choose elemental/binary/ternary/etc., then choose uniformly among
+            # the reduced formulas in that arity.
+            formula_pool = self._sample_formula_pool_by_arity(rng=rng)
         chooser = rng.choice if rng is not None else random.choice
-        formula = chooser(self.formulas)
+        formula = chooser(formula_pool)
         varvol = self.varvol_by_formula.get(formula)
         return (
             inject_formula_directive(
@@ -74,6 +105,28 @@ class FormulaSamplingContext:
             formula,
             varvol,
         )
+
+    def _sample_formula_pool_by_arity(
+        self,
+        rng: random.Random | None = None,
+    ) -> list[str]:
+        formulas_by_arity: dict[int, list[str]] = {}
+        for formula in self.formulas:
+            formulas_by_arity.setdefault(_formula_arity(formula), []).append(formula)
+
+        arities: list[int] = []
+        weights: list[float] = []
+        for arity in sorted(formulas_by_arity):
+            weight = float((self.composition_ratio or {}).get(arity, 0.0))
+            if weight > 0.0:
+                arities.append(arity)
+                weights.append(weight)
+        if not arities:
+            raise ValueError("No formulas are available for composition-ratio sampling")
+
+        chooser = rng.choices if rng is not None else random.choices
+        selected_arity = chooser(arities, weights=weights, k=1)[0]
+        return formulas_by_arity[selected_arity]
 
 
 @dataclass
@@ -152,6 +205,44 @@ def inject_formula_directive(
     return "\n".join(lines)
 
 
+def remove_buildcell_directives(
+    seed_text: str,
+    remove_directives: Sequence[str],
+) -> str:
+    """Return seed text without selected ``#KEY=`` directives."""
+    remove_patterns = [
+        re.compile(rf"^\s*#{re.escape(key)}\s*=", re.IGNORECASE)
+        for key in remove_directives
+    ]
+    return "\n".join(
+        line
+        for line in seed_text.splitlines()
+        if not any(pattern.search(line) for pattern in remove_patterns)
+    )
+
+
+def inject_buildcell_estimate_directives(
+    seed_text: str,
+    *,
+    formula: str,
+    varvol: float,
+    minsep: dict[str, tuple[float, float] | float],
+    nform: str | dict[str, list[int]] | int,
+    remove_directives: Sequence[str] = DEFAULT_ESTIMATE_REMOVE_DIRECTIVES,
+) -> str:
+    """Inject formula, volume, minsep, and nform directives into seed text."""
+    filtered = remove_buildcell_directives(seed_text, remove_directives).splitlines()
+
+    lines = [
+        f"#FORMULA={canonicalize_formula(formula)}",
+        f"#VARVOL={_format_seed_number(varvol)}",
+        _format_minsep_directive(minsep),
+        f"#NFORM={_format_nform_value(nform)}",
+    ]
+    lines.extend(filtered)
+    return "\n".join(lines)
+
+
 def build_formula_sampling_context(
     options: FormulaSamplingOptions,
     seed_text: str | None = None,
@@ -164,10 +255,19 @@ def build_formula_sampling_context(
     varvol_by_formula = (
         _build_varvol_map(formulas, target_volumes) if target_volumes else {}
     )
+    composition_ratio = _resolve_composition_ratio(
+        formulas,
+        options.composition_ratio,
+        # Default flat arity sampling only applies when --max-num-atoms was
+        # actually used to enumerate formulas. Explicit --formula lists should
+        # remain plain formula-uniform unless the user gives a ratio.
+        default_flat=options.max_num_atoms is not None and not options.formulas,
+    )
     return FormulaSamplingContext(
         formulas=formulas,
         remove_directives=tuple(options.remove_directives),
         varvol_by_formula=varvol_by_formula,
+        composition_ratio=composition_ratio,
     )
 
 
@@ -357,19 +457,49 @@ def _format_seed_number(value: float) -> str:
     return str(value)
 
 
+def _format_minsep_directive(
+    minsep: dict[str, tuple[float, float] | float],
+) -> str:
+    tokens = ["#MINSEP=0.5-1"]
+    for pair_key in sorted(minsep):
+        value = minsep[pair_key]
+        if isinstance(value, tuple):
+            rendered = "-".join(_format_seed_number(item) for item in value)
+        else:
+            rendered = _format_seed_number(value)
+        tokens.append(f"{pair_key}={rendered}")
+    return " ".join(tokens)
+
+
+def _format_nform_value(nform: str | dict[str, list[int]] | int) -> str:
+    if isinstance(nform, dict):
+        if list(nform.keys()) != ["random"]:
+            raise ValueError("NFORM dict value must have a single key 'random'")
+        return "{" + ",".join(str(int(value)) for value in nform["random"]) + "}"
+    return str(nform)
+
+
 def _resolve_formula_pool(
     options: FormulaSamplingOptions,
     seed_text: str | None = None,
 ) -> list[str]:
     if options.max_coeff < 1:
         raise ValueError("max_coeff must be >= 1")
+    if options.max_num_atoms is not None and options.max_num_atoms < 1:
+        raise ValueError("max_num_atoms must be >= 1")
 
     if options.formulas:
         formulas = _canonical_formula_list(options.formulas)
     else:
         if not options.elements:
             raise ValueError("Either formulas or elements must be provided")
-        formulas = _enumerate_reduced_formulas(options.elements, options.max_coeff)
+        if options.max_num_atoms is None:
+            formulas = _enumerate_reduced_formulas(options.elements, options.max_coeff)
+        else:
+            formulas = _enumerate_reduced_formulas_by_atom_budget(
+                options.elements,
+                options.max_num_atoms,
+            )
 
     if options.elements:
         allowed = set(options.elements)
@@ -422,6 +552,70 @@ def _enumerate_reduced_formulas(elements: Sequence[str], max_coeff: int) -> list
         }
         formulas.add(Composition(parts).reduced_formula)
     return sorted(formulas)
+
+
+def _enumerate_reduced_formulas_by_atom_budget(
+    elements: Sequence[str],
+    max_num_atoms: int,
+) -> list[str]:
+    clean_elements = [str(element) for element in elements]
+    formulas: set[str] = set()
+    for arity in range(1, len(clean_elements) + 1):
+        # Include every element subset so --elements A,B,C covers elemental,
+        # binary, and ternary spaces rather than requiring all three elements.
+        for subset in combinations(clean_elements, arity):
+            for total_atoms in range(arity, max_num_atoms + 1):
+                for coeffs in _positive_integer_compositions(total_atoms, arity):
+                    parts = dict(zip(subset, coeffs))
+                    # Store only reduced formulas so AB, A2B2, and A3B3 do not
+                    # become three separate sampling opportunities.
+                    formulas.add(Composition(parts).reduced_formula)
+    return sorted(formulas)
+
+
+def _positive_integer_compositions(
+    total: int, length: int
+) -> Iterator[tuple[int, ...]]:
+    """Yield ordered positive integer compositions of ``total``."""
+    if length == 1:
+        yield (total,)
+        return
+    for value in range(1, total - length + 2):
+        for tail in _positive_integer_compositions(total - value, length - 1):
+            yield (value, *tail)
+
+
+def _formula_arity(formula: str) -> int:
+    return len(Composition(formula).as_dict())
+
+
+def _resolve_composition_ratio(
+    formulas: Sequence[str],
+    composition_ratio: dict[int, float],
+    *,
+    default_flat: bool,
+) -> dict[int, float] | None:
+    available_arities = {_formula_arity(formula) for formula in formulas}
+    if not composition_ratio and not default_flat:
+        return None
+
+    if not composition_ratio:
+        # A flat map means "sample each available arity equally"; the actual
+        # normalization happens in random.choices.
+        return dict.fromkeys(sorted(available_arities), 1.0)
+
+    parsed = {int(arity): float(weight) for arity, weight in composition_ratio.items()}
+    if any(arity < 1 for arity in parsed):
+        raise ValueError("composition ratio arities must be >= 1")
+    if any(not math.isfinite(weight) or weight < 0.0 for weight in parsed.values()):
+        raise ValueError("composition ratio weights must be finite and >= 0")
+    if not any(weight > 0.0 for weight in parsed.values()):
+        raise ValueError("composition ratio must contain at least one positive weight")
+    if not any(
+        weight > 0.0 and arity in available_arities for arity, weight in parsed.items()
+    ):
+        raise ValueError("composition ratio does not match any available formulas")
+    return parsed
 
 
 def _extract_seed_constraints(seed_text: str) -> dict[str, tuple[int, int] | None]:

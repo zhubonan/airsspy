@@ -22,7 +22,9 @@ class SCFInfo:
     SCF_LINE = re.compile(
         r"^ +([0-9]+) +([+-.E0-9]+) +([+-.E0-9]+) +([+-.E0-9]+) +([.0-9]+) +<-- SCF"
     )
-    ScfData = namedtuple("ScfData", ["loops", "energies", "fermi_energies", "gains", "timers"])
+    ScfData = namedtuple(
+        "ScfData", ["loops", "energies", "fermi_energies", "gains", "timers"]
+    )
 
     def __init__(self, castep_file: str) -> None:
         """
@@ -130,9 +132,7 @@ class SCFInfo:
             "total_time": sum(conv_data["durations"]),
         }
 
-    def plot_scf(
-        self, scf_no: int, xaxis: str = "loops", show: bool = True
-    ):
+    def plot_scf(self, scf_no: int, xaxis: str = "loops", show: bool = True):
         """
         Plot SCF convergence for a single geometry step.
 

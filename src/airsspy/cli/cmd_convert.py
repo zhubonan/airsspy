@@ -53,19 +53,22 @@ def convert(input_path, output_path, label):
         else:
             # packed .res → unpacked .res files (just split)
             out.mkdir(parents=True, exist_ok=True)
-            from airsspy.restools import RESFile
+            from airsspy.restools import RESFile, iter_res_blocks
 
-            # Reload with structures for full line preservation
-            res_full = RESFile.from_packed(str(inp), include_structure=True)
-            for res in res_full:
-                lbl = res.label or "Unknown"
-                safe = lbl.replace("/", "_").replace(" ", "_")
-                raw = res.lines
-                lines = [ln.rstrip("\n") for ln in raw] if raw else res.to_res_lines()
-                if lines and not lines[-1].strip().startswith("END"):
-                    lines.append("END")
-                (out / f"{safe}.res").write_text("\n".join(lines) + "\n")
-            click.echo(f"Unpacked {len(res_full)} structures to {out}/", err=True)
+            count = 0
+            with open(inp) as stream:
+                for lines in iter_res_blocks(stream):
+                    res = RESFile.from_lines(
+                        lines, include_structure=False, only_titl=True
+                    )
+                    lbl = res.label or f"struct_{count:04d}"
+                    safe = lbl.replace("/", "_").replace(" ", "_")
+                    raw_lines = [line.rstrip("\n") for line in lines]
+                    if raw_lines and not raw_lines[-1].strip().startswith("END"):
+                        raw_lines.append("END")
+                    (out / f"{safe}.res").write_text("\n".join(raw_lines) + "\n")
+                    count += 1
+            click.echo(f"Unpacked {count} structures to {out}/", err=True)
     else:
         # extxyz → unpacked .res files
         out.mkdir(parents=True, exist_ok=True)

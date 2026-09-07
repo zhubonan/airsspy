@@ -72,29 +72,33 @@ def read_ca(lines: list[str]) -> pd.DataFrame:
             continue
         # If has spin (10 tokens per line)
         if ntokens == 10:
-            records.append({
-                "label": tokens[0],
-                "press": float(tokens[1]),
-                "volume": float(tokens[2]),
-                "H": float(tokens[3]),
-                "spin": float(tokens[4]),
-                "aspin": float(tokens[5]),
-                "nform": int(tokens[6]),
-                "formula": tokens[7],
-                "symm": tokens[8],
-                "nseen": int(tokens[9]),
-            })
+            records.append(
+                {
+                    "label": tokens[0],
+                    "press": float(tokens[1]),
+                    "volume": float(tokens[2]),
+                    "H": float(tokens[3]),
+                    "spin": float(tokens[4]),
+                    "aspin": float(tokens[5]),
+                    "nform": int(tokens[6]),
+                    "formula": tokens[7],
+                    "symm": tokens[8],
+                    "nseen": int(tokens[9]),
+                }
+            )
         else:
-            records.append({
-                "label": tokens[0],
-                "press": float(tokens[1]),
-                "volume": float(tokens[2]),
-                "H": float(tokens[3]),
-                "nform": int(tokens[4]),
-                "formula": tokens[5],
-                "symm": tokens[6],
-                "nseen": int(tokens[7]),
-            })
+            records.append(
+                {
+                    "label": tokens[0],
+                    "press": float(tokens[1]),
+                    "volume": float(tokens[2]),
+                    "H": float(tokens[3]),
+                    "nform": int(tokens[4]),
+                    "formula": tokens[5],
+                    "symm": tokens[6],
+                    "nseen": int(tokens[7]),
+                }
+            )
 
     dataframe = pd.DataFrame.from_records(records)
 
@@ -203,7 +207,9 @@ def get_minsep_range(
     Returns:
         A dictionary mapping species pairs to [min, max] ranges.
     """
-    base: dict[str, list[float]] = {key: [value, value] for key, value in minseps[0].items()}
+    base: dict[str, list[float]] = {
+        key: [value, value] for key, value in minseps[0].items()
+    }
     for minsep in minseps:
         for key, value in minsep.items():
             if key in base:
@@ -295,10 +301,14 @@ def export_dataframe_as_res(
             relaxed,
             {
                 "enthalpy": row["energy_per_atom"] * len(relaxed.sites),
-                "volume": row.get("volume_per_fu", relaxed.volume) * row.get("nform_refine", 1),
-                "pressure": 0.0 if stress_key is None or stress_key not in row.index else row[stress_key],
+                "volume": row.get("volume_per_fu", relaxed.volume)
+                * row.get("nform_refine", 1),
+                "pressure": 0.0
+                if stress_key is None or stress_key not in row.index
+                else row[stress_key],
                 "label": row["label"],
-                "rem": comments + [f"{key} = {row[key]}" for key in row.index if "struct" not in key],
+                "rem": comments
+                + [f"{key} = {row[key]}" for key in row.index if "struct" not in key],
             },
         )
         content = "\n".join(res.to_res_lines())

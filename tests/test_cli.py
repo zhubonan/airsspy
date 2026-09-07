@@ -1,9 +1,13 @@
 """Tests for CLI commands."""
 
+from __future__ import annotations
+
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ase import Atoms
+from ase.io import write
 from click.testing import CliRunner
 
 from airsspy.cli import cmd_run
@@ -230,6 +234,48 @@ def test_rank_from_file(tmp_path):
     assert "Si-001" in result.output
 
 
+def test_rank_res_file_drops_raw_lines_when_not_merging(tmp_path, monkeypatch):
+    """Plain ranking avoids retaining full RES blocks in memory."""
+    from airsspy.ranking import read_res_file as real_read_res_file
+
+    seen_keep_raw = []
+
+    def fake_read_res_file(path, keep_raw=True):
+        seen_keep_raw.append(keep_raw)
+        return real_read_res_file(path, keep_raw=keep_raw)
+
+    monkeypatch.setattr("airsspy.ranking.read_res_file", fake_read_res_file)
+    res_file = tmp_path / "test.res"
+    res_file.write_text(_single_atom_res("Si-001", -1.0))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rank", str(res_file)])
+
+    assert result.exit_code == 0
+    assert seen_keep_raw == [False]
+
+
+def test_rank_keeps_raw_lines_for_unite(tmp_path, monkeypatch):
+    """Fingerprint merging still keeps raw RES blocks."""
+    from airsspy.ranking import read_res_file as real_read_res_file
+
+    seen_keep_raw = []
+
+    def fake_read_res_file(path, keep_raw=True):
+        seen_keep_raw.append(keep_raw)
+        return real_read_res_file(path, keep_raw=keep_raw)
+
+    monkeypatch.setattr("airsspy.ranking.read_res_file", fake_read_res_file)
+    res_file = tmp_path / "test.res"
+    res_file.write_text(_single_atom_res("Si-001", -1.0))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rank", "-u", "0.1", str(res_file)])
+
+    assert result.exit_code == 0
+    assert seen_keep_raw == [True]
+
+
 def test_rank_summary_mode():
     """Test -s summary flag."""
     runner = CliRunner()
@@ -418,7 +464,10 @@ def test_rank_cryan_species_and_ions_filters():
 
 def test_rank_pathological_prune_hides_rejected_from_stdout():
     """Test trimmed-MAD pathological pruning filters rank output."""
-    runner = CliRunner()
+    try:
+        runner = CliRunner(mix_stderr=False)
+    except TypeError:
+        runner = CliRunner()
     packed_res = "".join(
         [
             _single_atom_res("Si-pathological", -10.0),
@@ -465,7 +514,8 @@ def test_rank_pathological_prune_absent_keeps_existing_output():
 
     assert result.exit_code == 0
     assert "Si-pathological" in result.stdout
-    assert "Pathological prune" not in result.stderr
+    stderr = result.stderr if result.stderr_bytes is not None else ""
+    assert "Pathological prune" not in stderr
 
 
 def test_rank_maxwell_collapses_duplicate_compositions():
@@ -669,6 +719,24 @@ def test_convert_extract_by_label(tmp_path):
     assert "Si-001" not in content
 
 
+def test_convert_res_to_res_directory_handles_missing_final_end(tmp_path):
+    """RES directory conversion splits raw blocks without full structure parsing."""
+    runner = CliRunner()
+    packed = tmp_path / "packed.res"
+    out_dir = tmp_path / "res_out"
+    packed.write_text(
+        _single_atom_res("Si-001", -1.0)
+        + _single_atom_res("Si-002", -2.0).replace("END\n", "")
+    )
+
+    result = runner.invoke(cli, ["convert", str(packed), str(out_dir)])
+
+    assert result.exit_code == 0
+    assert "Unpacked 2 structures" in result.output
+    assert (out_dir / "Si-001.res").exists()
+    assert (out_dir / "Si-002.res").read_text().rstrip().endswith("END")
+
+
 def test_convert_extract_not_found(tmp_path):
     """Test extracting a nonexistent label."""
     runner = CliRunner()
@@ -716,6 +784,43 @@ def test_convert_xyz_to_res(tmp_path):
     assert (out_dir / "Si-test.res").exists()
 
 
+def test_pack_and_unpack_res_roundtrip(tmp_path):
+    runner = CliRunner()
+    src_dir = tmp_path / "src"
+    out_dir = tmp_path / "out"
+    src_dir.mkdir()
+    (src_dir / "a.res").write_text(_single_atom_res("Si-001", -1.0))
+    (src_dir / "b.res").write_text(_single_atom_res("Si-002", -2.0).rstrip("\n"))
+    packed = tmp_path / "packed.res"
+
+    pack_result = runner.invoke(cli, ["pack", "--from-dir", str(src_dir), str(packed)])
+    unpack_result = runner.invoke(cli, ["unpack", str(packed), str(out_dir)])
+
+    assert pack_result.exit_code == 0
+    assert unpack_result.exit_code == 0
+    assert (out_dir / "Si-001.res").exists()
+    assert (out_dir / "Si-002.res").exists()
+
+
+def test_unpack_extxyz_writes_each_structure(tmp_path):
+    from ase.io import write
+
+    runner = CliRunner()
+    xyz = tmp_path / "packed.xyz"
+    out_dir = tmp_path / "xyz_out"
+    atoms_a = Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True)
+    atoms_a.info["label"] = "Si-a"
+    atoms_b = Atoms("Si", positions=[[0, 0, 0]], cell=[3, 3, 3], pbc=True)
+    atoms_b.info["label"] = "Si-b"
+    write(str(xyz), [atoms_a, atoms_b], format="extxyz")
+
+    result = runner.invoke(cli, ["unpack", str(xyz), str(out_dir)])
+
+    assert result.exit_code == 0
+    assert (out_dir / "Si-a.xyz").exists()
+    assert (out_dir / "Si-b.xyz").exists()
+
+
 def test_run_help():
     """Test 'run --help'."""
     runner = CliRunner()
@@ -724,6 +829,17 @@ def test_run_help():
     assert "search" in result.output
     assert "relax" in result.output
     assert "crud" in result.output
+
+
+def test_all_run_workflows_expose_the_complete_backend_matrix():
+    """Search, relax, CRUD, and SP share the same complete backend choices."""
+    runner = CliRunner()
+    expected = "castep|gulp|pp3|abacus|vasp|ml"
+
+    for command in ("search", "relax", "crud", "sp"):
+        result = runner.invoke(cli, ["run", command, "--help"])
+        assert result.exit_code == 0
+        assert expected in result.output.replace("\n", "")
 
 
 def test_run_search_help():
@@ -738,9 +854,108 @@ def test_run_search_help():
     assert "--formula" in result.output
     assert "--elements" in result.output
     assert "--max-coeff" in result.output
+    assert "--max-num-atoms" in result.output
+    assert "--composition-ratio" in result.output
     assert "--oxidation-state" in result.output
+    assert "--volume-minsep-source" in result.output
     assert "--formula-elements" not in result.output
     assert "--prune" in result.output
+    assert "--cell-axis-map" in result.output
+    assert "--calculator" in result.output
+    assert "--device" in result.output
+
+
+def test_run_search_ml_uses_default_torchsim_driver():
+    """Random search can relax generated cells through the default ML driver."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n#NATOM=1\n")
+        Path("Si-001.cell").write_text(
+            "%BLOCK LATTICE_CART\n"
+            "3 0 0\n0 3 0\n0 0 3\n"
+            "%ENDBLOCK LATTICE_CART\n"
+            "%BLOCK POSITIONS_ABS\n"
+            "Si 0 0 0\n"
+            "%ENDBLOCK POSITIONS_ABS\n"
+        )
+        fake_torchsim = MagicMock()
+        fake_torchsim.relax_batch.return_value = {"Si-001": 0}
+        build_result = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": Path("Si-001.cell").read_text(),
+        }
+        with patch("airsspy.jf.runners.run_buildcell", return_value=build_result):
+            with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
+                with patch(
+                    "airsspy.jf.ml_runners.TorchSimRunner",
+                    return_value=fake_torchsim,
+                ) as torchsim_cls:
+                    with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                        result = runner.invoke(
+                            cli,
+                            [
+                                "run",
+                                "search",
+                                "--seed",
+                                "Si",
+                                "--nmax",
+                                "1",
+                                "--code",
+                                "ml",
+                                "--calculator",
+                                "mace:medium",
+                                "--device",
+                                "cpu",
+                            ],
+                        )
+
+    assert result.exit_code == 0
+    torchsim_cls.assert_called_once_with("mace:medium", device="cpu")
+    fake_torchsim.relax_batch.assert_called_once()
+    assert fake_torchsim.relax_batch.call_args.args[0] == ["Si-001"]
+    collect.assert_called_once_with(
+        "Si-001", "ml", calculator_spec="mace:medium"
+    )
+
+
+def test_run_search_ml_supports_explicit_ase_driver():
+    """Random search routes explicit ASE calculator specs through the ASE runner."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("#SPECIES=Si\n#NATOM=1\n")
+        Path("Si-001.cell").write_text("cell content\n")
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        build_result = {
+            "struct_name": "Si-001",
+            "seed_name": "Si",
+            "struct_content": "cell content\n",
+        }
+        with patch("airsspy.jf.runners.run_buildcell", return_value=build_result):
+            with patch(
+                "airsspy.cli.cmd_run._create_runner", return_value=fake_runner
+            ) as create:
+                with patch("airsspy.cli.cmd_run._collect_result"):
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "search",
+                            "--seed",
+                            "Si",
+                            "--nmax",
+                            "1",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "ase:my.module:Calculator",
+                        ],
+                    )
+
+    assert result.exit_code == 0
+    assert create.call_args.kwargs["calculator_spec"] == "ase:my.module:Calculator"
+    fake_runner.run.assert_called_once_with("Si-001", "cell content\n")
 
 
 def test_run_crud_help():
@@ -963,6 +1178,21 @@ def test_create_runner_passes_max_iterations_to_vasp():
     )
 
 
+def test_create_sp_runner_supports_gulp_and_pp3():
+    """The SP factory constructs native no-relax runners for both engines."""
+    from airsspy.jf.runners import (
+        AirssGulpSinglePointRunner,
+        AirssPp3SinglePointRunner,
+    )
+
+    gulp = cmd_run._create_sp_runner("gulp", "ggulp", pressure=4.0)
+    pp3 = cmd_run._create_sp_runner("pp3", "pp3")
+
+    assert isinstance(gulp, AirssGulpSinglePointRunner)
+    assert gulp.pressure == 4.0
+    assert isinstance(pp3, AirssPp3SinglePointRunner)
+
+
 def test_run_crud_ml_torchsim_batches_claimed_jobs():
     """CRUD ML supports the same torch-sim model path as run relax."""
     runner = CliRunner()
@@ -1107,17 +1337,49 @@ def test_run_crud_singlepoint_uses_sp_runner():
 
 
 def test_ml_model_backend_resolution():
-    """ML model specs default to torch-sim and use ase: for ASE fallback."""
+    """ML model specs default to torch-sim and use ase: for the ASE driver."""
     assert cmd_run._is_torchsim_model("mace:medium")
+    assert cmd_run._is_torchsim_model("torch-sim:mace:medium")
     assert not cmd_run._is_torchsim_model("ase:mace:medium")
+    assert cmd_run._is_symmetrix_model("symmetrix:mace:medium")
+    assert cmd_run._is_symmetrix_model("ase:symmetrics:medium")
+    assert cmd_run._is_symmetrix_model("ase:symmetrix:medium")
+    assert not cmd_run._is_torchsim_model("symmetrix:mace:medium")
+    assert not cmd_run._is_torchsim_model("ase:symmetrics:medium")
     assert (
         cmd_run._normalize_ml_ase_spec("ase:mace:medium")
         == "mace.calculators:MACECalculator@medium"
     )
     assert (
+        cmd_run._normalize_ml_ase_spec("symmetrix:mace:medium")
+        == "symmetrix:Symmetrix@medium"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:symmetrics:MACE-MH-1:matpes_r2scan")
+        == "symmetrix:Symmetrix@MACE-MH-1:matpes_r2scan"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:symmetrix:medium-mpa-0")
+        == "symmetrix:Symmetrix@medium-mpa-0"
+    )
+    assert (
+        cmd_run._normalize_ml_ase_spec("ase:symmetrix:Symmetrix@mh-1")
+        == "symmetrix:Symmetrix@mh-1"
+    )
+    assert (
         cmd_run._normalize_ml_ase_spec("ase:my.module:Calc@model")
         == "my.module:Calc@model"
     )
+
+
+def test_symmetrix_rejects_non_mace_models():
+    """Symmetrix backend is intentionally limited to MACE models."""
+    try:
+        cmd_run._normalize_ml_ase_spec("symmetrix:sevennet:sevennet-mf-ompa")
+    except ValueError as exc:
+        assert "ase:symmetrix:<mace-model>" in str(exc)
+    else:
+        raise AssertionError("Expected Symmetrix non-MACE model to fail")
 
 
 def test_plain_ml_model_fails_clearly_without_torchsim():
@@ -1152,8 +1414,117 @@ def test_plain_ml_model_fails_clearly_without_torchsim():
         assert "torch-sim is required" in result.output
 
 
+def test_run_relax_ase_symmetrics_uses_ase_runner_without_torchsim():
+    """Symmetrix MACE specs use ASE runner routing, not torch-sim batching."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "relax",
+                            "--cell",
+                            "*.res",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "ase:symmetrics:medium-mpa-0",
+                            "--keep",
+                        ],
+                    )
+
+        assert result.exit_code == 0
+        fake_runner.run.assert_called_once()
+        collect.assert_called_once()
+
+
+def test_run_sp_symmetrix_uses_ase_runner_without_torchsim():
+    """Symmetrix MACE single-points use the normal ML SP runner path."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "sp",
+                            "--cell",
+                            "*.res",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "symmetrix:mace:medium",
+                        ],
+                    )
+
+    assert result.exit_code == 0
+    fake_runner.run.assert_called_once()
+    collect.assert_called_once()
+
+
+def test_run_crud_symmetrix_uses_ase_runner_without_torchsim():
+    """Symmetrix MACE CRUD work is handled by the non-batch ML runner."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("hopper").mkdir()
+        Path("hopper/LiTaOCl-001.res").write_text(
+            "TITL LiTaOCl-001 0.000 125.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 5.000000 5.000000 5.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch("airsspy.jf.ml_runners.has_torchsim", return_value=False):
+            with patch("airsspy.cli.cmd_run._create_task_runner", return_value=fake_runner):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "crud",
+                            "--code",
+                            "ml",
+                            "--calculator",
+                            "symmetrix:mace:medium",
+                        ],
+                    )
+
+    assert result.exit_code == 0
+    fake_runner.run.assert_called_once()
+    collect.assert_called_once()
+
+
 def test_run_relax_accepts_res_input_for_ase_ml():
-    """Explicit ase: model uses ASE fallback with in-memory RES parsing."""
+    """Explicit ase: model uses the ASE driver with in-memory RES parsing."""
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path("LiTaOCl.cell").write_text("kpoints_mp_grid : 1 1 1\n")
@@ -1217,12 +1588,12 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
 
         fake_torchsim = MagicMock()
         fake_torchsim.relax_batch.side_effect = fake_batch
-        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+        with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
             with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
                 with patch(
                     "airsspy.jf.ml_runners.TorchSimRunner",
                     return_value=fake_torchsim,
-                ):
+                ) as torchsim_cls:
                     with patch("airsspy.cli.cmd_run._collect_result") as collect:
                         result = runner.invoke(
                             cli,
@@ -1234,7 +1605,7 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
                                 "--code",
                                 "ml",
                                 "--calculator",
-                                "mace:medium-mpa-0",
+                                "torch-sim:mace:medium-mpa-0",
                                 "--device",
                                 "cuda",
                                 "--keep",
@@ -1242,6 +1613,9 @@ def test_run_relax_torchsim_res_input_passes_device_without_cell_side_effect():
                         )
 
         assert result.exit_code == 0
+        torchsim_cls.assert_called_once_with(
+            "torch-sim:mace:medium-mpa-0", device="cuda"
+        )
         assert not Path("LiTaOCl-001.cell").exists()
         assert fake_torchsim.relax_batch.call_count == 1
         assert captured["args"][0] == ["LiTaOCl-001"]
@@ -1273,11 +1647,11 @@ def test_run_relax_torchsim_chunks_and_skips_packed_res():
 
         def fake_batch(names, structures, **kwargs):
             calls.append((names, structures, kwargs))
-            return {name: 0 for name in names}
+            return dict.fromkeys(names, 0)
 
         fake_torchsim = MagicMock()
         fake_torchsim.relax_batch.side_effect = fake_batch
-        with patch("airsspy.cli.cmd_run._is_torchsim_model", return_value=True):
+        with patch("airsspy.cli.cmd_run._ensure_torchsim_available"):
             with patch("airsspy.cli.cmd_run._create_runner", return_value=fake_runner):
                 with patch(
                     "airsspy.jf.ml_runners.TorchSimRunner",
@@ -1473,6 +1847,182 @@ def test_run_sp_accepts_res_input_for_vasp():
         collect.assert_called_once()
 
 
+def test_run_sp_accepts_res_input_for_all_other_external_backends():
+    """Standalone SP converts RES input for CASTEP, GULP, PP3, and ABACUS."""
+    runner = CliRunner()
+    input_files = {
+        "castep": (".param", "task : singlepoint\n"),
+        "gulp": (".lib", "species\n"),
+        "pp3": (".pp", "1.0 1.0\n"),
+        "abacus": (".INPUT", "calculation scf\n"),
+    }
+    for code, (suffix, param_content) in input_files.items():
+        with runner.isolated_filesystem():
+            Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+            Path("Si" + suffix).write_text(param_content)
+            Path("Si-001.res").write_text(
+                "TITL Si-001 0.000 27.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+                "CELL 1.0 3.000000 3.000000 3.000000 90.000000 90.000000 90.000000\n"
+                "LATT -1\n"
+                "SFAC Si\n"
+                "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+                "END\n"
+            )
+            fake_runner = MagicMock()
+            fake_runner.run.return_value = 0
+            with patch(
+                "airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner
+            ):
+                with patch("airsspy.cli.cmd_run._collect_result") as collect:
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            "sp",
+                            "--cell",
+                            "*.res",
+                            "--seed",
+                            "IGNORED",
+                            "--code",
+                            code,
+                        ],
+                    )
+
+            assert result.exit_code == 0, (code, result.output, result.exception)
+            fake_runner.run.assert_called_once()
+            assert fake_runner.run.call_args.args[0] == "Si-001"
+            assert "%BLOCK LATTICE_CART" in fake_runner.run.call_args.args[1]
+            collect.assert_called_once()
+
+
+def test_run_sp_res_input_uses_explicit_seed_as_lookup_fallback():
+    """An explicit seed supplies templates and parameters for arbitrary RES labels."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+        Path("Si.param").write_text("task : singlepoint\n")
+        Path("candidate.res").write_text(
+            "TITL candidate 0.000 27.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+            "CELL 1.0 3.000000 3.000000 3.000000 90.000000 90.000000 90.000000\n"
+            "LATT -1\n"
+            "SFAC Si\n"
+            "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+            "END\n"
+        )
+        fake_runner = MagicMock()
+        fake_runner.run.return_value = 0
+        with patch(
+            "airsspy.cli.cmd_run._create_sp_runner", return_value=fake_runner
+        ):
+            with patch("airsspy.cli.cmd_run._collect_result"):
+                result = runner.invoke(
+                    cli,
+                    [
+                        "run",
+                        "sp",
+                        "--cell",
+                        "candidate.res",
+                        "--seed",
+                        "Si",
+                        "--code",
+                        "castep",
+                    ],
+                )
+
+    assert result.exit_code == 0
+    fake_runner.run.assert_called_once()
+    assert "%BLOCK LATTICE_CART" in fake_runner.run.call_args.args[1]
+
+
+def test_collect_result_rejects_invalid_castep2res_output_without_clobbering():
+    """Failed external conversion preserves an existing RES input and raises."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si-001.res").write_text("original input\n")
+        Path("Si-001.castep").write_text("current calculation output\n")
+        failed = MagicMock(returncode=0)
+        with patch("subprocess.run", return_value=failed):
+            try:
+                cmd_run._collect_result("Si-001", "pp3")
+            except RuntimeError as exc:
+                assert "valid RES" in str(exc)
+            else:
+                raise AssertionError("Expected invalid castep2res output to fail")
+
+        assert Path("Si-001.res").read_text() == "original input\n"
+        assert not Path("Si-001.res.tmp").exists()
+
+
+def test_collect_result_rejects_castep2res_cell_only_fallback():
+    """A failed external calculation cannot become a zero-energy RES via .cell."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("Si-001.cell").write_text("fresh calculation input\n")
+        Path("Si-001.res").write_text("original input\n")
+        with patch("subprocess.run") as convert:
+            try:
+                cmd_run._collect_result("Si-001", "gulp")
+            except RuntimeError as exc:
+                assert "No CASTEP-like result" in str(exc)
+            else:
+                raise AssertionError("Expected missing calculation output to fail")
+
+        convert.assert_not_called()
+        assert Path("Si-001.res").read_text() == "original input\n"
+
+
+def test_failed_relax_and_sp_cleanup_restore_original_res_input():
+    """Default cleanup must not delete source RES files accepted by the CLI."""
+    runner = CliRunner()
+    original_res = (
+        "TITL candidate 0.000 27.000 -1.0000 0.00 0.00 1 (P1) n - 1\n"
+        "CELL 1.0 3.000000 3.000000 3.000000 90.000000 90.000000 90.000000\n"
+        "LATT -1\n"
+        "SFAC Si\n"
+        "Si 1 0.0000000000000 0.0000000000000 0.0000000000000 1.0\n"
+        "END\n"
+    )
+
+    for command, factory in (
+        ("relax", "_create_runner"),
+        ("sp", "_create_sp_runner"),
+    ):
+        with runner.isolated_filesystem():
+            Path("Si.cell").write_text("kpoints_mp_grid : 1 1 1\n")
+            Path("Si.lib").write_text("species\n")
+            Path("candidate.res").write_text(original_res)
+            fake_runner = MagicMock()
+            fake_runner.run.return_value = 1
+            fake_runner.clean_failed.side_effect = (
+                lambda name: Path(name + ".res").unlink(missing_ok=True)
+            )
+
+            with patch(
+                f"airsspy.cli.cmd_run.{factory}", return_value=fake_runner
+            ):
+                with patch(
+                    "airsspy.cli.cmd_run._collect_result",
+                    side_effect=RuntimeError("no current result"),
+                ):
+                    result = runner.invoke(
+                        cli,
+                        [
+                            "run",
+                            command,
+                            "--cell",
+                            "candidate.res",
+                            "--seed",
+                            "Si",
+                            "--code",
+                            "gulp",
+                        ],
+                    )
+
+            assert result.exit_code == 0, (command, result.output, result.exception)
+            assert Path("candidate.res").read_text() == original_res
+            fake_runner.clean_failed.assert_called_once_with("candidate")
+
+
 def test_run_search_formula_diagnose():
     """Test formula diagnosis prints rewritten seed text and exits."""
     runner = CliRunner()
@@ -1503,6 +2053,298 @@ def test_run_search_formula_diagnose():
     assert "#FORMULA=Si" in result.output
     assert "#SPECIES=Si" not in result.output
     assert "#SLACK=0.25" in result.output
+
+
+def test_run_search_volume_minsep_dataset_diagnose():
+    """Test dataset-backed volume/minsep diagnosis prints generated directives."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text(
+            "#SPECIES=Si,O\n#FORMULA=Si\n#VARVOL=999\n#MINSEP=9\n#NFORM=1\n#SLACK=0.25\n"
+        )
+        dataset = Path("curated.json")
+        dataset.write_text(
+            json.dumps(
+                [
+                    {
+                        "material_id": "mp-sio2",
+                        "reduced_formula": "SiO2",
+                        "chemical_formula": "SiO2",
+                        "composition": {"Si": 1.0, "O": 2.0},
+                        "volume": 45.0,
+                        "minsep": {
+                            "Si-O": 1.6,
+                            "O-Si": 1.6,
+                            "O-O": 2.5,
+                            "Si-Si": 3.0,
+                        },
+                        "energy_above_hull": 0.0,
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "SiO",
+                "--build-only",
+                "--formula",
+                "O2Si",
+                "--volume-minsep-source",
+                "dataset",
+                "--volume-minsep-dataset",
+                str(dataset),
+                "--volume-scale",
+                "1.1",
+                "--max-atoms",
+                "12",
+                "--max-nform",
+                "3",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "volume_minsep_source = dataset" in result.output
+    assert "volume_per_atom = 15" in result.output
+    assert "#FORMULA=SiO2" in result.output
+    assert "#VARVOL=49.5" in result.output
+    assert "#MINSEP=0.5-1 O-O=2.25-2.75 O-Si=1.44-1.76 Si-Si=2.7-3.3" in result.output
+    assert "#NFORM={2,3}" in result.output
+    assert "#SPECIES=" not in result.output
+    assert "#VARVOL=999" not in result.output
+    assert "#MINSEP=9" not in result.output
+    assert "#NFORM=1" not in result.output
+    assert "#SLACK=0.25" in result.output
+
+
+def test_run_search_volume_minsep_diagnose_ignores_superseded_seed_constraints():
+    """Estimator mode ignores old NATOM/NFORM constraints it replaces."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text("#SPECIES=Si,O\n#NATOM=1-2\n#NFORM=1\n")
+        dataset = Path("curated.json")
+        dataset.write_text(
+            json.dumps(
+                [
+                    {
+                        "material_id": "mp-sio2",
+                        "reduced_formula": "SiO2",
+                        "chemical_formula": "SiO2",
+                        "composition": {"Si": 1.0, "O": 2.0},
+                        "volume": 45.0,
+                        "minsep": {
+                            "Si-O": 1.6,
+                            "O-Si": 1.6,
+                            "O-O": 2.5,
+                            "Si-Si": 3.0,
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "SiO",
+                "--build-only",
+                "--formula",
+                "SiO2",
+                "--volume-minsep-source",
+                "dataset",
+                "--volume-minsep-dataset",
+                str(dataset),
+                "--max-atoms",
+                "12",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "#FORMULA=SiO2" in result.output
+    assert "#NATOM=1-2" not in result.output
+    assert "#NFORM={2,3,4}" in result.output
+
+
+def test_run_search_reference_source_filters_references_by_sampled_formula():
+    """Reference source can accept references for multiple sampled formulas."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("mix.cell").write_text("#SPECIES=Si,O,Na,Cl\n")
+        write(
+            "sio2.xyz",
+            Atoms(
+                symbols=["Si", "O", "O"],
+                positions=[[0, 0, 0], [1.6, 0, 0], [0, 2.5, 0]],
+                cell=[5, 5, 5],
+                pbc=True,
+            ),
+        )
+        write(
+            "nacl.xyz",
+            Atoms(
+                symbols=["Na", "Cl"],
+                positions=[[0, 0, 0], [2.8, 0, 0]],
+                cell=[5, 5, 5],
+                pbc=True,
+            ),
+        )
+
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "mix",
+                "--build-only",
+                "--formula",
+                "SiO2",
+                "--volume-minsep-source",
+                "reference",
+                "--reference-structure",
+                "sio2.xyz",
+                "--reference-structure",
+                "nacl.xyz",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "volume_minsep_source = reference" in result.output
+    assert "#FORMULA=SiO2" in result.output
+    assert "#MINSEP=" in result.output
+
+
+def test_tools_volume_minsep_curate_and_train_baseline(tmp_path):
+    """Test volume/minsep offline CLI curation and baseline training."""
+    runner = CliRunner()
+    raw_path = tmp_path / "raw.json"
+    mp_docs_path = tmp_path / "mp_docs.json"
+    curated_path = tmp_path / "curated.json"
+    output_dir = tmp_path / "artifacts"
+    raw_path.write_text(
+        json.dumps(
+            [
+                {
+                    "material_id": "toy-1",
+                    "reduced_formula": "SiO2",
+                    "chemical_formula": "SiO2",
+                    "composition": {"Si": 1.0, "O": 2.0},
+                    "volume": 45.0,
+                    "minsep": {
+                        "Si-O": 1.60,
+                        "O-Si": 1.60,
+                        "O-O": 2.55,
+                        "Si-Si": 3.05,
+                    },
+                },
+                {
+                    "material_id": "toy-2",
+                    "reduced_formula": "SiO2",
+                    "chemical_formula": "SiO2",
+                    "composition": {"Si": 2.0, "O": 4.0},
+                    "volume": 91.2,
+                    "minsep": {
+                        "Si-O": 1.58,
+                        "O-Si": 1.58,
+                        "O-O": 2.50,
+                        "Si-Si": 3.10,
+                    },
+                },
+                {
+                    "material_id": "toy-3",
+                    "reduced_formula": "MgO",
+                    "chemical_formula": "MgO",
+                    "composition": {"Mg": 1.0, "O": 1.0},
+                    "volume": 22.4,
+                    "minsep": {
+                        "Mg-O": 1.95,
+                        "O-Mg": 1.95,
+                        "Mg-Mg": 3.02,
+                        "O-O": 3.02,
+                    },
+                },
+                {
+                    "material_id": "toy-4",
+                    "reduced_formula": "NaCl",
+                    "chemical_formula": "NaCl",
+                    "composition": {"Na": 1.0, "Cl": 1.0},
+                    "volume": 34.0,
+                    "minsep": {
+                        "Na-Cl": 2.81,
+                        "Cl-Na": 2.81,
+                        "Na-Na": 3.95,
+                        "Cl-Cl": 3.95,
+                    },
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mp_docs_path.write_text(
+        json.dumps(
+            [
+                {"material_id": "toy-1", "energy_above_hull": 0.03},
+                {"material_id": "toy-2", "energy_above_hull": 0.0},
+                {"material_id": "toy-3", "energy_above_hull": 0.0},
+                {"material_id": "toy-4", "energy_above_hull": 0.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    curate = runner.invoke(
+        cli,
+        [
+            "tools",
+            "volume-minsep-curate-dataset",
+            "--dataset",
+            str(raw_path),
+            "--mp-docs",
+            str(mp_docs_path),
+            "--output",
+            str(curated_path),
+        ],
+    )
+
+    assert curate.exit_code == 0
+    assert curated_path.exists()
+    curated_rows = json.loads(curated_path.read_text(encoding="utf-8"))
+    sio2_row = next(row for row in curated_rows if row["reduced_formula"] == "SiO2")
+    assert sio2_row["material_id"] == "toy-2"
+
+    train = runner.invoke(
+        cli,
+        [
+            "tools",
+            "volume-minsep-train-baseline",
+            "--dataset",
+            str(raw_path),
+            "--output-dir",
+            str(output_dir),
+            "--volume-alpha-grid",
+            "1e-4,1e-2",
+            "--minsep-alpha-grid",
+            "1e-4,1e-2",
+        ],
+    )
+
+    assert train.exit_code == 0
+    assert (output_dir / "baseline" / "baseline_bundle.json").exists()
 
 
 def test_run_search_formula_accepts_comma_separated_values():
@@ -1583,6 +2425,69 @@ def test_run_search_formula_diagnose_combined_oxidation_states():
 
     assert result.exit_code == 0
     assert "#FORMULA=" in result.output
+
+
+def test_run_search_formula_diagnose_atom_budget_and_composition_ratio():
+    """Test atom-budget formula sampling is exposed through run search."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiNa.cell").write_text("#SPECIES=Li,Na\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LiNa",
+                "--nmax",
+                "1",
+                "--build-only",
+                "--elements",
+                "Li,Na",
+                "--max-num-atoms",
+                "6",
+                "--composition-ratio",
+                "1=0,2=1",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "formula_arity = 2" in result.output
+    assert "formula_counts_by_arity = 1:2, 2:11" in result.output
+    assert "#FORMULA=Li\n" not in result.output
+    assert "#FORMULA=Na\n" not in result.output
+
+
+def test_run_search_formula_composition_ratio_rejects_unavailable_arity():
+    """Test composition ratio fails clearly when it cannot sample anything."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("LiNa.cell").write_text("#SPECIES=Li,Na\n")
+        result = runner.invoke(
+            cli,
+            [
+                "run",
+                "search",
+                "--seed",
+                "LiNa",
+                "--nmax",
+                "1",
+                "--build-only",
+                "--elements",
+                "Li,Na",
+                "--max-num-atoms",
+                "6",
+                "--composition-ratio",
+                "3=1",
+                "--diagnose",
+                "1",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "composition ratio" in result.output
 
 
 def test_run_search_formula_oxidation_state_invalid_assignment():
@@ -1667,6 +2572,67 @@ def test_run_search_formula_transform_passed_to_buildcell():
     assert "#SPECIES=Si" not in transformed
 
 
+def test_run_search_volume_minsep_transform_resolves_paths_before_chdir():
+    """Test estimator dataset paths still work after run_search enters workdir."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        Path("SiO.cell").write_text("#SPECIES=Si,O\n#NFORM=1\n")
+        Path("work").mkdir()
+        dataset = Path("curated.json")
+        dataset.write_text(
+            json.dumps(
+                [
+                    {
+                        "material_id": "mp-sio2",
+                        "reduced_formula": "SiO2",
+                        "chemical_formula": "SiO2",
+                        "composition": {"Si": 1.0, "O": 2.0},
+                        "volume": 45.0,
+                        "minsep": {
+                            "Si-O": 1.6,
+                            "O-Si": 1.6,
+                            "O-O": 2.5,
+                            "Si-Si": 3.0,
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        with patch("airsspy.jf.runners.run_buildcell") as mock_buildcell:
+            mock_buildcell.return_value = {
+                "struct_name": "SiO-001",
+                "seed_name": "SiO",
+                "struct_content": "",
+            }
+            result = runner.invoke(
+                cli,
+                [
+                    "run",
+                    "search",
+                    "--seed",
+                    "SiO",
+                    "--nmax",
+                    "1",
+                    "--build-only",
+                    "--workdir",
+                    "work",
+                    "--formula",
+                    "SiO2",
+                    "--volume-minsep-source",
+                    "dataset",
+                    "--volume-minsep-dataset",
+                    str(dataset),
+                ],
+            )
+
+            assert result.exit_code == 0
+            transform = mock_buildcell.call_args.kwargs["seed_text_transform"]
+            transformed = transform("#SPECIES=Si,O\n#NFORM=1\n")
+            assert "#FORMULA=SiO2" in transformed
+            assert "#MINSEP=" in transformed
+
+
 def test_run_search_prune_rejects_build_only():
     """Test pruning is rejected for build-only searches."""
     runner = CliRunner()
@@ -1709,6 +2675,16 @@ def test_run_relax_help():
     result = runner.invoke(cli, ["run", "relax", "--help"])
     assert result.exit_code == 0
     assert "--cell" in result.output
+    assert "--cell-axis-map" in result.output
+
+
+def test_run_sp_help():
+    """Test 'run sp --help'."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "sp", "--help"])
+    assert result.exit_code == 0
+    assert "--cell" in result.output
+    assert "--cell-axis-map" in result.output
 
 
 def test_run_search_missing_seed():

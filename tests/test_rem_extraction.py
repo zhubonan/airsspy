@@ -4,11 +4,11 @@ Uses real output files from the AIRSS reference implementation as fixtures
 and optionally runs actual CASTEP/ABACUS calculations.
 """
 
+from __future__ import annotations
+
 import hashlib
 import shutil
 from pathlib import Path
-
-import pytest
 
 import pytest
 
@@ -30,6 +30,20 @@ ABACUS_QC5_LOG = (
 )
 ABACUS_QC5_INPUT = AIRSS_GIT / "examples" / "7.1-qc5" / "C2.INPUT"
 ABACUS_NCP19_INPUT = AIRSS_GIT / "examples" / "7.1-ncp19" / "C2.INPUT"
+
+_REQUIRED_REFERENCE_FILES = [
+    CASTEP_EXAMPLE,
+    CASTEP_EXAMPLE_2,
+    CELL_EXAMPLE,
+    ABACUS_NCP19_LOG,
+    ABACUS_QC5_LOG,
+    ABACUS_QC5_INPUT,
+    ABACUS_NCP19_INPUT,
+]
+pytestmark = pytest.mark.skipif(
+    not all(path.exists() for path in _REQUIRED_REFERENCE_FILES),
+    reason="AIRSS reference example files are not available",
+)
 
 
 def _has_executable(name: str) -> bool:
@@ -404,13 +418,15 @@ C 0.768638 0.667347 0.894505
 %ENDBLOCK POSITIONS_FRAC
 """)
 
-        doc = compose_task_doc(castep_seed)
+        compose_task_doc(castep_seed)
 
         # Read the .res file and check TITL has a real spacegroup
         res_path = Path(castep_seed + ".res")
         assert res_path.is_file()
         content = res_path.read_text()
-        titl_line = [l for l in content.splitlines() if l.startswith("TITL")][0]
+        titl_line = [
+            line for line in content.splitlines() if line.startswith("TITL")
+        ][0]
 
         # Should not be hardcoded "1" or "(1)"
         assert "(1)" not in titl_line
@@ -496,12 +512,14 @@ Si
 
         (workdir / "abacus_out").write_text("TOTAL  Time : 12.5\n")
 
-        doc = compose_abacus_task_doc(abacus_ncp19_env)
+        compose_abacus_task_doc(abacus_ncp19_env)
 
         res_path = Path(abacus_ncp19_env + ".res")
         assert res_path.is_file()
         content = res_path.read_text()
-        titl_line = [l for l in content.splitlines() if l.startswith("TITL")][0]
+        titl_line = [
+            line for line in content.splitlines() if line.startswith("TITL")
+        ][0]
 
         # Diamond Si should have R-3m symmetry (not P1)
         assert "R-3m" in titl_line
@@ -522,6 +540,7 @@ class TestCastepEndToEnd:
     def test_castep_relax_rem_extraction(self, tmp_path):
         """Run CASTEP on a small Si cell and check REM in output .res."""
         from castepinput.inputs import CellInput, ParamInput
+
         from airsspy.jf.runners import AirssCastepRelaxRunner, compose_task_doc
 
         # Copy pre-generated pseudopotential to avoid on-the-fly generation
@@ -591,7 +610,9 @@ Si Si_QC5_PBE_OTF.usp
         assert "REM" in res_content
 
         # Check symmetry is real
-        titl_line = [l for l in res_content.splitlines() if l.startswith("TITL")][0]
+        titl_line = [
+            line for line in res_content.splitlines() if line.startswith("TITL")
+        ][0]
         assert "Fd-3m" in titl_line  # Si diamond
 
 

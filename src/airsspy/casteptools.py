@@ -6,6 +6,8 @@ managing cell files, and running RASH (Random Ab initio Structure
 Hunting) relaxation seeds.
 """
 
+from __future__ import annotations
+
 import io
 import os
 import platform
@@ -170,12 +172,24 @@ def RASH_prepare_seed(seed: str, relaxed: str, amp: float) -> io.StringIO:
         An StringIO object of the cell for RASH.
     """
     with open(relaxed + ".cell") as rlx_cell, open(seed + ".cell") as seed_cell:
-        rlx_lattice = trim_stream(rlx_cell, r"^%BLOCK [Ll][Aa][Tt]", r"^%ENDBLOCK [Ll][Aa][Tt]", ["FIX_VOL", "ANG"]).read()
+        rlx_lattice = trim_stream(
+            rlx_cell,
+            r"^%BLOCK [Ll][Aa][Tt]",
+            r"^%ENDBLOCK [Ll][Aa][Tt]",
+            ["FIX_VOL", "ANG"],
+        ).read()
         rlx_lattice = rlx_lattice.replace("%ENDBLOCK", "#FIX\nENDBLOCK")
-        rlx_pos = trim_stream(rlx_cell, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]").read()
-        seed_rest = filter_out_stream(seed_cell, r"^%BLOCK [Ll][Aa][Tt]", r"^%ENDBLOCK [Ll][Aa][Tt]")
+        rlx_pos = trim_stream(
+            rlx_cell, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]"
+        ).read()
         seed_rest = filter_out_stream(
-            seed_rest, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]", ["#POSAMP=", "#SYMMOPS=", "#NFORM=", "#SUPER"]
+            seed_cell, r"^%BLOCK [Ll][Aa][Tt]", r"^%ENDBLOCK [Ll][Aa][Tt]"
+        )
+        seed_rest = filter_out_stream(
+            seed_rest,
+            r"^%BLOCK [Pp][Oo][Ss]",
+            r"^%ENDBLOCK [Pp][Oo][Ss]",
+            ["#POSAMP=", "#SYMMOPS=", "#NFORM=", "#SUPER"],
         ).read()
     out_string = io.StringIO()
     out_string.write(rlx_lattice + "\n")
@@ -490,7 +504,9 @@ def write_converge(seed: str, suffix: str = "castep") -> None:
         out_file.write("# Method:  " + conv_info["name"] + "\n")
         out_file.write("# Energy Unit:  " + conv_info["unit"] + "\n")
         num = range(len(conv_info["H"]))
-        for i, value, iter_number, timer in zip(num, conv_info["H"], conv_info["iter_num"], conv_info["time"]):
+        for i, value, iter_number, timer in zip(
+            num, conv_info["H"], conv_info["iter_num"], conv_info["time"]
+        ):
             out_file.write(f"{i:<5d}{value:<20.5f}{iter_number:<10d}{timer:.2f}\n")
 
 
@@ -562,14 +578,29 @@ def push_cell(cellout: str, cell: str) -> None:
         cellout: Path to the output cell file (source of new structure).
         cell: Path to the input cell file (to be updated).
     """
-    with open(cellout) as fhout, open(cell) as fcell, open(str(cell) + ".tmp", "w") as ftmp:
-        new_lattice = trim_stream(fhout, r"^%BLOCK [Ll][Aa][Tt]", r"^%ENDBLOCK [Ll][Aa][Tt]", ["FIX_VOL", "ANG"])
-        new_pos = trim_stream(fhout, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]")
+    with (
+        open(cellout) as fhout,
+        open(cell) as fcell,
+        open(str(cell) + ".tmp", "w") as ftmp,
+    ):
+        new_lattice = trim_stream(
+            fhout,
+            r"^%BLOCK [Ll][Aa][Tt]",
+            r"^%ENDBLOCK [Ll][Aa][Tt]",
+            ["FIX_VOL", "ANG"],
+        )
+        new_pos = trim_stream(
+            fhout, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]"
+        )
         ftmp.write(new_lattice.read())
         ftmp.write("\n")
         ftmp.write(new_pos.read())
-        old_rest = filter_out_stream(fcell, r"^%BLOCK [Ll][Aa][Tt]", r"^%ENDBLOCK [Ll][Aa][Tt]")
-        old_rest = filter_out_stream(old_rest, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]")
+        old_rest = filter_out_stream(
+            fcell, r"^%BLOCK [Ll][Aa][Tt]", r"^%ENDBLOCK [Ll][Aa][Tt]"
+        )
+        old_rest = filter_out_stream(
+            old_rest, r"^%BLOCK [Pp][Oo][Ss]", r"^%ENDBLOCK [Pp][Oo][Ss]"
+        )
         ftmp.write(old_rest.read())
 
     shutil.move(str(cell) + ".tmp", cell)

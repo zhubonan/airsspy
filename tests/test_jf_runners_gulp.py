@@ -4,9 +4,12 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from airsspy.jf.runners import AirssGulpRelaxRunner, AirssPp3RelaxRunner
+from airsspy.jf.runners import (
+    AirssGulpRelaxRunner,
+    AirssGulpSinglePointRunner,
+    AirssPp3RelaxRunner,
+    AirssPp3SinglePointRunner,
+)
 
 
 class TestGulpRunnerCmdConstruction:
@@ -48,6 +51,14 @@ class TestPp3RunnerCmdConstruction:
     def test_param_suffix(self):
         runner = AirssPp3RelaxRunner()
         assert runner._param_suffix == ".pp"
+
+    def test_singlepoint_uses_native_no_relax_flag(self):
+        runner = AirssPp3SinglePointRunner(executable="pp3.opt")
+        assert runner._get_cmd("test-001") == [
+            "pp3_relax",
+            "pp3.opt -n",
+            "test-001",
+        ]
 
 
 class TestInputPreparation:
@@ -188,3 +199,69 @@ class TestEndToEnd:
         runner = AirssPp3RelaxRunner()
         result = runner.run("test-001", "cell", "pp content")
         assert result == 0
+
+
+def test_gulp_singlepoint_prepares_single_task_and_airss_output(tmp_path, monkeypatch):
+    """GULP SP converts the cell, disables relaxation, and records H/V."""
+    monkeypatch.chdir(tmp_path)
+    runner = AirssGulpSinglePointRunner(executable="gulp", pressure=2.0)
+    conversion = MagicMock(stdout="opti prop\ncell\n", stderr="", returncode=0)
+    gulp = MagicMock(
+        stdout=(
+            "Total lattice enthalpy = -12.500000 eV\n"
+            "Primitive cell volume = 20.000000 Angs**3\n"
+        ),
+        stderr="",
+        returncode=0,
+    )
+
+    with patch("airsspy.jf.runners.subprocess.run", side_effect=[conversion, gulp]) as run:
+        rc = runner.run("Si-001", "cell content", "lib content", seed_name="Si")
+
+    assert rc == 0
+    assert run.call_args_list[0].args[0] == ["cabal", "cell", "gulp"]
+    assert run.call_args_list[1].args[0] == ["gulp"]
+    assert run.call_args_list[1].kwargs["env"]["GULP_LIB"] == str(tmp_path)
+    gulp_input = run.call_args_list[1].kwargs["input"]
+    assert "single prop" in gulp_input
+    assert "opti prop" not in gulp_input
+    assert "library Si" in gulp_input
+    assert "pressure 2.0 GPa" in gulp_input
+    castep = Path("Si-001.castep").read_text()
+    assert "Final Enthalpy     = -12.500000000000" in castep
+    assert "Current cell volume = 20.000000000000" in castep
+    assert Path("Si-001-out.cell").read_text() == "cell content"
+
+
+def test_gulp_singlepoint_failure_removes_stale_converter_inputs(
+    tmp_path, monkeypatch
+):
+    """A failed GULP rerun cannot expose converter inputs from an older run."""
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.castep").write_text("stale output")
+    Path("Si-001-out.cell").write_text("stale geometry")
+    conversion = MagicMock(stdout="", stderr="failed", returncode=1)
+    runner = AirssGulpSinglePointRunner(executable="gulp")
+
+    with patch("airsspy.jf.runners.subprocess.run", return_value=conversion):
+        rc = runner.run("Si-001", "cell content", "lib content", seed_name="Si")
+
+    assert rc == 1
+    assert not Path("Si-001.castep").exists()
+    assert not Path("Si-001-out.cell").exists()
+
+
+def test_pp3_singlepoint_failure_removes_stale_converter_inputs(tmp_path, monkeypatch):
+    """A failed PP3 rerun cannot expose converter inputs from an older run."""
+    monkeypatch.chdir(tmp_path)
+    Path("Si-001.castep").write_text("stale output")
+    Path("Si-001-out.cell").write_text("stale geometry")
+    failed = MagicMock(stdout="", stderr="failed", returncode=1)
+    runner = AirssPp3SinglePointRunner(executable="pp3", max_attempts=1)
+
+    with patch("airsspy.jf.runners.subprocess.run", return_value=failed):
+        rc = runner.run("Si-001", "cell content", "pp content")
+
+    assert rc == 1
+    assert not Path("Si-001.castep").exists()
+    assert not Path("Si-001-out.cell").exists()
