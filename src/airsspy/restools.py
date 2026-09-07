@@ -109,7 +109,9 @@ def save_airss_res(
         + " "
         + str(nat)
         + " "
-        + "(" + sg.strip("()") + ")"
+        + "("
+        + sg.strip("()")
+        + ")"
         + " n - 1\n"
     )
     rems = info_dict.get("rem", [])
@@ -125,17 +127,39 @@ def save_airss_res(
                 fout.write("REM " + line + "\n")
             # Write the data lines
             atom_idx = 0
+            in_atoms = False
             for n, line in enumerate(resin):
-                if n > 0:
-                    # Append atom annotation if provided
+                if n == 0:
+                    continue
+                # ASE writes a blank line after its RES title, but cryan
+                # treats blank records as the end of a structure.
+                if not line.strip():
+                    continue
+
+                keyword = line.split(maxsplit=1)[0].upper() if line.split() else ""
+                if keyword == "SFAC":
+                    in_atoms = True
+                    fout.write(line)
+                    continue
+                if keyword == "END":
+                    in_atoms = False
+                    fout.write(line)
+                    continue
+
+                # ASE RES output places atom records between SFAC and END.
+                # Count only those records: CELL/LATT/SFAC are structure
+                # headers and must never consume per-atom annotations.
+                if in_atoms:
                     if (
                         atom_annotations
                         and atom_idx < len(atom_annotations)
                         and atom_annotations[atom_idx]
                     ):
-                        line = line.rstrip("\n") + " " + atom_annotations[atom_idx] + "\n"
-                    fout.write(line)
+                        line = (
+                            line.rstrip("\n") + " " + atom_annotations[atom_idx] + "\n"
+                        )
                     atom_idx += 1
+                fout.write(line)
 
     os.remove(restmp)
     return

@@ -421,7 +421,9 @@ def rank(
 
         before = len(records)
         records = _filter_by_name(records, filter_name)
-        click.echo(f"Filter --filter-name '{filter_name}': {before} → {len(records)}", err=True)
+        click.echo(
+            f"Filter --filter-name '{filter_name}': {before} → {len(records)}", err=True
+        )
 
     if formula is not None and not maxwell:
         from airsspy.ranking import filter_by_formula as _filter_by_formula
@@ -483,12 +485,17 @@ def rank(
     if unite is not None:
         before = len(records)
         records = prefilter_records(records, ethresh=unite_ethresh)
-        click.echo(f"Pre-rank filter (ethresh={unite_ethresh}): {before} → {len(records)} structures", err=True)
+        click.echo(
+            f"Pre-rank filter (ethresh={unite_ethresh}): {before} → {len(records)} structures",
+            err=True,
+        )
 
     # Step 5: Merge similar structures
     if unite is not None:
         click.echo(f"Merging similar structures (threshold={unite})", err=True)
-        records = eliminate_similar(records, unite, cutoff=fingerprint_cutoff, zweight=unite_zweight)
+        records = eliminate_similar(
+            records, unite, cutoff=fingerprint_cutoff, zweight=unite_zweight
+        )
         click.echo(f"After merging: {len(records)} structures", err=True)
 
     # Step 5b: Write united output
@@ -501,13 +508,19 @@ def rank(
         for rec in records:
             group_dir = out_dir / f"{rec.label}.{ext}"
             group_dir.mkdir(exist_ok=True)
-            _write_record_file(rec, group_dir / f"{rec.label}.{ext}", unite_output_format)
+            _write_record_file(
+                rec, group_dir / f"{rec.label}.{ext}", unite_output_format
+            )
             n_files += 1
             for peer in rec._merged_peers:
-                _write_record_file(peer, group_dir / f"{peer.label}.{ext}", unite_output_format)
+                _write_record_file(
+                    peer, group_dir / f"{peer.label}.{ext}", unite_output_format
+                )
                 n_files += 1
             n_groups += 1
-        click.echo(f"Wrote {n_files} structures in {n_groups} groups to {out_dir}/", err=True)
+        click.echo(
+            f"Wrote {n_files} structures in {n_groups} groups to {out_dir}/", err=True
+        )
 
     # Step 6: Post-rank and display
     has_spin = any(r.spin != 0.0 or r.spin_abs != 0.0 for r in records)
@@ -537,7 +550,10 @@ def rank(
             best_per_formula: dict[str, dict] = {}
             for rec in ranked:
                 f = rec["formula"]
-                if f not in best_per_formula or rec["e_above_hull"] < best_per_formula[f]["e_above_hull"]:
+                if (
+                    f not in best_per_formula
+                    or rec["e_above_hull"] < best_per_formula[f]["e_above_hull"]
+                ):
                     best_per_formula[f] = rec
             summary_recs = sorted(
                 best_per_formula.values(), key=lambda r: r["e_above_hull"]
@@ -552,11 +568,15 @@ def rank(
 
         if summary:
             for rec in summary_recs:
-                line = format_maxwell_line(rec, long_labels=long_labels, show_spin=has_spin)
+                line = format_maxwell_line(
+                    rec, long_labels=long_labels, show_spin=has_spin
+                )
                 click.echo(line)
         else:
             for rec in ranked:
-                line = format_maxwell_line(rec, long_labels=long_labels, show_spin=has_spin)
+                line = format_maxwell_line(
+                    rec, long_labels=long_labels, show_spin=has_spin
+                )
                 click.echo(line)
 
         if plot_path:
@@ -572,7 +592,12 @@ def rank(
     elif summary:
         ranked, total = summary_structures(records, delta_e=delta_e)
         fill_dict_symm(ranked, symprec=symprec)
-        click.echo(format_header(show_spin=has_spin, summary_mode=True, long_labels=long_labels), err=True)
+        click.echo(
+            format_header(
+                show_spin=has_spin, summary_mode=True, long_labels=long_labels
+            ),
+            err=True,
+        )
         for rec in ranked:
             line = format_rank_line(
                 rec, long_labels=long_labels, show_spin=has_spin, summary_mode=True

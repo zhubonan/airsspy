@@ -57,10 +57,12 @@ ap run search --seed Si --code gulp --exe ggulp --cluster
 ap run search --seed Si --code vasp --potcar-dir /path/to/potpaw --potcar-map Si=Si
 ap run search --seed Si --code ml --calculator mace:medium --device cuda
 ap run search --seed Si --code ml --calculator ase:symmetrix:medium-mpa-0
+ap run search --seed Si --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl
 ap run search --seed seed --build-only --nmax 20
 ```
 
-`run search` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and `ml`.
+`run search` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, `ml`, and
+`eddp`.
 ML searches generate structures with `buildcell` and relax each structure with
 the selected ML driver.
 
@@ -73,6 +75,7 @@ Required files:
 | `pp3` | `<seed>.cell`, `<seed>.pp` |
 | `abacus` | `<seed>.cell`, `<seed>.INPUT` |
 | `vasp` | `<seed>.cell`, `<seed>.INCAR`; optional `<seed>.KPOINTS` |
+| `eddp` | `<seed>.cell` and an EDDP `.json` or `.jld2` model artifact passed with `--calculator` |
 
 Useful options include `--pressure`, `--max-iterations`, `--build-timeout`,
 `--mpinp`, `--keep`, and `--diagnose`.
@@ -141,6 +144,7 @@ ap run relax --cell "*.res" --code ml --calculator torch-sim:mace:medium --devic
 ap run relax --cell "*.cell" --code ml --calculator ase:mace:medium --optimizer BFGS
 ap run relax --cell "*.cell" --code ml --calculator ase:symmetrix:medium-mpa-0 --optimizer FIRE
 ap run relax --cell "*.cell" --code ml --calculator ase:symmetrix:MACE-MH-1:matpes_r2scan
+ap run relax --cell "*.res" --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl --eddp-method tpsd
 ```
 
 `run relax` accepts single-structure `.cell` and `.res` inputs. Packed `.res`
@@ -148,9 +152,9 @@ files matched by the glob are skipped. For `.res` inputs with non-ML codes,
 airsspy looks for a root template such as `Si.cell` so it can preserve the
 non-structural cell settings while replacing the lattice and positions.
 
-Supported relaxation codes are `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and
-`ml`. The `--singlepoint` flag reuses this command for single-point calculations
-with all six backends.
+Supported relaxation codes are `castep`, `gulp`, `pp3`, `abacus`, `vasp`,
+`ml`, and `eddp`. The `--singlepoint` flag reuses this command for single-point
+calculations with all seven backends.
 
 ### Single-Point Calculations
 
@@ -161,9 +165,10 @@ ap run sp --cell "*.res" --seed Si --code pp3
 ap run sp --cell "*.res" --code ml --calculator mace:medium --batch-size 32
 ap run sp --cell "*.res" --code ml --calculator ase:symmetrix:medium
 ap run sp --cell "*.res" --seed Si --code vasp --potcar-dir /path/to/potpaw
+ap run sp --cell "*.res" --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl
 ```
 
-`run sp` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, and `ml`. Both
+`run sp` supports `castep`, `gulp`, `pp3`, `abacus`, `vasp`, `ml`, and `eddp`. Both
 single-structure `.cell` and `.res` inputs are supported for every backend.
 
 ### CRUD Queue Worker
@@ -173,6 +178,7 @@ ap run crud --workdir . --code castep
 ap run crud --workdir . --code vasp --singlepoint --potcar-dir /path/to/potpaw
 ap run crud --workdir . --code ml --calculator mace:medium --batch-size 8 --nostop
 ap run crud --workdir . --code ml --calculator ase:symmetrix:medium --nostop
+ap run crud --workdir . --code eddp --calculator /path/to/model.json --eddp-project /path/to/EDDPotentials.jl --nostop
 ```
 
 The CRUD worker consumes queued `hopper/*-*.res` files, converts each claimed
@@ -192,16 +198,28 @@ The misspelled `ase:symmetrics:<model>` alias and the legacy
 MACE models only and uses ASE optimizer controls such as `--optimizer`,
 `--fmax`, `--max-iterations`, and `--pressure` rather than torch-sim batching.
 
+The native EDDP backend starts Julia with the packaged bridge and calls
+EDDP Potentials' `load_calculator`, energy/force/stress evaluators, and native
+`multirelax!` loop. It therefore supports native `tpsd` or `fire` relaxation,
+cell relaxation, pressure, and calculator workspace reuse during each
+optimization. Use `--eddp-fixed-cell` for position-only relaxation,
+`--eddp-stress-tol` for the cell stress threshold, and `--fmax` for the force
+threshold. `AIRSSPY_EDDP_PROJECT` can replace `--eddp-project`. Results are
+normalized to extxyz and passed through the common AIRSS `.res` composer.
+Each structure currently launches an independent Julia process, so model and
+workspace reuse is limited to one optimization; cross-structure persistent
+workers and batch model caching are not yet implemented.
+
 The local `ap run` support matrix is uniform:
 
-| Workflow | CASTEP | GULP | PP3 | ABACUS | VASP | ML |
-| --- | --- | --- | --- | --- | --- | --- |
-| `search` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `relax` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `relax --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `sp` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `crud` | Yes | Yes | Yes | Yes | Yes | Yes |
-| `crud --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes |
+| Workflow | CASTEP | GULP | PP3 | ABACUS | VASP | ML | EDDP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `search` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `relax` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `relax --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `sp` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `crud` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| `crud --singlepoint` | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
 ## Ranking And Hull Analysis
 

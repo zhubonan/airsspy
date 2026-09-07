@@ -241,9 +241,7 @@ class AirssCastepRelaxRunner(AirssCastepSinglePointRunner):
                             result = True
                         elif status == "failed":
                             result = False
-                    match = re.search(
-                        r"Finished iteration +(\d+)", line, re.IGNORECASE
-                    )
+                    match = re.search(r"Finished iteration +(\d+)", line, re.IGNORECASE)
                     if match is not None:
                         max_iter = int(match.group(1))
 
@@ -700,7 +698,9 @@ class AirssGulpSinglePointRunner(AirssGulpRelaxRunner):
             if energy is not None:
                 enthalpy = energy + self.pressure * volume / 160.21766208
         if enthalpy is None or volume is None:
-            logger.warning("Unable to parse GULP single-point output for %s", struct_name)
+            logger.warning(
+                "Unable to parse GULP single-point output for %s", struct_name
+            )
             return 1
 
         Path(struct_name + ".castep").write_text(
@@ -852,9 +852,8 @@ class AirssVaspRelaxRunner:
     ) -> bool:
         """Return True if the current VASP cycle produced a fresh vasprun.xml."""
         after = self._output_mtimes(workdir)
-        return (
-            after["vasprun.xml"] is not None
-            and after["vasprun.xml"] != before.get("vasprun.xml")
+        return after["vasprun.xml"] is not None and after["vasprun.xml"] != before.get(
+            "vasprun.xml"
         )
 
     def _read_vasp_status(
@@ -1102,7 +1101,9 @@ class AirssAbacusRelaxRunner:
             cell_to_stru,
         )
 
-        cell_content = apply_cell_axis_map_to_cell_text(cell_content, self.cell_axis_map)
+        cell_content = apply_cell_axis_map_to_cell_text(
+            cell_content, self.cell_axis_map
+        )
         input_content = apply_cell_axis_map_to_abacus_input(
             input_content, self.cell_axis_map
         )
@@ -1421,7 +1422,9 @@ class AirssAbacusSinglePointRunner:
         workdir = f"{struct_name}.abacus"
         Path(workdir).mkdir(parents=True, exist_ok=True)
 
-        cell_content = apply_cell_axis_map_to_cell_text(cell_content, self.cell_axis_map)
+        cell_content = apply_cell_axis_map_to_cell_text(
+            cell_content, self.cell_axis_map
+        )
         input_content = apply_cell_axis_map_to_abacus_input(
             input_content, self.cell_axis_map
         )

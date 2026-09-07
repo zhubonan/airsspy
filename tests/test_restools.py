@@ -18,6 +18,7 @@
 ###########################################################################
 """Tests for the restool module."""
 
+from pathlib import Path
 from tempfile import mkstemp
 
 import numpy as np
@@ -86,6 +87,7 @@ def test_save_airss_res(al_atoms, tmpfile):
     }
 
     save_airss_res(al_atoms, infodict, fname=tmpfile, force_write=True)
+    assert all(line.strip() for line in Path(tmpfile).read_text().splitlines())
     extracted = extract_res(tmpfile)
     for k, v in infodict.items():
         assert v == extracted[k]

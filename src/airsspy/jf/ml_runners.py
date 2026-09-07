@@ -35,6 +35,8 @@ import logging
 import os
 import tempfile
 from pathlib import Path
+from typing import Union, cast
+
 
 import numpy as np
 from ase import Atoms
@@ -136,8 +138,7 @@ def _normalize_symmetrix_calculator_spec(calculator_spec: str) -> str:
             model_id = calculator_spec[len(prefix) :]
             if not model_id:
                 raise ValueError(
-                    "Symmetrix ASE specs must use "
-                    "'ase:symmetrix:<mace-model>'."
+                    "Symmetrix ASE specs must use 'ase:symmetrix:<mace-model>'."
                 )
             return f"{_SYMMETRIX_INTERNAL_PREFIX}{model_id}"
     return calculator_spec
@@ -252,7 +253,9 @@ def _symmetrix_cache_dir() -> Path:
     )
 
 
-def _symmetrix_cache_key(model_id: str, model_file: Path | str, extract_kwargs: dict) -> str:
+def _symmetrix_cache_key(
+    model_id: str, model_file: Path | str, extract_kwargs: dict
+) -> str:
     """Build a stable cache key for a Symmetrix model conversion."""
     model_path = Path(model_file).expanduser()
     identity: dict[str, object] = {"model_id": model_id}
@@ -328,7 +331,7 @@ def _get_pressure_gpa(atoms) -> float:
     try:
         stress = atoms.get_stress()  # eV/Ang^3
         pressure_ev_ang3 = -(stress[0] + stress[1] + stress[2]) / 3.0
-        return pressure_ev_ang3 * EV_PER_ANG3_TO_GPA
+        return cast(float, pressure_ev_ang3 * EV_PER_ANG3_TO_GPA)
     except Exception:
         return 0.0
 
@@ -560,7 +563,12 @@ class AirssMlRelaxRunner:
             return 1
 
 
-def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
+def compose_ml_task_doc(
+    struct_name: str,
+    calculator_spec: str = "",
+    calculator_label: str = "ML Calculator",
+    metadata_label: str = "ML",
+) -> dict:
     """Extract results from a completed ML calculation.
 
     Reads the ``.extxyz`` output file (with SinglePointCalculator attached),
@@ -570,6 +578,8 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
     Args:
         struct_name: Structure name (without extension).
         calculator_spec: The calculator spec string (for REM metadata).
+        calculator_label: Label used for the calculator REM record.
+        metadata_label: Prefix used for relaxation REM records.
 
     Returns:
         Dictionary with energy, structure, volume, formula, etc.
@@ -619,14 +629,16 @@ def compose_ml_task_doc(struct_name: str, calculator_spec: str = "") -> dict:
         sym = "P1"
 
     # REM lines for ML calculation
-    rem_lines = ["", f"ML Calculator {calculator_spec}"]
+    rem_lines = ["", f"{calculator_label} {calculator_spec}"]
     relax_status = atoms.info.get("relax_status")
     if relax_status is not None:
-        rem_lines.append(f"ML Relax status {relax_status}")
+        rem_lines.append(f"{metadata_label} Relax status {relax_status}")
     if "relax_converged" in atoms.info:
-        rem_lines.append(f"ML Relax converged {bool(atoms.info['relax_converged'])}")
+        rem_lines.append(
+            f"{metadata_label} Relax converged {bool(atoms.info['relax_converged'])}"
+        )
     if atoms.info.get("relax_steps") is not None:
-        rem_lines.append(f"ML Relax steps {atoms.info['relax_steps']}")
+        rem_lines.append(f"{metadata_label} Relax steps {atoms.info['relax_steps']}")
     rem_lines.append("")
 
     enthalpy = _enthalpy_from_energy_pressure_volume(energy, pressure, volume)

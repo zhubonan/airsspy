@@ -44,8 +44,15 @@ class LazyGroup(click.Group):
 @click.group("airss", cls=LazyGroup)
 @click.version_option(version="0.1.4", prog_name="airsspy")
 @click.pass_context
-@click.option("-v", "--verbose", count=True, help="Increase verbosity (-v debug, -vv trace).")
-@click.option("-q", "--quiet", count=True, help="Decrease verbosity (-q warnings, -qq errors, -qqq silent).")
+@click.option(
+    "-v", "--verbose", count=True, help="Increase verbosity (-v debug, -vv trace)."
+)
+@click.option(
+    "-q",
+    "--quiet",
+    count=True,
+    help="Decrease verbosity (-q warnings, -qq errors, -qqq silent).",
+)
 @click.option(
     "--db-host",
     default="localhost",

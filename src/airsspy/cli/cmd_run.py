@@ -10,6 +10,7 @@ import random
 import shutil
 import sys
 from pathlib import Path
+from typing import cast
 
 import click
 
@@ -19,7 +20,7 @@ from airsspy.scheduler import Scheduler
 logger = logging.getLogger(__name__)
 
 STOP_FILE_NAME = "stop"
-RUN_BACKENDS = ("castep", "gulp", "pp3", "abacus", "vasp", "ml")
+RUN_BACKENDS = ("castep", "gulp", "pp3", "abacus", "vasp", "ml", "eddp")
 
 EXE_DEFAULTS = {
     "castep": "castep.mpi",
@@ -27,6 +28,7 @@ EXE_DEFAULTS = {
     "pp3": "pp3",
     "abacus": "abacus",
     "vasp": "vasp_std",
+    "eddp": "julia",
 }
 
 
@@ -80,6 +82,13 @@ def _emit_diagnostics(struct_name: str, code: str) -> None:
                     print(f"  | {line.strip()}", file=sys.stderr)
             if tail:
                 break
+
+    elif code == "eddp":
+        log_path = Path(struct_name + ".eddp.log")
+        if log_path.is_file():
+            lines = log_path.read_text(errors="ignore").splitlines()
+            for line in lines[-20:]:
+                print(f"  | {line}", file=sys.stderr)
 
     print("  --- End diagnostics ---\n", file=sys.stderr)
 
@@ -203,7 +212,7 @@ def _parse_potcar_map_options(values) -> dict[str, str]:
     from airsspy.vasptools import parse_potcar_map
 
     try:
-        return parse_potcar_map(values)
+        return cast(dict[str, str], parse_potcar_map(values))
     except ValueError as exc:
         raise click.ClickException(f"Invalid --potcar-map: {exc}") from exc
 
@@ -211,6 +220,25 @@ def _parse_potcar_map_options(values) -> dict[str, str]:
 def _resolve_optional_path(path: str | None) -> str | None:
     """Resolve an optional user path before command handlers chdir."""
     return str(Path(path).expanduser().resolve()) if path else None
+
+
+def _resolve_eddp_config(
+    code: str,
+    calculator_spec: str | None,
+    project: str | None,
+) -> tuple[str | None, str | None]:
+    """Validate and resolve native EDDP paths before changing directory."""
+    if code != "eddp":
+        return calculator_spec, project
+    if not calculator_spec:
+        raise click.ClickException("--calculator is required when --code eddp")
+    model_path = Path(calculator_spec).expanduser().resolve()
+    if not model_path.exists():
+        raise click.ClickException(f"EDDP model artifact not found: {model_path}")
+    project_path = Path(project).expanduser().resolve() if project else None
+    if project_path is not None and not project_path.exists():
+        raise click.ClickException(f"EDDP Julia project not found: {project_path}")
+    return str(model_path), str(project_path) if project_path is not None else None
 
 
 def _parse_formula_option(value: str) -> list[str]:
@@ -402,7 +430,7 @@ def _sync_castep_spin_param(cell_path: Path, param_path: Path) -> None:
 def _prepare_crud_inputs(seed: str, code: str) -> tuple[str, str | None]:
     """Create per-structure input files for a claimed CRUD job."""
     root = _crud_root_from_seed(seed)
-    if code == "ml":
+    if code in ("ml", "eddp"):
         return root, None
 
     root_cell = Path(root + ".cell")
@@ -500,11 +528,15 @@ def _resolve_relax_param_file(
     cell_path: Path,
     seed: str,
     workdir: Path,
-    param_suffix: str,
+    param_suffix: str | None,
 ) -> Path:
     """Find the parameter file for a relax input."""
+    if param_suffix is None:
+        raise click.ClickException("This backend requires a parameter-file suffix")
     if input_path.suffix.lower() == ".res":
-        candidates = [workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"]
+        candidates = [
+            workdir / f"{_crud_root_from_seed(input_path.stem)}{param_suffix}"
+        ]
         seed_candidate = workdir / f"{seed}{param_suffix}"
         if seed_candidate not in candidates:
             candidates.append(seed_candidate)
@@ -540,22 +572,26 @@ def _run_local_structure_one(
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
-        return runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
+        return int(
+            runner.run(struct_name, cell_content, ParamInput.from_file(param_file))
+        )
     if code in ("gulp", "pp3"):
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
-        return runner.run(
-            struct_name,
-            cell_content,
-            param_file.read_text(),
-            seed_name=_crud_root_from_seed(struct_name),
+        return int(
+            runner.run(
+                struct_name,
+                cell_content,
+                param_file.read_text(),
+                seed_name=_crud_root_from_seed(struct_name),
+            )
         )
     if code == "abacus":
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
         )
-        return runner.run(struct_name, cell_content, param_file.read_text())
+        return int(runner.run(struct_name, cell_content, param_file.read_text()))
     if code == "vasp":
         param_file = _resolve_relax_param_file(
             input_path, cell_path, seed, workdir, param_suffix
@@ -563,15 +599,17 @@ def _run_local_structure_one(
         kpoints_path = param_file.with_suffix(".KPOINTS")
         if not kpoints_path.exists():
             kpoints_path = workdir / f"{seed}.KPOINTS"
-        return runner.run(
-            struct_name,
-            cell_content,
-            param_file.read_text(),
-            kpoints_path=kpoints_path if kpoints_path.exists() else None,
+        return int(
+            runner.run(
+                struct_name,
+                cell_content,
+                param_file.read_text(),
+                kpoints_path=kpoints_path if kpoints_path.exists() else None,
+            )
         )
-    if code == "ml":
-        ml_input = _prepare_ml_structure_input(input_path, cell_content)
-        return runner.run(struct_name, ml_input)
+    if code in ("ml", "eddp"):
+        structure_input = _prepare_ml_structure_input(input_path, cell_content)
+        return int(runner.run(struct_name, structure_input))
     raise click.ClickException(f"Unknown code: {code}")
 
 
@@ -586,8 +624,8 @@ def _run_crud_one(
 ) -> int:
     """Run one claimed CRUD structure with an existing local runner."""
     cell_path = Path(seed + ".cell")
-    input_path = Path(seed + ".res") if code == "ml" else cell_path
-    cell_content = "" if code == "ml" else cell_path.read_text()
+    input_path = Path(seed + ".res") if code in ("ml", "eddp") else cell_path
+    cell_content = "" if code in ("ml", "eddp") else cell_path.read_text()
     return _run_local_structure_one(
         input_path,
         cell_path,
@@ -616,6 +654,10 @@ def _create_task_runner(
     potcar_dir=None,
     potcar_map=None,
     cell_axis_map=None,
+    eddp_project=None,
+    eddp_method="tpsd",
+    eddp_stress_tol=0.1,
+    eddp_fixed_cell=False,
     *,
     singlepoint: bool = False,
 ):
@@ -635,6 +677,10 @@ def _create_task_runner(
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
             cell_axis_map=cell_axis_map,
+            eddp_project=eddp_project,
+            eddp_method=eddp_method,
+            eddp_stress_tol=eddp_stress_tol,
+            eddp_fixed_cell=eddp_fixed_cell,
         )
     exe = _apply_mpinp(exe, code, mpinp)
     return _create_sp_runner(
@@ -646,6 +692,7 @@ def _create_task_runner(
         potcar_dir=potcar_dir,
         potcar_map=potcar_map,
         cell_axis_map=cell_axis_map,
+        eddp_project=eddp_project,
     )
 
 
@@ -720,6 +767,9 @@ def _cleanup_crud_artifacts(seed: str) -> None:
     """Remove less useful intermediate files before finalizing outputs."""
     keep_suffixes = {".res", ".cif", ".magres", ".castep", ".odo", ".dos", ".den_fmt"}
     for path in _crud_artifacts(seed):
+        if path.name.endswith((".eddp-input.res", ".eddp-output.res")):
+            path.unlink(missing_ok=True)
+            continue
         if path.is_dir() or path.suffix in keep_suffixes:
             continue
         path.unlink(missing_ok=True)
@@ -876,6 +926,10 @@ def _create_runner(
     potcar_dir=None,
     potcar_map=None,
     cell_axis_map=None,
+    eddp_project=None,
+    eddp_method="tpsd",
+    eddp_stress_tol=0.1,
+    eddp_fixed_cell=False,
 ):
     """Create the appropriate relaxation runner for the given *code*."""
     from airsspy.jf.runners import (
@@ -929,6 +983,23 @@ def _create_runner(
             max_steps=max_iterations,
             pressure=pressure,
         )
+    elif code == "eddp":
+        from airsspy.jf.eddp_runners import AirssEddpRelaxRunner
+
+        try:
+            return AirssEddpRelaxRunner(
+                model_path=calculator_spec,
+                executable=exe,
+                project=eddp_project,
+                method=eddp_method,
+                max_steps=max_iterations,
+                force_tolerance=fmax,
+                stress_tolerance_gpa=eddp_stress_tol,
+                pressure=pressure,
+                relax_cell=not eddp_fixed_cell,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
     else:
         raise click.ClickException(f"Unknown code: {code}")
 
@@ -942,6 +1013,7 @@ def _create_sp_runner(
     potcar_dir=None,
     potcar_map=None,
     cell_axis_map=None,
+    eddp_project=None,
 ):
     """Create the appropriate single-point runner for the given *code*."""
     if code == "castep":
@@ -981,11 +1053,22 @@ def _create_sp_runner(
             calculator_kwargs=calculator_kwargs,
             pressure=pressure,
         )
+    elif code == "eddp":
+        from airsspy.jf.eddp_runners import AirssEddpSinglePointRunner
+
+        return AirssEddpSinglePointRunner(
+            model_path=calculator_spec,
+            executable=exe,
+            project=eddp_project,
+            pressure=pressure,
+        )
     else:
         raise click.ClickException(f"Single-point not supported for code: {code}")
 
 
-def _collect_result(struct_name: str, code: str, calculator_spec: str = None) -> None:
+def _collect_result(
+    struct_name: str, code: str, calculator_spec: str | None = None
+) -> None:
     """Write a .res file from completed calculation output."""
     if code == "castep":
         from airsspy.jf.runners import compose_task_doc
@@ -999,6 +1082,10 @@ def _collect_result(struct_name: str, code: str, calculator_spec: str = None) ->
         from airsspy.jf.ml_runners import compose_ml_task_doc
 
         compose_ml_task_doc(struct_name, calculator_spec=calculator_spec or "")
+    elif code == "eddp":
+        from airsspy.jf.eddp_runners import compose_eddp_task_doc
+
+        compose_eddp_task_doc(struct_name, model_path=calculator_spec or "")
     elif code == "vasp":
         from airsspy.vasptools import compose_vasp_task_doc
 
@@ -1123,7 +1210,8 @@ def run():
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "ML model spec, or EDDP .json/.jld2 artifact for --code eddp. "
+        "The ML default driver is torch-sim, e.g. "
         "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
         "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
         "'ase:module:Class@model' for ASE."
@@ -1137,11 +1225,37 @@ def run():
     help="Optimizer for --code ml",
 )
 @click.option(
+    "--eddp-project",
+    default=None,
+    envvar="AIRSSPY_EDDP_PROJECT",
+    type=click.Path(),
+    help="Julia project containing EDDPotentials.jl (or set AIRSSPY_EDDP_PROJECT).",
+)
+@click.option(
+    "--eddp-method",
+    default="tpsd",
+    show_default=True,
+    type=click.Choice(["tpsd", "fire"]),
+    help="Native EDDP relaxation method.",
+)
+@click.option(
+    "--eddp-stress-tol",
+    default=0.1,
+    type=float,
+    show_default=True,
+    help="EDDP stress convergence threshold (GPa).",
+)
+@click.option(
+    "--eddp-fixed-cell",
+    is_flag=True,
+    help="Relax atomic positions only with EDDP.",
+)
+@click.option(
     "--fmax",
     default=0.05,
     type=float,
     show_default=True,
-    help="Force convergence threshold (eV/Ang) for --code ml",
+    help="Force convergence threshold (eV/Ang) for ML or EDDP",
 )
 @click.option(
     "--device",
@@ -1357,6 +1471,10 @@ def run_search(
     walltime_buffer,
     calculator_spec,
     optimizer,
+    eddp_project,
+    eddp_method,
+    eddp_stress_tol,
+    eddp_fixed_cell,
     fmax,
     device,
     formulas,
@@ -1423,10 +1541,12 @@ def run_search(
         raise click.ClickException("--calculator is required when --code ml")
     if code == "ml" and calculator_spec:
         _validate_ml_calculator_spec(calculator_spec)
+    if code == "eddp" and not build_only:
+        calculator_spec, eddp_project = _resolve_eddp_config(
+            code, calculator_spec, eddp_project
+        )
     use_torchsim = (
-        code == "ml"
-        and not build_only
-        and _is_torchsim_model(calculator_spec)
+        code == "ml" and not build_only and _is_torchsim_model(calculator_spec)
     )
     if use_torchsim:
         _ensure_torchsim_available()
@@ -1484,12 +1604,12 @@ def run_search(
             parse_key_float,
             "--target-volume",
         )
-        composition_ratio = _parse_composition_ratio_option(
-            formula_composition_ratio
-        )
+        composition_ratio = _parse_composition_ratio_option(formula_composition_ratio)
         oxidation_states = _parse_oxidation_state_options(formula_oxidation_states)
         seed_text_for_formula_filter = (
-            remove_buildcell_directives(seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES)
+            remove_buildcell_directives(
+                seed_content, DEFAULT_ESTIMATE_REMOVE_DIRECTIVES
+            )
             if use_volume_minsep
             else seed_content
         )
@@ -1594,17 +1714,13 @@ def run_search(
                     # before users commit a long search to the scheduler.
                     click.echo(
                         "formula_counts_by_arity = "
-                        + _format_arity_map(
-                            formula_context.formula_counts_by_arity
-                        )
+                        + _format_arity_map(formula_context.formula_counts_by_arity)
                     )
                     click.echo(
                         "composition_ratio = "
                         + _format_arity_map(dict(formula_context.composition_ratio))
                     )
-                    click.echo(
-                        f"formula_arity = {len(Composition(formula).as_dict())}"
-                    )
+                    click.echo(f"formula_arity = {len(Composition(formula).as_dict())}")
                 if varvol is not None:
                     click.echo(f"varvol = {varvol:g}")
                 if estimate is not None:
@@ -1637,7 +1753,7 @@ def run_search(
 
             def seed_text_transform(text: str) -> str:
                 sampled_seed, _, _, _, _ = build_sample_seed(text)
-                return sampled_seed
+                return cast(str, sampled_seed)
 
         else:
             seed_text_transform = make_seed_text_transform(formula_context)
@@ -1667,7 +1783,7 @@ def run_search(
 
     # Copy param file to workdir so runners can find it after chdir
     param_suffix = None
-    if not build_only and code != "ml":
+    if not build_only and code not in ("ml", "eddp"):
         param_suffix = SUFFIX_MAP[code]
         param_file = Path(seed + param_suffix)
         if not param_file.exists():
@@ -1702,6 +1818,10 @@ def run_search(
                 potcar_dir=potcar_dir,
                 potcar_map=potcar_map,
                 cell_axis_map=cell_axis_map,
+                eddp_project=eddp_project,
+                eddp_method=eddp_method,
+                eddp_stress_tol=eddp_stress_tol,
+                eddp_fixed_cell=eddp_fixed_cell,
             )
 
     # Detect scheduler for walltime awareness
@@ -1804,9 +1924,9 @@ def run_search(
                         incar_content,
                         kpoints_path=kpoints_path if kpoints_path.exists() else None,
                     )
-                elif code == "ml":
+                elif code in ("ml", "eddp"):
                     struct_content = Path(struct_name + ".cell").read_text()
-                    if use_torchsim:
+                    if code == "ml" and use_torchsim:
                         batch_results = runner.relax_batch(
                             [struct_name],
                             [struct_content],
@@ -1827,7 +1947,7 @@ def run_search(
                             runner
                             if code == "vasp"
                             else calculator_spec
-                            if code == "ml"
+                            if code in ("ml", "eddp")
                             else None
                         ),
                     )
@@ -1853,7 +1973,7 @@ def run_search(
                                 runner
                                 if code == "vasp"
                                 else calculator_spec
-                                if code == "ml"
+                                if code in ("ml", "eddp")
                                 else None
                             ),
                         )
@@ -1974,7 +2094,8 @@ def run_search(
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "ML model spec, or EDDP .json/.jld2 artifact for --code eddp. "
+        "The ML default driver is torch-sim, e.g. "
         "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
         "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
         "'ase:module:Class@model' for ASE."
@@ -1988,11 +2109,37 @@ def run_search(
     help="ASE optimizer for --code ml",
 )
 @click.option(
+    "--eddp-project",
+    default=None,
+    envvar="AIRSSPY_EDDP_PROJECT",
+    type=click.Path(),
+    help="Julia project containing EDDPotentials.jl (or set AIRSSPY_EDDP_PROJECT).",
+)
+@click.option(
+    "--eddp-method",
+    default="tpsd",
+    show_default=True,
+    type=click.Choice(["tpsd", "fire"]),
+    help="Native EDDP relaxation method.",
+)
+@click.option(
+    "--eddp-stress-tol",
+    default=0.1,
+    type=float,
+    show_default=True,
+    help="EDDP stress convergence threshold (GPa).",
+)
+@click.option(
+    "--eddp-fixed-cell",
+    is_flag=True,
+    help="Relax atomic positions only with EDDP.",
+)
+@click.option(
     "--fmax",
     default=0.05,
     type=float,
     show_default=True,
-    help="Force convergence threshold (eV/Ang) for --code ml",
+    help="Force convergence threshold (eV/Ang) for ML or EDDP",
 )
 @click.option(
     "--device",
@@ -2034,6 +2181,10 @@ def run_crud(
     walltime_buffer,
     calculator_spec,
     optimizer,
+    eddp_project,
+    eddp_method,
+    eddp_stress_tol,
+    eddp_fixed_cell,
     fmax,
     device,
     batch_size,
@@ -2046,6 +2197,9 @@ def run_crud(
         raise click.ClickException("--calculator is required when --code ml")
     if code == "ml":
         _validate_ml_calculator_spec(calculator_spec)
+    calculator_spec, eddp_project = _resolve_eddp_config(
+        code, calculator_spec, eddp_project
+    )
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
         _ensure_torchsim_available()
@@ -2077,6 +2231,10 @@ def run_crud(
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
             cell_axis_map=cell_axis_map,
+            eddp_project=eddp_project,
+            eddp_method=eddp_method,
+            eddp_stress_tol=eddp_stress_tol,
+            eddp_fixed_cell=eddp_fixed_cell,
             singlepoint=singlepoint,
         )
     torchsim_runner = None
@@ -2150,9 +2308,7 @@ def run_crud(
                     if torchsim_runner is None:
                         from airsspy.jf.ml_runners import TorchSimRunner
 
-                        torchsim_runner = TorchSimRunner(
-                            calculator_spec, device=device
-                        )
+                        torchsim_runner = TorchSimRunner(calculator_spec, device=device)
                     structures = [
                         _read_res_as_atoms(Path(sname + ".res"))
                         for sname in claimed_seeds
@@ -2301,7 +2457,8 @@ def run_crud(
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "ML model spec, or EDDP .json/.jld2 artifact for --code eddp. "
+        "The ML default driver is torch-sim, e.g. "
         "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
         "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
         "'ase:module:Class@model' for ASE."
@@ -2319,7 +2476,33 @@ def run_crud(
     default=0.05,
     type=float,
     show_default=True,
-    help="Force convergence threshold (eV/Ang) for --code ml",
+    help="Force convergence threshold (eV/Ang) for ML or EDDP",
+)
+@click.option(
+    "--eddp-project",
+    default=None,
+    envvar="AIRSSPY_EDDP_PROJECT",
+    type=click.Path(),
+    help="Julia project containing EDDPotentials.jl (or set AIRSSPY_EDDP_PROJECT).",
+)
+@click.option(
+    "--eddp-method",
+    default="tpsd",
+    show_default=True,
+    type=click.Choice(["tpsd", "fire"]),
+    help="Native EDDP relaxation method.",
+)
+@click.option(
+    "--eddp-stress-tol",
+    default=0.1,
+    type=float,
+    show_default=True,
+    help="EDDP stress convergence threshold (GPa).",
+)
+@click.option(
+    "--eddp-fixed-cell",
+    is_flag=True,
+    help="Relax atomic positions only with EDDP.",
 )
 @click.option(
     "--device",
@@ -2366,6 +2549,10 @@ def run_relax(
     walltime_buffer,
     calculator_spec,
     optimizer,
+    eddp_project,
+    eddp_method,
+    eddp_stress_tol,
+    eddp_fixed_cell,
     fmax,
     device,
     batch_size,
@@ -2384,6 +2571,9 @@ def run_relax(
         raise click.ClickException("--calculator is required when --code ml")
     if code == "ml":
         _validate_ml_calculator_spec(calculator_spec)
+    calculator_spec, eddp_project = _resolve_eddp_config(
+        code, calculator_spec, eddp_project
+    )
     potcar_dir = _resolve_optional_path(potcar_dir)
     potcar_map = _parse_potcar_map_options(potcar_map_values)
 
@@ -2393,7 +2583,9 @@ def run_relax(
         raise click.ClickException(f"No files matched pattern: {cell}")
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
-        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+        raise click.ClickException(
+            f"No single-structure inputs matched pattern: {cell}"
+        )
     use_torchsim = code == "ml" and _is_torchsim_model(calculator_spec)
     if use_torchsim:
         _ensure_torchsim_available()
@@ -2411,15 +2603,15 @@ def run_relax(
                 workdir,
                 seed=seed,
                 write_res_cell=code == "castep",
-                convert_res_cell=code != "ml",
+                convert_res_cell=code not in ("ml", "eddp"),
             ),
         )
         for input_path in cell_files
     ]
 
-    # Read param file (not needed for ML)
+    # Read param file (not needed for in-process/model backends)
     param_suffix = None
-    if code != "ml":
+    if code not in ("ml", "eddp"):
         param_suffix = SUFFIX_MAP[code]
         for input_path, cell_path, _, _ in relax_inputs:
             _resolve_relax_param_file(
@@ -2454,6 +2646,10 @@ def run_relax(
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
             cell_axis_map=cell_axis_map,
+            eddp_project=eddp_project,
+            eddp_method=eddp_method,
+            eddp_stress_tol=eddp_stress_tol,
+            eddp_fixed_cell=eddp_fixed_cell,
             singlepoint=singlepoint,
         )
 
@@ -2513,7 +2709,9 @@ def run_relax(
                         optimizer=optimizer,
                         pressure=pressure,
                     )
-                    collected_res_files.extend(workdir / path.name for path in collected)
+                    collected_res_files.extend(
+                        workdir / path.name for path in collected
+                    )
                     n_relaxed += done
                     n_failed += failed
                 except Exception:
@@ -2562,7 +2760,9 @@ def run_relax(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                            calculator_spec=runner
+                            if code == "vasp"
+                            else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_relaxed += 1
@@ -2671,7 +2871,8 @@ def run_relax(
     "calculator_spec",
     default=None,
     help=(
-        "Model spec for --code ml. Default driver is torch-sim, e.g. "
+        "ML model spec, or EDDP .json/.jld2 artifact for --code eddp. "
+        "The ML default driver is torch-sim, e.g. "
         "'mace:medium'; use 'torch-sim:mace:medium' to select it explicitly. "
         "Use 'ase:mace:medium', 'ase:symmetrix:<mace-model>', or "
         "'ase:module:Class@model' for ASE."
@@ -2681,6 +2882,13 @@ def run_relax(
     "--device",
     default=None,
     help="Torch device for torch-sim ML runs, e.g. cuda or cpu.",
+)
+@click.option(
+    "--eddp-project",
+    default=None,
+    envvar="AIRSSPY_EDDP_PROJECT",
+    type=click.Path(),
+    help="Julia project containing EDDPotentials.jl (or set AIRSSPY_EDDP_PROJECT).",
 )
 @click.option(
     "--batch-size",
@@ -2719,6 +2927,7 @@ def run_sp(
     walltime_buffer,
     calculator_spec,
     device,
+    eddp_project,
     batch_size,
     pressure,
     potcar_dir,
@@ -2730,6 +2939,9 @@ def run_sp(
         raise click.ClickException("--calculator is required when --code ml")
     if code == "ml":
         _validate_ml_calculator_spec(calculator_spec)
+    calculator_spec, eddp_project = _resolve_eddp_config(
+        code, calculator_spec, eddp_project
+    )
 
     workdir = Path(workdir).resolve()
     cell_files = sorted(workdir.glob(cell))
@@ -2737,7 +2949,9 @@ def run_sp(
         raise click.ClickException(f"No files matched pattern: {cell}")
     cell_files = _filter_packed_res_inputs(cell_files)
     if not cell_files:
-        raise click.ClickException(f"No single-structure inputs matched pattern: {cell}")
+        raise click.ClickException(
+            f"No single-structure inputs matched pattern: {cell}"
+        )
     sp_inputs = [
         (
             input_path,
@@ -2745,8 +2959,8 @@ def run_sp(
                 input_path,
                 workdir,
                 seed=seed,
-                write_res_cell=code != "ml",
-                convert_res_cell=code != "ml",
+                write_res_cell=code not in ("ml", "eddp"),
+                convert_res_cell=code not in ("ml", "eddp"),
             ),
         )
         for input_path in cell_files
@@ -2755,9 +2969,9 @@ def run_sp(
     if use_torchsim:
         _ensure_torchsim_available()
 
-    # Read param file (not needed for ML)
+    # Read param file (not needed for model backends)
     param_suffix = None
-    if code != "ml":
+    if code not in ("ml", "eddp"):
         param_suffix = SUFFIX_MAP[code]
         for input_path, cell_path, _, _ in sp_inputs:
             _resolve_relax_param_file(
@@ -2783,6 +2997,7 @@ def run_sp(
             potcar_dir=potcar_dir,
             potcar_map=potcar_map,
             cell_axis_map=cell_axis_map,
+            eddp_project=eddp_project,
         )
 
     orig_dir = os.getcwd()
@@ -2889,7 +3104,9 @@ def run_sp(
                         _collect_result(
                             struct_name,
                             code,
-                            calculator_spec=runner if code == "vasp" else calculator_spec,
+                            calculator_spec=runner
+                            if code == "vasp"
+                            else calculator_spec,
                         )
                         collected_res_files.append(workdir / f"{struct_name}.res")
                         n_done += 1
@@ -2951,9 +3168,7 @@ def run_sp(
             packed = _pack_res_files(workdir, files=collected_res_files)
             logger.info("Packed into %s", packed)
 
-        if (
-            code == "ml" and use_torchsim and n_done == 0 and n_failed > 0
-        ):
+        if code == "ml" and use_torchsim and n_done == 0 and n_failed > 0:
             raise click.ClickException(
                 "TorchSim single-point failed for all matched structures; "
                 "see verbose log above for the failing batch."

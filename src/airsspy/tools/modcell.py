@@ -50,7 +50,10 @@ def replace_block(
             new_lines.extend(new_value)
             new_lines.append("%ENDBLOCK " + block_name.lower())
             continue
-        if re.search(r"%ENDBLOCK " + f"{block_pattern.upper()}", line.upper()) and in_block:
+        if (
+            re.search(r"%ENDBLOCK " + f"{block_pattern.upper()}", line.upper())
+            and in_block
+        ):
             out_from_block = True
             in_block = False
             continue
@@ -86,7 +89,9 @@ def modify_cell(base_cell: str, atoms: ase.Atoms) -> list[str]:
     pos = atoms.positions
     pos_lines: list[str] = []
     for symbol, i in zip(atoms.get_chemical_symbols(), range(pos.shape[0])):
-        pos_lines.append(f"{symbol}  {pos[i, 0]:.10f} {pos[i, 1]:.10f} {pos[i, 2]:.10f}")
+        pos_lines.append(
+            f"{symbol}  {pos[i, 0]:.10f} {pos[i, 1]:.10f} {pos[i, 2]:.10f}"
+        )
 
     base_lines = Path(base_cell).read_text().split("\n")
 

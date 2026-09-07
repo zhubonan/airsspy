@@ -843,6 +843,21 @@ class TestComposeMlTaskDoc:
             assert result["volume"] == pytest.approx(125.0)
             assert "Si" in result["formula"]
             assert (tmp_path / (name + ".res")).is_file()
+            res_lines = (tmp_path / (name + ".res")).read_text().splitlines()
+            assert (
+                len(next(line for line in res_lines if line.startswith("CELL")).split())
+                == 8
+            )
+            assert (
+                next(line for line in res_lines if line.startswith("LATT")) == "LATT -1"
+            )
+            assert (
+                next(line for line in res_lines if line.startswith("SFAC")) == "SFAC Si"
+            )
+            atom_lines = [line for line in res_lines if line.startswith("Si ")]
+            assert len(atom_lines) == 2
+            assert atom_lines[0].endswith("0.010000 0.020000 0.030000")
+            assert atom_lines[1].endswith("-0.010000 -0.020000 -0.030000")
         finally:
             os.chdir(orig)
 
